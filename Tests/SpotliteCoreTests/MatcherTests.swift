@@ -98,6 +98,34 @@ struct FuzzyScoringTests {
         #expect(first == second)
     }
 
+    @Test func aliasBeatsAnIncidentalNameMatch() {
+        let apps = [app("Passwords"), app("Photoshop")]
+        let aliases = AliasIndex(aliases: ["test.Photoshop": "ps"])
+
+        // Without the alias "ps" reaches Passwords; with it, Photoshop must win.
+        #expect(Matcher().search("ps", in: apps).first?.entry.name == "Passwords")
+        #expect(Matcher().search("ps", in: apps, aliases: aliases).first?.entry.name == "Photoshop")
+    }
+
+    @Test func aliasMatchesEvenWhenTheNameLacksTheLetters() {
+        let apps = [app("Affinity Photo")]
+        let aliases = AliasIndex(aliases: ["test.Affinity Photo": "xy"])
+        // "xy" shares no letters with the name, so only the alias can match it.
+        #expect(Matcher().search("xy", in: apps).isEmpty)
+        #expect(Matcher().search("xy", in: apps, aliases: aliases).count == 1)
+    }
+
+    @Test func aliasMatchHighlightsNothing() {
+        let apps = [app("Photoshop")]
+        let aliases = AliasIndex(aliases: ["test.Photoshop": "ps"])
+        // The matched characters live in the alias, not in the displayed name.
+        #expect(Matcher().search("ps", in: apps, aliases: aliases).first?.positions.isEmpty == true)
+    }
+
+    @Test func blankAliasesAreIgnored() {
+        #expect(AliasIndex(aliases: ["a": "  ", "b": ""]).isEmpty)
+    }
+
     @Test func initialsAreDerivedFromWordAndCamelBoundaries() {
         #expect(String(app("Google Chrome").initials) == "gc")
         #expect(String(app("QuickTime Player").initials) == "qtp")

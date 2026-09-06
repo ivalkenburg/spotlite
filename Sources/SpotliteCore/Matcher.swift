@@ -23,7 +23,12 @@ public final class Matcher {
         scoreBest = Array(repeating: 0, count: maxQuery * maxText)
     }
 
-    public func search(_ query: String, in entries: [AppEntry], limit: Int = 50) -> [MatchResult] {
+    public func search(
+        _ query: String,
+        in entries: [AppEntry],
+        aliases: AliasIndex = .empty,
+        limit: Int = 50
+    ) -> [MatchResult] {
         let q = Array(query.lowercased().trimmingCharacters(in: .whitespaces))
         guard !q.isEmpty else { return [] }
 
@@ -32,10 +37,20 @@ public final class Matcher {
         out.reserveCapacity(min(entries.count, limit * 2))
 
         for entry in entries {
-            // Cheap reject: if the name lacks a letter the query needs, no match is possible.
-            guard queryMask & ~entry.charMask == 0 else { continue }
+            let alias = aliases.isEmpty ? nil : aliases[entry.id]
+
+            // Cheap reject: if the name lacks a letter the query needs, no match is
+            // possible - unless an alias might supply it.
+            if alias == nil, queryMask & ~entry.charMask != 0 { continue }
 
             var best = score(q, entry.lowerChars, entry.bonus)
+
+            // An alias match highlights nothing: the matched characters are in the alias,
+            // not in the displayed name, so there is nothing honest to embolden.
+            if let alias, let hit = score(q, alias.chars, alias.bonus) {
+                let boosted = hit.score + Scoring.bonusAlias
+                if best == nil || boosted > best!.score { best = (score: boosted, positions: []) }
+            }
 
             // Acronym matching ("gc" -> Google Chrome) scores against the initials, then
             // maps positions back onto the full name.

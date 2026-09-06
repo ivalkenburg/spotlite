@@ -17,6 +17,9 @@ public enum Scoring {
     /// name-start match ("**A**ffinity"), which is plainly wrong for a launcher.
     /// Capped so a long name is penalised, not disqualified.
     public static let maxLeadingPenalty = -20
+    /// Added to an alias match. An alias is an explicit instruction from the user, so it
+    /// must beat an incidental name match — "ps" should reach Photoshop, not Passwords.
+    public static let bonusAlias = 60
 }
 
 public struct MatchResult: Sendable {

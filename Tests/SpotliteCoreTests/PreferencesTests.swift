@@ -16,17 +16,29 @@ struct PreferencesTests {
     @Test func roundTripsThroughJSON() throws {
         var prefs = Preferences()
         prefs.hiddenBundleIDs = ["com.example.one", "com.example.two"]
+        prefs.aliases = ["com.adobe.Photoshop": "ps"]
+        prefs.panelScreen = .primary
         prefs.showMenuBarIcon = false
         prefs.hasCompletedFirstRun = true
 
         let data = try JSONEncoder().encode(prefs)
-        let decoded = try JSONDecoder().decode(Preferences.self, from: data)
-        #expect(decoded == prefs)
+        #expect(try JSONDecoder().decode(Preferences.self, from: data) == prefs)
     }
 
-    /// A missing or truncated file must fall back to defaults rather than throwing.
-    @Test func decodingGarbageFallsBackToDefaults() {
-        let partial = Data(#"{"showMenuBarIcon": false}"#.utf8)
-        #expect((try? JSONDecoder().decode(Preferences.self, from: partial)) == nil)
+    /// A file written by an older build has no `aliases` or `panelScreen` key. It must
+    /// decode with those defaulted rather than throwing and resetting every other setting.
+    @Test func decodesPreferencesWrittenByAnOlderBuild() throws {
+        let old = Data(#"{"hiddenBundleIDs":["com.example.one"],"hotKeyCode":49,"hotKeyModifiers":2048,"showMenuBarIcon":false,"hasCompletedFirstRun":true}"#.utf8)
+
+        let decoded = try JSONDecoder().decode(Preferences.self, from: old)
+        #expect(decoded.hiddenBundleIDs == ["com.example.one"])
+        #expect(decoded.showMenuBarIcon == false)
+        #expect(decoded.hasCompletedFirstRun)
+        #expect(decoded.aliases.isEmpty)
+        #expect(decoded.panelScreen == .followPointer)
+    }
+
+    @Test func decodingRealGarbageStillFails() {
+        #expect((try? JSONDecoder().decode(Preferences.self, from: Data("not json".utf8))) == nil)
     }
 }

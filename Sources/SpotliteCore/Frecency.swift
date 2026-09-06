@@ -44,9 +44,25 @@ public struct Frecency: Codable, Sendable {
         return 1.0 + Frecency.maxBoost * frequency * recency
     }
 
-    /// Drops history for apps that are no longer indexed, so the file cannot grow
-    /// without bound as apps come and go.
-    public mutating func prune(keeping ids: Set<String>) {
+    /// Hard ceiling on stored records, so the file cannot grow without bound even if
+    /// every id stays valid.
+    public static let maxRecords = 500
+
+    /// Drops history for apps that are no longer indexed, then caps what remains.
+    /// - Returns: true if anything was removed, so the caller can skip a pointless write.
+    @discardableResult
+    public mutating func prune(keeping ids: Set<String>, now: Date = Date()) -> Bool {
+        let before = records.count
         records = records.filter { ids.contains($0.key) }
+
+        if records.count > Frecency.maxRecords {
+            // Keep the strongest by the same measure used for ranking, so pruning can
+            // never drop an app that currently outranks one it keeps.
+            let strongest = records
+                .sorted { multiplier(for: $0.key, now: now) > multiplier(for: $1.key, now: now) }
+                .prefix(Frecency.maxRecords)
+            records = Dictionary(uniqueKeysWithValues: strongest.map { ($0.key, $0.value) })
+        }
+        return records.count != before
     }
 }
