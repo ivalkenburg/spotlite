@@ -1,0 +1,97 @@
+import AppKit
+import SpotliteCore
+
+/// One row of the Settings app list: visibility checkbox, icon, name, alias field.
+@MainActor
+final class SettingsRowView: NSView, NSTextFieldDelegate {
+    static let reuseID = NSUserInterfaceItemIdentifier("SettingsRow")
+
+    private let checkbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let iconView = NSImageView()
+    private let label = NSTextField(labelWithString: "")
+    private let aliasField = NSTextField()
+
+    private var entry: AppEntry?
+    private var pendingIconURL: URL?
+
+    var onVisibilityChanged: ((AppEntry, Bool) -> Void)?
+    var onAliasChanged: ((AppEntry, String) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+
+        checkbox.target = self
+        checkbox.action = #selector(visibilityToggled)
+
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        label.font = .systemFont(ofSize: 13)
+        label.lineBreakMode = .byTruncatingTail
+
+        aliasField.placeholderString = "alias"
+        aliasField.font = .systemFont(ofSize: 12)
+        aliasField.alignment = .center
+        aliasField.delegate = self
+
+        let stack = NSStackView(views: [checkbox, iconView, label, aliasField])
+        stack.orientation = .horizontal
+        stack.spacing = 8
+        stack.alignment = .centerY
+        // .fill, not the default gravity distribution: without it the stack sizes every
+        // view to its intrinsic width and the alias fields end up ragged instead of
+        // forming a column the eye can scan.
+        stack.distribution = .fill
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 18),
+            iconView.heightAnchor.constraint(equalToConstant: 18),
+            aliasField.widthAnchor.constraint(equalToConstant: 76),
+        ])
+        // Only the name may absorb slack. Everything else hugs its content, or the
+        // stack hands the extra width to the checkbox and shunts the whole row right.
+        for fixed in [checkbox, iconView, aliasField] as [NSView] {
+            fixed.setContentHuggingPriority(.required, for: .horizontal)
+        }
+        label.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(with entry: AppEntry, hidden: Bool, alias: String) {
+        self.entry = entry
+        checkbox.state = hidden ? .off : .on
+        label.stringValue = entry.name
+        label.textColor = hidden ? .tertiaryLabelColor : .labelColor
+        aliasField.stringValue = alias
+        aliasField.isEnabled = entry.bundleID != nil
+
+        if let ready = IconCache.shared.cached(for: entry.url) {
+            pendingIconURL = nil
+            iconView.image = ready
+            return
+        }
+        pendingIconURL = entry.url
+        iconView.image = IconCache.placeholder
+        IconCache.shared.load(for: entry.url) { [weak self] loaded in
+            guard let self, self.pendingIconURL == entry.url else { return }
+            self.pendingIconURL = nil
+            self.iconView.image = loaded
+        }
+    }
+
+    @objc private func visibilityToggled() {
+        guard let entry else { return }
+        onVisibilityChanged?(entry, checkbox.state == .off)
+    }
+
+    /// Commit on blur and on return, so an alias typed and then dismissed isn't lost.
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard let entry else { return }
+        onAliasChanged?(entry, aliasField.stringValue)
+    }
+}

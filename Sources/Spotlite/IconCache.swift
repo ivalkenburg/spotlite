@@ -1,38 +1,66 @@
 import AppKit
 
-/// Icons are fetched lazily for visible rows only and rasterised once at display size.
+/// Icons are loaded only for rows that are actually on screen, and never on the main
+/// thread: fetching plus a first rasterise costs roughly 670µs per icon, which would be
+/// several milliseconds of stall the first time a screenful of results appears.
+@MainActor
 final class IconCache {
     static let shared = IconCache()
 
     private let cache = NSCache<NSString, NSImage>()
+    /// Serial: icon work is I/O bound and ordering keeps the visible rows first.
+    private let queue = DispatchQueue(label: "com.igorv.spotlite.icons", qos: .userInitiated)
+    /// Every waiter for an in-flight icon, not just the first. Each keystroke re-renders
+    /// the row and asks again; dropping those later requests left rows stuck on the
+    /// placeholder, because the load that did finish had nobody left to notify.
+    private var waiting: [String: [(NSImage) -> Void]] = [:]
 
     private init() {
         // Sized to hold the whole index rather than a screenful. Scrolling the Settings
         // list past 64 apps would otherwise evict entries and re-rasterise them on the
-        // way back, and each rasterise is ~390µs cold. At 32pt @2x an entry is 64x64x4
-        // bytes, so 160 of them cost about 2.5MB.
+        // way back. At 32pt @2x an entry is 64x64x4 bytes, so 160 cost about 2.5MB.
         cache.countLimit = 160
     }
 
-    func icon(for url: URL) -> NSImage {
-        let key = url.path as NSString
-        if let cached = cache.object(forKey: key) { return cached }
-
-        let flattened = IconCache.rasterize(NSWorkspace.shared.icon(forFile: url.path),
-                                            to: Metrics.iconSize)
-        cache.setObject(flattened, forKey: key)
-        return flattened
+    /// The icon if it is already in memory. Never touches the disk.
+    func cached(for url: URL) -> NSImage? {
+        cache.object(forKey: url.path as NSString)
     }
+
+    /// Loads off the main thread and calls back on it. The callback does not fire if the
+    /// icon was already cached — check `cached(for:)` first.
+    func load(for url: URL, completion: @escaping (NSImage) -> Void) {
+        let key = url.path
+
+        if waiting[key] != nil {
+            waiting[key]?.append(completion)
+            return
+        }
+        waiting[key] = [completion]
+
+        queue.async {
+            let icon = NSWorkspace.shared.icon(forFile: key)
+            let flattened = IconCache.rasterize(icon, to: Metrics.iconSize)
+            Task { @MainActor in
+                self.cache.setObject(flattened, forKey: key as NSString)
+                let waiters = self.waiting.removeValue(forKey: key) ?? []
+                for waiter in waiters { waiter(flattened) }
+            }
+        }
+    }
+
+    /// Shown while the real icon loads, so a row never renders as a hole. Rasterised once.
+    static let placeholder: NSImage = {
+        rasterize(NSWorkspace.shared.icon(for: .applicationBundle), to: Metrics.iconSize)
+    }()
 
     /// Draws the icon into a bitmap once, at display size.
     ///
     /// `NSImage(size:flipped:drawingHandler:)` looks like it does this but does not: it
     /// retains the drawing block — and through it the full multi-representation source
-    /// icon — and re-runs it on every draw. The cache would then hold 64 complete icon
-    /// families rather than 64 small bitmaps, which is the opposite of the intent.
-    private static func rasterize(_ image: NSImage, to points: CGFloat) -> NSImage {
-        let scale = NSScreen.main?.backingScaleFactor ?? 2
-        let pixels = Int(points * scale)
+    /// icon — and re-runs it on every draw.
+    nonisolated private static func rasterize(_ image: NSImage, to points: CGFloat) -> NSImage {
+        let pixels = Int(points * 2)
 
         guard let rep = NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels,

@@ -18,6 +18,8 @@ at 0% CPU while idle and does its matching in about 17 microseconds per keystrok
   Return copies it to the clipboard.
 - **Hide apps you never launch.** Command-Delete on a result hides it; the full
   list with checkboxes lives in Settings.
+- **Aliases.** Teach it that `ps` means Photoshop. An alias always outranks an
+  incidental name match, and works even when the name shares no letters with it.
 - **Liquid Glass.** Uses the native `NSGlassEffectView` introduced in macOS 26.
 
 ## Requirements
@@ -49,10 +51,15 @@ It does not add itself as a login item unless you ask it to.
 | `Return` | Launch the selected app, or copy a calculator result |
 | `Command-1` to `Command-5` | Launch the nth result directly |
 | `Command-Delete` | Hide the selected app from results |
+| `Delete` | Close, when the query is already empty |
 | `Escape` | Close |
 
 Clicking outside the window closes it. Hovering does not move the cursor, so an
-incidental mouse position can never change what Return does.
+incidental mouse position can never change what Return does. The selected row
+shows where the app lives, which tells two copies of the same app apart.
+
+By default the panel opens on whichever display holds the pointer. Settings can
+pin it to the main display instead.
 
 To reach Settings, use the menu bar icon, or search for `settings` in Spotlite
 itself. Spotlite indexes its own Settings entry, so it stays reachable even with
@@ -78,8 +85,13 @@ Preferences and launch history live in `~/Library/Application Support/Spotlite`,
 separate from the cache: the index is regenerable, your hidden-app list is not.
 
 Matching runs synchronously on the main thread. Scoring the whole index takes
-about 17 microseconds, so a background queue would add dispatch overhead and
+about 16 microseconds, so a background queue would add dispatch overhead and
 cancellation bugs to save nothing.
+
+Icons are the opposite case, and are loaded on a background queue: only rows that
+are actually on screen request one, but a fetch plus its first rasterise costs
+roughly 670 microseconds, which is enough to stall a keystroke. Rows show the
+generic bundle icon and fade the real one in.
 
 ## Development
 

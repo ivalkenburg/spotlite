@@ -16,7 +16,13 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private var entries: [AppEntry] = []
     private var items: [ResultItem] = []
     private var frecency = Storage.loadFrecency()
-    private var preferences = Storage.loadPreferences()
+    private var preferences = Storage.loadPreferences() {
+        didSet { aliases = AliasIndex(aliases: preferences.aliases) }
+    }
+    /// Rebuilt only when preferences change, never per keystroke.
+    private var aliases = AliasIndex(aliases: Storage.loadPreferences().aliases)
+    /// Cached so pruning on every show doesn't rebuild it from the index each time.
+    private var indexedIDs: Set<String> = []
     private var watcher: DirectoryWatcher?
     private var fingerprint: [String: Date] = [:]
     /// Set when a query matches nothing but the Settings entry should still be offered.
@@ -155,6 +161,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     func show() {
         loadIndexIfNeeded()
 
+        pruneFrecency()
+
         // Dev hook: prefill a query so the expanded state can be inspected.
         field.stringValue = ProcessInfo.processInfo.environment["SPOTLITE_DEV_QUERY"] ?? ""
         // Anchor first: updateMatches resizes against anchorTopY, and an in-flight
@@ -178,8 +186,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private func loadIndexIfNeeded() {
         guard !entries.isEmpty else {
             entries = AppIndex.loadCachedOrScan()
+            indexedIDs = Set(entries.map(\.id))
             fingerprint = AppIndex.directoriesFingerprint()
-            pruneFrecency()
             startWatching()
             return
         }
@@ -188,7 +196,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         guard current != fingerprint else { return }
         fingerprint = current
         entries = AppIndex.refresh()
-        pruneFrecency()
+        indexedIDs = Set(entries.map(\.id))
     }
 
     func hide() {
@@ -207,10 +215,19 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         if panel.isVisible { hide() }
     }
 
-    /// Centered on the screen holding the pointer — your eyes are where your mouse is.
+    /// Placed on whichever display the user chose. Following the pointer is the default
+    /// because your eyes are usually where your mouse is, but on a fixed multi-monitor
+    /// setup an incidental pointer position is the wrong signal.
     private func position() {
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
+        let screen: NSScreen?
+        switch preferences.panelScreen {
+        case .followPointer:
+            let mouse = NSEvent.mouseLocation
+            screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
+        case .primary:
+            // `screens.first` is the one with the menu bar; `main` follows key window.
+            screen = NSScreen.screens.first ?? NSScreen.main
+        }
         guard let frame = screen?.visibleFrame else { return }
 
         let height = Metrics.windowHeight(forRows: 0)
@@ -269,7 +286,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         }
 
         let now = Date()
-        let matches = matcher.search(trimmed, in: entries)
+        let matches = matcher.search(trimmed, in: entries, aliases: aliases)
         var ranked: [(match: MatchResult, weighted: Double)] = []
         ranked.reserveCapacity(matches.count)
 
@@ -291,8 +308,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         result.append(contentsOf: ranked.map { .app($0.match) })
 
         // The self-indexed escape hatch: reachable even with the menu bar icon hidden.
+        // Three characters minimum, or a bare "s" or "p" would summon it on every search.
         let lowered = trimmed.lowercased()
-        if SpotliteController.settingsKeywords.contains(where: { $0.hasPrefix(lowered) }) {
+        if lowered.count >= 3, SpotliteController.settingsKeywords.contains(where: { $0.hasPrefix(lowered) }) {
             result.append(.settings)
         }
         return result
@@ -341,6 +359,11 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         case #selector(NSResponder.insertNewline(_:)):
             launch(at: cursor); return true
         case #selector(NSResponder.cancelOperation(_:)):
+            hide(); return true
+        case #selector(NSResponder.deleteBackward(_:)):
+            // Backspace on an empty query closes, so clearing out and dismissing is one
+            // continuous gesture. With text present, fall through to normal deletion.
+            guard field.stringValue.isEmpty else { return false }
             hide(); return true
         case #selector(NSResponder.deleteToBeginningOfLine(_:)):
             // Command-Delete inside a text field arrives as deleteToBeginningOfLine.
@@ -404,6 +427,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                     // The app is gone, so the whole index is suspect: rescan rather than
                     // just dropping this entry, or the stale one returns from the cache.
                     self.entries = AppIndex.refresh()
+                    self.indexedIDs = Set(self.entries.map(\.id))
                     self.fingerprint = AppIndex.directoriesFingerprint()
                     self.show()
                     // show() clears the field. Restore the query, otherwise the panel
@@ -434,12 +458,12 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         if panel.isVisible { updateMatches(for: field.stringValue) }
     }
 
-    /// Drops launch history for apps that are gone, so the file can't grow forever.
+    /// Drops launch history for apps that are gone and caps what remains. Runs on every
+    /// show rather than only when the index changes: an index loaded from cache is never
+    /// refreshed on a quiet system, so pruning tied to refreshes could never run at all.
     private func pruneFrecency() {
-        let ids = Set(entries.map(\.id))
-        let before = frecency.records.count
-        frecency.prune(keeping: ids)
-        if frecency.records.count != before { Storage.save(frecency) }
+        guard !indexedIDs.isEmpty else { return }
+        if frecency.prune(keeping: indexedIDs) { Storage.save(frecency) }
     }
 
     private func startWatching() {
@@ -448,8 +472,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             Task { @MainActor in
                 guard let self else { return }
                 self.entries = AppIndex.refresh()
+                self.indexedIDs = Set(self.entries.map(\.id))
                 self.fingerprint = AppIndex.directoriesFingerprint()
-                self.pruneFrecency()
                 if self.panel.isVisible { self.updateMatches(for: self.field.stringValue) }
             }
         }

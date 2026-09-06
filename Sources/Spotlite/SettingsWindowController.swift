@@ -75,12 +75,22 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
                                action: #selector(toggleMenuBarIcon))
         menuBar.state = preferences.showMenuBarIcon ? .on : .off
 
+        let screenLabel = NSTextField(labelWithString: "Open on")
+        let screenPicker = NSPopUpButton()
+        screenPicker.addItems(withTitles: ["Display with pointer", "Main display"])
+        screenPicker.selectItem(at: preferences.panelScreen == .primary ? 1 : 0)
+        screenPicker.target = self
+        screenPicker.action = #selector(screenChoiceChanged)
+        let screenRow = NSStackView(views: [screenLabel, screenPicker])
+        screenRow.orientation = .horizontal
+        screenRow.spacing = 12
+
         let hint = NSTextField(labelWithString:
             "With the icon hidden, search “settings” in Spotlite to get back here.")
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
 
-        let listLabel = NSTextField(labelWithString: "Apps  (uncheck to hide from results)")
+        let listLabel = NSTextField(labelWithString: "Apps  (uncheck to hide, or give one a short alias)")
         listLabel.font = .systemFont(ofSize: 12, weight: .semibold)
 
         filterField.placeholderString = "Filter"
@@ -105,7 +115,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         hotKeyRow.spacing = 12
 
         let stack = NSStackView(views: [
-            hotKeyRow, loginItem, loginItemWarning, menuBar, hint, listLabel, filterField, scroll,
+            hotKeyRow, screenRow, loginItem, loginItemWarning, menuBar, hint,
+            listLabel, filterField, scroll,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -168,20 +179,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         loginItemWarning.isHidden = loginItemWarning.stringValue.isEmpty
     }
 
-    @objc private func toggleMenuBarIcon(_ sender: NSButton) {
-        preferences.showMenuBarIcon = (sender.state == .on)
+    @objc private func screenChoiceChanged(_ sender: NSPopUpButton) {
+        preferences.panelScreen = (sender.indexOfSelectedItem == 1) ? .primary : .followPointer
         persist()
     }
 
-    @objc private func toggleHidden(_ sender: NSButton) {
-        guard visibleApps.indices.contains(sender.tag),
-              let bundleID = visibleApps[sender.tag].bundleID else { return }
-
-        if sender.state == .on {
-            preferences.hiddenBundleIDs.remove(bundleID)
-        } else {
-            preferences.hiddenBundleIDs.insert(bundleID)
-        }
+    @objc private func toggleMenuBarIcon(_ sender: NSButton) {
+        preferences.showMenuBarIcon = (sender.state == .on)
         persist()
     }
 
@@ -201,31 +205,34 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let app = visibleApps[row]
+        let view = tableView.makeView(withIdentifier: SettingsRowView.reuseID, owner: self) as? SettingsRowView
+            ?? {
+                let v = SettingsRowView(frame: .zero)
+                v.identifier = SettingsRowView.reuseID
+                return v
+            }()
 
-        // The checkbox keeps its own glyph: setting `image` on an NSButton checkbox
-        // replaces the checkmark, leaving no visible on/off state.
-        let checkbox = NSButton(checkboxWithTitle: "", target: self, action: #selector(toggleHidden))
-        checkbox.tag = row
+        view.onVisibilityChanged = { [weak self] entry, hidden in
+            guard let self, let id = entry.bundleID else { return }
+            if hidden { self.preferences.hiddenBundleIDs.insert(id) }
+            else { self.preferences.hiddenBundleIDs.remove(id) }
+            self.persist()
+            self.table.reloadData()
+        }
+        view.onAliasChanged = { [weak self] entry, alias in
+            guard let self, let id = entry.bundleID else { return }
+            let trimmed = alias.trimmingCharacters(in: .whitespaces)
+            let existing = self.preferences.aliases[id] ?? ""
+            guard trimmed != existing else { return }
+            if trimmed.isEmpty { self.preferences.aliases.removeValue(forKey: id) }
+            else { self.preferences.aliases[id] = trimmed }
+            self.persist()
+        }
+
         let hidden = app.bundleID.map { preferences.hiddenBundleIDs.contains($0) } ?? false
-        checkbox.state = hidden ? .off : .on
-
-        let icon = NSImageView()
-        icon.image = IconCache.shared.icon(for: app.url)
-        icon.imageScaling = .scaleProportionallyUpOrDown
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.widthAnchor.constraint(equalToConstant: 18).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 18).isActive = true
-
-        let label = NSTextField(labelWithString: app.name)
-        label.font = .systemFont(ofSize: 13)
-        label.lineBreakMode = .byTruncatingTail
-        label.textColor = hidden ? .tertiaryLabelColor : .labelColor
-
-        let stack = NSStackView(views: [checkbox, icon, label])
-        stack.orientation = .horizontal
-        stack.spacing = 8
-        stack.alignment = .centerY
-        return stack
+        let alias = app.bundleID.flatMap { preferences.aliases[$0] } ?? ""
+        view.configure(with: app, hidden: hidden, alias: alias)
+        return view
     }
 
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { false }

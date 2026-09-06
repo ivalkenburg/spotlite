@@ -59,11 +59,45 @@ final class ResultRowView: NSTableCellView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Identifies which icon this reused row is currently waiting for, so a slow load
+    /// that lands after the row has been recycled is discarded instead of showing the
+    /// wrong app's icon.
+    private var pendingIconURL: URL?
+
     func configure(with item: ResultItem, selected: Bool) {
         label.attributedStringValue = ResultRowView.attributed(item.title, bold: item.highlighted)
-        detail.stringValue = item.detail ?? ""
-        icon.image = item.icon
+        detail.stringValue = item.detail(isSelected: selected) ?? ""
         highlight.isHidden = !selected
+
+        icon.layer?.removeAllAnimations()
+        icon.alphaValue = 1
+
+        if let ready = item.immediateIcon {
+            pendingIconURL = nil
+            icon.image = ready
+            return
+        }
+
+        guard let url = item.iconURL else {
+            pendingIconURL = nil
+            icon.image = nil
+            return
+        }
+
+        // Not cached: show the generic bundle icon now and fade the real one in, so the
+        // row has stable geometry and the swap doesn't read as a flicker.
+        pendingIconURL = url
+        icon.image = IconCache.placeholder
+        IconCache.shared.load(for: url) { [weak self] loaded in
+            guard let self, self.pendingIconURL == url else { return }
+            self.pendingIconURL = nil
+            self.icon.image = loaded
+            self.icon.alphaValue = 0
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.15
+                self.icon.animator().alphaValue = 1
+            }
+        }
     }
 
     /// Emboldens exactly the characters the matcher consumed, so it's visible *why*
