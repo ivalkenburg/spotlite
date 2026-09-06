@@ -8,13 +8,22 @@ enum ResultItem {
     case app(MatchResult)
     case calculation(value: Double)
     case settings
+    case caffeinate(isOn: Bool)
 
     var title: String {
         switch self {
         case .app(let match): return match.entry.name
         case .calculation(let value): return Calculator.format(value)
         case .settings: return "Spotlite Settings"
+        case .caffeinate: return "Caffeinate"
         }
+    }
+
+    /// Rows that carry a switch instead of a detail label. The switch is the state, so
+    /// the row needs no words to say whether it is on.
+    var switchState: Bool? {
+        if case .caffeinate(let isOn) = self { return isOn }
+        return nil
     }
 
     /// Character indices to embolden — the matched characters of a fuzzy hit.
@@ -30,6 +39,7 @@ enum ResultItem {
         switch self {
         case .calculation: return "return to copy"
         case .settings: return "preferences"
+        case .caffeinate: return nil
         case .app(let match):
             guard isSelected else { return nil }
             return ResultItem.abbreviate(match.entry.url.deletingLastPathComponent().path)
@@ -48,6 +58,8 @@ enum ResultItem {
         case .app(let match): return IconCache.shared.cached(for: match.entry.url)
         case .calculation: return ResultItem.calculationIcon
         case .settings: return ResultItem.settingsIcon
+        case .caffeinate(let isOn):
+            return isOn ? ResultItem.caffeineOnIcon : ResultItem.caffeineOffIcon
         }
     }
 
@@ -59,6 +71,8 @@ enum ResultItem {
     // Built once rather than per row render: `icon` is read every time a row is configured.
     private static let calculationIcon = symbol("equal.square")
     private static let settingsIcon = symbol("gearshape")
+    private static let caffeineOffIcon = symbol("cup.and.saucer")
+    private static let caffeineOnIcon = symbol("cup.and.saucer.fill")
 
     private static func symbol(_ name: String) -> NSImage? {
         let config = NSImage.SymbolConfiguration(pointSize: 24, weight: .regular)

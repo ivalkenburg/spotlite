@@ -20,6 +20,8 @@ at 0% CPU while idle and does its matching in about 17 microseconds per keystrok
   list with checkboxes lives in Settings.
 - **Aliases.** Teach it that `ps` means Photoshop. An alias always outranks an
   incidental name match, and works even when the name shares no letters with it.
+- **Caffeinate.** Search for it to get a row with a switch that keeps the display
+  awake. Toggling leaves the panel open so you can see the switch move.
 - **Liquid Glass.** Uses the native `NSGlassEffectView` introduced in macOS 26.
 
 ## Requirements

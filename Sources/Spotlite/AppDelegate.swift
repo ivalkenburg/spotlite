@@ -112,6 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showPanel() { controller.show() }
+
     @objc private func openSettingsMenuItem() { openSettings() }
 
     // MARK: - Settings

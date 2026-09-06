@@ -28,6 +28,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private var fingerprint: [String: Date] = [:]
     /// Set when a query matches nothing but the Settings entry should still be offered.
     private static let settingsKeywords = ["settings", "preferences", "spotlite"]
+    private static let caffeineKeywords = ["caffeinate", "caffeine"]
+    private let caffeine = CaffeineAssertion()
     private var cursor = 0
     /// Resize is driven by row-count changes, not keystrokes.
     private var lastRowCount = -1
@@ -398,6 +400,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         if lowered.count >= 3, SpotliteController.settingsKeywords.contains(where: { $0.hasPrefix(lowered) }) {
             result.append(.settings)
         }
+        if lowered.count >= 3, SpotliteController.caffeineKeywords.contains(where: { $0.hasPrefix(lowered) }) {
+            result.append(.caffeinate(isOn: caffeine.isActive))
+        }
         return result
     }
 
@@ -481,6 +486,12 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         case .settings:
             hide()
             onOpenSettings?()
+
+        case .caffeinate:
+            // Stays open, unlike every other action: the switch is the only confirmation
+            // that anything happened, and closing would hide it.
+            caffeine.toggle()
+            updateMatches(for: field.stringValue)
 
         case .app(let match):
             let entry = match.entry

@@ -11,6 +11,7 @@ final class ResultRowView: NSTableCellView {
     private let label = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
     private let highlight = NSView()
+    private let stateSwitch = NSSwitch()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -38,7 +39,12 @@ final class ResultRowView: NSTableCellView {
         detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         label.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        for v in [highlight, icon, label, detail] {
+        stateSwitch.controlSize = .mini
+        stateSwitch.isHidden = true
+        // The row owns the click; the switch only reports state.
+        stateSwitch.isEnabled = false
+
+        for v in [highlight, icon, label, detail, stateSwitch] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -60,6 +66,10 @@ final class ResultRowView: NSTableCellView {
             detail.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 12),
             detail.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.horizontalInset),
             detail.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            stateSwitch.trailingAnchor.constraint(equalTo: trailingAnchor,
+                                                  constant: -Metrics.horizontalInset),
+            stateSwitch.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
 
@@ -74,6 +84,13 @@ final class ResultRowView: NSTableCellView {
         label.attributedStringValue = ResultRowView.attributed(item.title, bold: item.highlighted)
         detail.stringValue = item.detail(isSelected: selected) ?? ""
         highlight.isHidden = !selected
+
+        if let state = item.switchState {
+            stateSwitch.isHidden = false
+            stateSwitch.state = state ? .on : .off
+        } else {
+            stateSwitch.isHidden = true
+        }
 
         icon.layer?.removeAllAnimations()
         icon.alphaValue = 1
