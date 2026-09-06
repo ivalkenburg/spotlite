@@ -31,6 +31,12 @@ final class ResultRowView: NSTableCellView {
         detail.font = .systemFont(ofSize: 13, weight: .regular)
         detail.textColor = .tertiaryLabelColor
         detail.alignment = .right
+        // At the narrowest width a long name and a deep path compete. The name is the
+        // thing being chosen, so the path yields — from the head, because the tail
+        // ("/Utilities") is what distinguishes it and "/System/Applica…" says nothing.
+        detail.lineBreakMode = .byTruncatingHead
+        detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        label.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         for v in [highlight, icon, label, detail] {
             v.translatesAutoresizingMaskIntoConstraints = false

@@ -1,4 +1,5 @@
 import AppKit
+import SpotliteCore
 
 /// A borderless panel that can take key focus without the app owning the Dock.
 final class SpotlitePanel: NSPanel {
@@ -7,7 +8,9 @@ final class SpotlitePanel: NSPanel {
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: Metrics.windowWidth, height: Metrics.windowHeight(forRows: 0)),
+            contentRect: NSRect(x: 0, y: 0,
+                                width: Metrics.windowWidth(for: PanelGeometry.defaultWidth),
+                                height: Metrics.windowHeight(forRows: 0)),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false

@@ -3,7 +3,8 @@ import SpotliteCore
 
 /// Owns the panel, its contents, and the show/hide lifecycle.
 @MainActor
-final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
+final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSource,
+                                NSTableViewDelegate, PanelDragReceiver {
 
     private let panel = SpotlitePanel()
     private let glass = NSGlassEffectView()
@@ -36,6 +37,16 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private var listHeight: NSLayoutConstraint!
     /// Top edge stays put while the panel grows downward.
     private var anchorTopY: CGFloat = 0
+
+    private let leadingEdge = ResizeEdgeView(edge: .leading)
+    private let trailingEdge = ResizeEdgeView(edge: .trailing)
+    private let moveHandle = MoveHandleView()
+
+    /// The geometry as stored. `fittedGeometry` is what actually gets used.
+    private var geometry: PanelGeometry { preferences.panelGeometry }
+    /// Live drag state. Non-nil only between mouse-down and the drag ending.
+    private var drag: (kind: PanelDrag, origin: NSPoint, start: PanelGeometry,
+                       screen: CGRect, engaged: Bool)?
 
     /// Called when the user picks the Settings entry, or hides an app.
     var onOpenSettings: (() -> Void)?
@@ -115,6 +126,38 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             // The list padding lives in the scroll view's content insets instead.
             scroll.topAnchor.constraint(equalTo: magnifier.bottomAnchor),
             listHeight,
+        ])
+
+        for handle in [moveHandle, leadingEdge, trailingEdge] as [NSView] {
+            handle.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(handle)
+        }
+        moveHandle.receiver = self
+        leadingEdge.receiver = self
+        trailingEdge.receiver = self
+        // Only the part of the bar the query text doesn't occupy is draggable, so
+        // click-and-drag to select text still works.
+        moveHandle.textEndX = { [weak self] in
+            guard let self else { return 0 }
+            let textWidth = self.field.attributedStringValue.size().width
+            return self.field.frame.minX + textWidth + 8
+        }
+
+        NSLayoutConstraint.activate([
+            moveHandle.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            moveHandle.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            moveHandle.topAnchor.constraint(equalTo: content.topAnchor),
+            moveHandle.heightAnchor.constraint(equalToConstant: Metrics.inputHeight),
+
+            leadingEdge.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            leadingEdge.widthAnchor.constraint(equalToConstant: Metrics.resizeEdgeWidth),
+            leadingEdge.topAnchor.constraint(equalTo: content.topAnchor),
+            leadingEdge.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+
+            trailingEdge.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            trailingEdge.widthAnchor.constraint(equalToConstant: Metrics.resizeEdgeWidth),
+            trailingEdge.topAnchor.constraint(equalTo: content.topAnchor),
+            trailingEdge.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
 
         glass.contentView = content
@@ -229,14 +272,56 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             screen = NSScreen.screens.first ?? NSScreen.main
         }
         guard let frame = screen?.visibleFrame else { return }
+        apply(fitted(for: frame), on: frame, rows: 0, animated: false)
+    }
 
-        let height = Metrics.windowHeight(forRows: 0)
-        anchorTopY = frame.maxY - frame.height * Metrics.topFraction
-        let origin = NSPoint(x: frame.midX - Metrics.windowWidth / 2,
-                             y: anchorTopY + Metrics.chromeInset - height)
-        panel.setFrame(NSRect(origin: origin,
-                              size: NSSize(width: Metrics.windowWidth, height: height)),
-                       display: true)
+    /// Stored geometry clamped to what this screen can actually hold. The clamp is never
+    /// written back: unplugging a display must not destroy the real setting.
+    private func fitted(for visibleFrame: CGRect) -> PanelGeometry {
+        geometry.fitted(visibleFrame: visibleFrame,
+                        chromeInset: Metrics.chromeInset,
+                        expandedHeight: Metrics.height(forRows: Metrics.maxVisibleRows))
+    }
+
+    private var currentVisibleFrame: CGRect {
+        if let drag { return drag.screen }
+        let mouse = NSEvent.mouseLocation
+        let screen: NSScreen?
+        switch preferences.panelScreen {
+        case .followPointer:
+            screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
+        case .primary:
+            screen = NSScreen.screens.first ?? NSScreen.main
+        }
+        return screen?.visibleFrame ?? .zero
+    }
+
+    /// The single place the panel's frame is computed, so width, vertical position and
+    /// row-count growth can never disagree about where the panel belongs.
+    private func apply(_ geometry: PanelGeometry, on visibleFrame: CGRect, rows: Int, animated: Bool) {
+        anchorTopY = geometry.anchorTopY(visibleFrame: visibleFrame)
+
+        let height = Metrics.windowHeight(forRows: rows)
+        let width = Metrics.windowWidth(for: geometry.width)
+        let frame = NSRect(x: visibleFrame.midX - width / 2,
+                           y: anchorTopY + Metrics.chromeInset - height,
+                           width: width, height: height)
+
+        guard animated, panel.isVisible else {
+            panel.setFrame(frame, display: true)
+            panel.invalidateShadow()
+            return
+        }
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.12
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrame(frame, display: true)
+        } completionHandler: { [weak panel] in
+            // A borderless transparent window caches its shadow from the old alpha
+            // mask; without this the previous size ghosts as chamfers at the corners.
+            panel?.invalidateShadow()
+        }
     }
 
     /// Dev harness: show -> type -> clear, logging the panel frame at each step,
@@ -326,26 +411,13 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         listHeight.constant = Metrics.height(forRows: items.count) - Metrics.inputHeight
         scroll.isHidden = rows == 0
 
-        let height = Metrics.windowHeight(forRows: items.count)
-        var frame = panel.frame
-        frame.size.height = height
-        frame.origin.y = anchorTopY + Metrics.chromeInset - height
+        // Stand down while a drag is in flight. An animated setFrame finishing after a
+        // directly-set one is exactly how the panel's first placement bug happened; the
+        // drag reconciles the row count itself when it ends.
+        guard drag == nil else { return }
 
-        guard panel.isVisible else {
-            panel.setFrame(frame, display: false)
-            panel.invalidateShadow()
-            return
-        }
-
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.12
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel.animator().setFrame(frame, display: true)
-        } completionHandler: { [weak panel] in
-            // A borderless transparent window caches its shadow from the old alpha
-            // mask; without this the previous size ghosts as chamfers at the corners.
-            panel?.invalidateShadow()
-        }
+        let visibleFrame = currentVisibleFrame
+        apply(fitted(for: visibleFrame), on: visibleFrame, rows: items.count, animated: true)
     }
 
     // MARK: - Keyboard
@@ -455,7 +527,11 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// un-hiding an app takes effect on the next keystroke rather than the next launch.
     func preferencesDidChange(_ updated: Preferences) {
         preferences = updated
-        if panel.isVisible { updateMatches(for: field.stringValue) }
+        guard panel.isVisible else { return }
+        updateMatches(for: field.stringValue)
+        // Picks up a Reset Size & Position from Settings while the panel is on screen.
+        let visibleFrame = currentVisibleFrame
+        apply(fitted(for: visibleFrame), on: visibleFrame, rows: items.count, animated: true)
     }
 
     /// Drops launch history for apps that are gone and caps what remains. Runs on every
@@ -477,6 +553,50 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                 if self.panel.isVisible { self.updateMatches(for: self.field.stringValue) }
             }
         }
+    }
+
+    // MARK: - Dragging
+
+    func dragBegan(_ kind: PanelDrag, at screenPoint: NSPoint) {
+        drag = (kind, screenPoint, geometry, currentVisibleFrame, engaged: false)
+    }
+
+    func dragChanged(to screenPoint: NSPoint) {
+        guard var session = drag else { return }
+
+        let dx = screenPoint.x - session.origin.x
+        let dy = screenPoint.y - session.origin.y
+
+        // A click always jitters a pixel or two; without this every click on the header
+        // would nudge the panel.
+        if !session.engaged {
+            guard max(abs(dx), abs(dy)) >= Metrics.dragThreshold else { return }
+            session.engaged = true
+        }
+        drag = session
+
+        let updated: PanelGeometry
+        switch session.kind {
+        case .move:
+            updated = session.start.moved(pointerDelta: dy, visibleHeight: session.screen.height)
+        case .resize(let edge):
+            updated = session.start.resized(edge: edge, pointerDelta: dx)
+        }
+
+        preferences.panelGeometry = updated
+        // Never animated: an animation here would leave the panel lagging the pointer.
+        apply(fitted(for: session.screen), on: session.screen, rows: items.count, animated: false)
+    }
+
+    func dragEnded() {
+        guard let session = drag else { return }
+        drag = nil
+        guard session.engaged else { return }
+
+        Storage.save(preferences)
+        onPreferencesChanged?(preferences)
+        // Reconcile whatever row-count change was suppressed while dragging.
+        apply(fitted(for: session.screen), on: session.screen, rows: items.count, animated: false)
     }
 
     // MARK: - Table

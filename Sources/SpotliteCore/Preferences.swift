@@ -15,6 +15,8 @@ public struct Preferences: Codable, Sendable, Equatable {
     /// Bundle ID to a short name the user types instead, e.g. "ps" for Photoshop.
     public var aliases: [String: String]
     public var panelScreen: PanelScreen
+    /// Width and vertical position, adjusted by dragging the panel's edges and header.
+    public var panelGeometry: PanelGeometry
     public var hotKeyCode: UInt32
     public var hotKeyModifiers: UInt32
     public var showMenuBarIcon: Bool
@@ -35,6 +37,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         hiddenBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .hiddenBundleIDs) ?? []
         aliases = try c.decodeIfPresent([String: String].self, forKey: .aliases) ?? [:]
         panelScreen = try c.decodeIfPresent(PanelScreen.self, forKey: .panelScreen) ?? .followPointer
+        panelGeometry = try c.decodeIfPresent(PanelGeometry.self, forKey: .panelGeometry) ?? .default
         hotKeyCode = try c.decodeIfPresent(UInt32.self, forKey: .hotKeyCode) ?? Preferences.defaultKeyCode
         hotKeyModifiers = try c.decodeIfPresent(UInt32.self, forKey: .hotKeyModifiers) ?? Preferences.defaultModifiers
         showMenuBarIcon = try c.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? true
@@ -45,6 +48,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         hiddenBundleIDs: Set<String> = [],
         aliases: [String: String] = [:],
         panelScreen: PanelScreen = .followPointer,
+        panelGeometry: PanelGeometry = .default,
         hotKeyCode: UInt32 = Preferences.defaultKeyCode,
         hotKeyModifiers: UInt32 = Preferences.defaultModifiers,
         showMenuBarIcon: Bool = true,
@@ -53,6 +57,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         self.hiddenBundleIDs = hiddenBundleIDs
         self.aliases = aliases
         self.panelScreen = panelScreen
+        self.panelGeometry = panelGeometry
         self.hotKeyCode = hotKeyCode
         self.hotKeyModifiers = hotKeyModifiers
         self.showMenuBarIcon = showMenuBarIcon

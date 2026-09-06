@@ -2,7 +2,6 @@ import CoreGraphics
 
 /// Single source of truth for layout. Every size the panel uses comes from here.
 enum Metrics {
-    static let width: CGFloat = 720
     static let inputHeight: CGFloat = 64
     static let rowHeight: CGFloat = 48
     static let maxVisibleRows = 5
@@ -24,7 +23,17 @@ enum Metrics {
     /// Total distance from the window edge to the visible glass edge.
     static var chromeInset: CGFloat { windowMargin }
 
-    static var windowWidth: CGFloat { width + chromeInset * 2 }
+    /// Window width for a given visible panel width. The window is larger than the
+    /// panel so the glass view's shadow isn't clipped.
+    static func windowWidth(for panelWidth: CGFloat) -> CGFloat { panelWidth + chromeInset * 2 }
+
+    /// Width of the invisible strip at each edge that resizes the panel. Deliberately
+    /// unmarked: only the cursor tells you it is there.
+    static let resizeEdgeWidth: CGFloat = 6
+
+    /// How far the pointer must travel before a click on the header becomes a drag.
+    /// Without it, every click to focus the field nudges the panel.
+    static let dragThreshold: CGFloat = 3
 
     static func windowHeight(forRows rows: Int) -> CGFloat {
         height(forRows: rows) + chromeInset * 2
@@ -37,6 +46,4 @@ enum Metrics {
         return inputHeight + CGFloat(visible) * rowHeight + listPadding * 2
     }
 
-    /// Vertical placement: 22% down from the top of the screen, Spotlight-like.
-    static let topFraction: CGFloat = 0.22
 }

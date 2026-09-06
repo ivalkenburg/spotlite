@@ -81,7 +81,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         screenPicker.selectItem(at: preferences.panelScreen == .primary ? 1 : 0)
         screenPicker.target = self
         screenPicker.action = #selector(screenChoiceChanged)
-        let screenRow = NSStackView(views: [screenLabel, screenPicker])
+        let resetButton = NSButton(title: "Reset Size & Position", target: self,
+                                   action: #selector(resetGeometry))
+        resetButton.bezelStyle = .rounded
+        resetButton.controlSize = .small
+
+        let screenRow = NSStackView(views: [screenLabel, screenPicker, resetButton])
         screenRow.orientation = .horizontal
         screenRow.spacing = 12
 
@@ -177,6 +182,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
             ? "Running from \(path) — move the app to /Applications, or the login item will break."
             : ""
         loginItemWarning.isHidden = loginItemWarning.stringValue.isEmpty
+    }
+
+    /// The way back from a panel dragged somewhere unusable. Without it the only
+    /// recovery is editing JSON by hand.
+    @objc private func resetGeometry() {
+        preferences.panelGeometry = .default
+        persist()
     }
 
     @objc private func screenChoiceChanged(_ sender: NSPopUpButton) {

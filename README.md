@@ -61,6 +61,18 @@ shows where the app lives, which tells two copies of the same app apart.
 By default the panel opens on whichever display holds the pointer. Settings can
 pin it to the main display instead.
 
+The panel can be resized by dragging either edge, and moved up or down by
+dragging an empty part of the search bar. It stays locked to the horizontal
+centre of the screen, so it only ever travels vertically. Because it stays
+centred, the width changes by twice the pointer movement — the edge you are
+holding stays under the pointer. There is no visible handle: the cursor changes
+when you are over an edge. "Reset Size & Position" in Settings puts it back.
+
+Width is stored in points and vertical position as a fraction of screen height,
+so the panel lands in the same visual place on any display. Geometry that does
+not fit the current screen is clamped when the panel is placed, never written
+back — unplugging a monitor will not destroy the setting.
+
 To reach Settings, use the menu bar icon, or search for `settings` in Spotlite
 itself. Spotlite indexes its own Settings entry, so it stays reachable even with
 the menu bar icon turned off.
