@@ -1,0 +1,476 @@
+import AppKit
+import SpotliteCore
+
+/// Owns the panel, its contents, and the show/hide lifecycle.
+@MainActor
+final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
+
+    private let panel = SpotlitePanel()
+    private let glass = NSGlassEffectView()
+    let field = SearchField()
+    private let magnifier = NSImageView()
+    private let table = NSTableView()
+    private let scroll = NSScrollView()
+    private let matcher = Matcher()
+
+    private var entries: [AppEntry] = []
+    private var items: [ResultItem] = []
+    private var frecency = Storage.loadFrecency()
+    private var preferences = Storage.loadPreferences()
+    private var watcher: DirectoryWatcher?
+    private var fingerprint: [String: Date] = [:]
+    /// Set when a query matches nothing but the Settings entry should still be offered.
+    private static let settingsKeywords = ["settings", "preferences", "spotlite"]
+    private var cursor = 0
+    /// Resize is driven by row-count changes, not keystrokes.
+    private var lastRowCount = -1
+    /// The list height is set explicitly rather than inferred: an implicit Auto Layout
+    /// minimum (input height + content insets) otherwise becomes a floor the window
+    /// cannot collapse below once the scroll view has held rows.
+    private var listHeight: NSLayoutConstraint!
+    /// Top edge stays put while the panel grows downward.
+    private var anchorTopY: CGFloat = 0
+
+    /// Called when the user picks the Settings entry, or hides an app.
+    var onOpenSettings: (() -> Void)?
+    var onPreferencesChanged: ((Preferences) -> Void)?
+
+    override init() {
+        super.init()
+        buildUI()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(resignedKey),
+            name: NSWindow.didResignKeyNotification, object: panel
+        )
+    }
+
+    // MARK: - Construction
+
+    private func buildUI() {
+        glass.cornerRadius = Metrics.cornerRadius
+        glass.style = .regular
+
+        let content = NSView()
+
+        var symbolConfig = NSImage.SymbolConfiguration(pointSize: 22, weight: .regular)
+        symbolConfig = symbolConfig.applying(.init(paletteColors: [.secondaryLabelColor]))
+        magnifier.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "Search")?
+            .withSymbolConfiguration(symbolConfig)
+        magnifier.contentTintColor = .secondaryLabelColor
+
+        field.delegate = self
+        field.onCommandDigit = { [weak self] index in self?.launch(at: index) }
+
+        table.headerView = nil
+        table.rowHeight = Metrics.rowHeight
+        table.backgroundColor = .clear
+        table.style = .plain
+        table.selectionHighlightStyle = .none
+        table.intercellSpacing = .zero
+        table.dataSource = self
+        table.delegate = self
+        table.target = self
+        table.action = #selector(tableClicked)
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("main"))
+        column.resizingMask = .autoresizingMask
+        table.addTableColumn(column)
+
+        scroll.documentView = table
+        scroll.drawsBackground = false
+        scroll.backgroundColor = .clear
+        scroll.hasVerticalScroller = false
+        scroll.automaticallyAdjustsContentInsets = false
+        scroll.contentInsets = NSEdgeInsets(top: Metrics.listPadding, left: 0,
+                                            bottom: Metrics.listPadding, right: 0)
+
+        for v in [magnifier, field, scroll] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(v)
+        }
+
+        listHeight = scroll.heightAnchor.constraint(equalToConstant: 0)
+
+        NSLayoutConstraint.activate([
+            magnifier.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: Metrics.horizontalInset),
+            magnifier.topAnchor.constraint(equalTo: content.topAnchor),
+            magnifier.heightAnchor.constraint(equalToConstant: Metrics.inputHeight),
+            magnifier.widthAnchor.constraint(equalToConstant: Metrics.iconSize),
+
+            field.leadingAnchor.constraint(equalTo: magnifier.trailingAnchor, constant: 12),
+            field.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -Metrics.horizontalInset),
+            // Centered against the magnifier, not stretched to the input height:
+            // a text field taller than its line draws the text at the top, not the middle.
+            field.centerYAnchor.constraint(equalTo: magnifier.centerYAnchor),
+
+            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            // Zero constant: padding baked into a constraint becomes an Auto Layout
+            // minimum height, which would stop the panel collapsing back to 64pt.
+            // The list padding lives in the scroll view's content insets instead.
+            scroll.topAnchor.constraint(equalTo: magnifier.bottomAnchor),
+            listHeight,
+        ])
+
+        glass.contentView = content
+        glass.wantsLayer = true
+        glass.shadow = {
+            let sh = NSShadow()
+            sh.shadowColor = NSColor.black.withAlphaComponent(CGFloat(Metrics.shadowOpacity))
+            sh.shadowBlurRadius = Metrics.shadowRadius
+            sh.shadowOffset = NSSize(width: 0, height: Metrics.shadowOffsetY)
+            return sh
+        }()
+
+        // The glass view sits inside a transparent margin rather than being the window's
+        // contentView: filling the frame exactly clips its shadow into a square halo.
+        let host = MarginHostView()
+        host.glass = glass
+        host.addSubview(glass)
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        let m = Metrics.windowMargin
+        NSLayoutConstraint.activate([
+            glass.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: m),
+            glass.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -m),
+            glass.topAnchor.constraint(equalTo: host.topAnchor, constant: m),
+            glass.bottomAnchor.constraint(equalTo: host.bottomAnchor, constant: -m),
+        ])
+        panel.contentView = host
+    }
+
+    // MARK: - Lifecycle
+
+    func toggle() {
+        panel.isVisible ? hide() : show()
+    }
+
+    func dumpFrames(_ tag: String) {
+        panel.layoutIfNeeded()
+        print("[\(tag)] window=\(panel.frame)")
+        print("[\(tag)] host=\(panel.contentView?.frame ?? .zero)")
+        print("[\(tag)] glass=\(glass.frame)  cornerRadius=\(glass.cornerRadius)")
+        print("[\(tag)] content=\(glass.contentView?.frame ?? .zero)")
+        print("[\(tag)] scroll=\(scroll.frame) listHeight=\(listHeight.constant)")
+    }
+
+    func show() {
+        loadIndexIfNeeded()
+
+        // Dev hook: prefill a query so the expanded state can be inspected.
+        field.stringValue = ProcessInfo.processInfo.environment["SPOTLITE_DEV_QUERY"] ?? ""
+        // Anchor first: updateMatches resizes against anchorTopY, and an in-flight
+        // resize animation would otherwise finish last and clobber the placement.
+        position()
+        updateMatches(for: field.stringValue)
+
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        panel.makeFirstResponder(field)
+    }
+
+    /// The current index, for the Settings app list. Already sorted by name.
+    func indexedApps() -> [AppEntry] {
+        loadIndexIfNeeded()
+        return entries
+    }
+
+    /// Loads the index on first use and starts watching; on later calls does the cheap
+    /// staleness check that catches changes FSEvents missed while the machine was asleep.
+    private func loadIndexIfNeeded() {
+        guard !entries.isEmpty else {
+            entries = AppIndex.loadCachedOrScan()
+            fingerprint = AppIndex.directoriesFingerprint()
+            pruneFrecency()
+            startWatching()
+            return
+        }
+
+        let current = AppIndex.directoriesFingerprint()
+        guard current != fingerprint else { return }
+        fingerprint = current
+        entries = AppIndex.refresh()
+        pruneFrecency()
+    }
+
+    func hide() {
+        panel.orderOut(nil)
+        field.stringValue = ""
+        items = []
+        cursor = 0
+        lastRowCount = -1
+    }
+
+    /// Dev captures steal key focus, which would dismiss the panel mid-measurement.
+    private let pinnedOpen = ProcessInfo.processInfo.environment["SPOTLITE_DEV_PIN"] == "1"
+
+    @objc private func resignedKey() {
+        guard !pinnedOpen else { return }
+        if panel.isVisible { hide() }
+    }
+
+    /// Centered on the screen holding the pointer — your eyes are where your mouse is.
+    private func position() {
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
+        guard let frame = screen?.visibleFrame else { return }
+
+        let height = Metrics.windowHeight(forRows: 0)
+        anchorTopY = frame.maxY - frame.height * Metrics.topFraction
+        let origin = NSPoint(x: frame.midX - Metrics.windowWidth / 2,
+                             y: anchorTopY + Metrics.chromeInset - height)
+        panel.setFrame(NSRect(origin: origin,
+                              size: NSSize(width: Metrics.windowWidth, height: height)),
+                       display: true)
+    }
+
+    /// Dev harness: show -> type -> clear, logging the panel frame at each step,
+    /// so the collapse-back state can be measured rather than eyeballed.
+    func runDevSequence() {
+        show()
+        NSLog("DEV step1 shown: \(panel.frame)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            self.field.stringValue = "a"
+            self.updateMatches(for: "a")
+            NSLog("DEV step2 typed: \(self.panel.frame)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                self.field.stringValue = ""
+                self.updateMatches(for: "")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    NSLog("DEV step3 cleared: \(self.panel.frame)")
+                }
+            }
+        }
+    }
+
+    // MARK: - Query
+
+    func controlTextDidChange(_ obj: Notification) {
+        updateMatches(for: field.stringValue)
+    }
+
+    func updateMatches(for query: String) {
+        items = buildItems(for: query)
+        cursor = 0
+        table.reloadData()
+        resizeIfRowCountChanged()
+        scrollCursorIntoView()
+    }
+
+    /// Assembles the result list: a calculation pinned on top when the query is
+    /// arithmetic, then apps ranked by score × frecency, then the Settings entry when
+    /// the query asks for it. Apps still appear below a calculation, since `x^2`
+    /// shouldn't hide an app named X.
+    private func buildItems(for query: String) -> [ResultItem] {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return [] }
+
+        var result: [ResultItem] = []
+        if let value = Calculator.evaluate(trimmed) {
+            result.append(.calculation(value: value))
+        }
+
+        let now = Date()
+        let matches = matcher.search(trimmed, in: entries)
+        var ranked: [(match: MatchResult, weighted: Double)] = []
+        ranked.reserveCapacity(matches.count)
+
+        for match in matches {
+            if let id = match.entry.bundleID, preferences.hiddenBundleIDs.contains(id) { continue }
+            ranked.append((match, Double(match.score) * frecency.multiplier(for: match.entry.id, now: now)))
+        }
+
+        // Swift's sort is not stable, so ties need an explicit order or results shuffle
+        // between identical queries.
+        ranked.sort { a, b in
+            if a.weighted != b.weighted { return a.weighted > b.weighted }
+            if a.match.entry.lowerChars.count != b.match.entry.lowerChars.count {
+                return a.match.entry.lowerChars.count < b.match.entry.lowerChars.count
+            }
+            return a.match.entry.name < b.match.entry.name
+        }
+
+        result.append(contentsOf: ranked.map { .app($0.match) })
+
+        // The self-indexed escape hatch: reachable even with the menu bar icon hidden.
+        let lowered = trimmed.lowercased()
+        if SpotliteController.settingsKeywords.contains(where: { $0.hasPrefix(lowered) }) {
+            result.append(.settings)
+        }
+        return result
+    }
+
+    /// The whole point of row-count-triggered resizing: typing narrows results constantly,
+    /// but the window only moves when the number of *visible* rows actually changes.
+    private func resizeIfRowCountChanged() {
+        let rows = min(items.count, Metrics.maxVisibleRows)
+        guard rows != lastRowCount else { return }
+        lastRowCount = rows
+
+        listHeight.constant = Metrics.height(forRows: items.count) - Metrics.inputHeight
+        scroll.isHidden = rows == 0
+
+        let height = Metrics.windowHeight(forRows: items.count)
+        var frame = panel.frame
+        frame.size.height = height
+        frame.origin.y = anchorTopY + Metrics.chromeInset - height
+
+        guard panel.isVisible else {
+            panel.setFrame(frame, display: false)
+            panel.invalidateShadow()
+            return
+        }
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.12
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrame(frame, display: true)
+        } completionHandler: { [weak panel] in
+            // A borderless transparent window caches its shadow from the old alpha
+            // mask; without this the previous size ghosts as chamfers at the corners.
+            panel?.invalidateShadow()
+        }
+    }
+
+    // MARK: - Keyboard
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        switch selector {
+        case #selector(NSResponder.moveDown(_:)):
+            moveCursor(by: 1); return true
+        case #selector(NSResponder.moveUp(_:)):
+            moveCursor(by: -1); return true
+        case #selector(NSResponder.insertNewline(_:)):
+            launch(at: cursor); return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            hide(); return true
+        case #selector(NSResponder.deleteToBeginningOfLine(_:)):
+            // Command-Delete inside a text field arrives as deleteToBeginningOfLine.
+            hideAppUnderCursor(); return true
+        default:
+            return false
+        }
+    }
+
+    /// Wraps in both directions — standard for a short list.
+    private func moveCursor(by delta: Int) {
+        guard !items.isEmpty else { return }
+        let previous = cursor
+        cursor = (cursor + delta + items.count) % items.count
+        table.reloadData(forRowIndexes: IndexSet([previous, cursor]),
+                         columnIndexes: IndexSet(integer: 0))
+        scrollCursorIntoView()
+    }
+
+    private func scrollCursorIntoView() {
+        guard !items.isEmpty else { return }
+        table.scrollRowToVisible(cursor)
+    }
+
+    @objc private func tableClicked() {
+        let row = table.clickedRow
+        guard row >= 0 else { return }
+        launch(at: row)
+    }
+
+    // MARK: - Launch
+
+    private func launch(at index: Int) {
+        guard items.indices.contains(index) else { return }
+
+        switch items[index] {
+        case .calculation(let value):
+            let text = Calculator.format(value)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            hide()
+
+        case .settings:
+            hide()
+            onOpenSettings?()
+
+        case .app(let match):
+            let entry = match.entry
+            let query = field.stringValue
+            frecency.recordLaunch(entry.id)
+            Storage.save(frecency)
+            hide()
+
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            // Fire and forget: waiting on a slow-launching app would freeze the panel.
+            NSWorkspace.shared.openApplication(at: entry.url, configuration: config) { [weak self] _, error in
+                guard error != nil else { return }
+                Task { @MainActor in
+                    guard let self else { return }
+                    // The app is gone, so the whole index is suspect: rescan rather than
+                    // just dropping this entry, or the stale one returns from the cache.
+                    self.entries = AppIndex.refresh()
+                    self.fingerprint = AppIndex.directoriesFingerprint()
+                    self.show()
+                    // show() clears the field. Restore the query, otherwise the panel
+                    // reopens blank and the failure reads as nothing having happened.
+                    self.field.stringValue = query
+                    self.updateMatches(for: query)
+                }
+            }
+        }
+    }
+
+    /// Hides the app under the cursor. Bound to Command-Delete: the fast path, with the
+    /// full list available in Settings for un-hiding.
+    private func hideAppUnderCursor() {
+        guard items.indices.contains(cursor), case .app(let match) = items[cursor],
+              let bundleID = match.entry.bundleID else { return }
+
+        preferences.hiddenBundleIDs.insert(bundleID)
+        Storage.save(preferences)
+        onPreferencesChanged?(preferences)
+        updateMatches(for: field.stringValue)
+    }
+
+    /// Re-reads preferences after the Settings window changes them, so hiding or
+    /// un-hiding an app takes effect on the next keystroke rather than the next launch.
+    func preferencesDidChange(_ updated: Preferences) {
+        preferences = updated
+        if panel.isVisible { updateMatches(for: field.stringValue) }
+    }
+
+    /// Drops launch history for apps that are gone, so the file can't grow forever.
+    private func pruneFrecency() {
+        let ids = Set(entries.map(\.id))
+        let before = frecency.records.count
+        frecency.prune(keeping: ids)
+        if frecency.records.count != before { Storage.save(frecency) }
+    }
+
+    private func startWatching() {
+        let paths = AppIndex.searchDirectories.map(\.path)
+        watcher = DirectoryWatcher(paths: paths) { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.entries = AppIndex.refresh()
+                self.fingerprint = AppIndex.directoriesFingerprint()
+                self.pruneFrecency()
+                if self.panel.isVisible { self.updateMatches(for: self.field.stringValue) }
+            }
+        }
+    }
+
+    // MARK: - Table
+
+    func numberOfRows(in tableView: NSTableView) -> Int { items.count }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        let view = tableView.makeView(withIdentifier: ResultRowView.reuseID, owner: self) as? ResultRowView
+            ?? {
+                let v = ResultRowView(frame: .zero)
+                v.identifier = ResultRowView.reuseID
+                return v
+            }()
+        view.configure(with: items[row], selected: row == cursor)
+        return view
+    }
+
+    /// Hover must never move the cursor: an incidental mouse position silently
+    /// changing what Enter does is a genuinely dangerous interaction in a launcher.
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { false }
+}
