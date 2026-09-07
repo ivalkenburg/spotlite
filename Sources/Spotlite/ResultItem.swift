@@ -8,7 +8,7 @@ enum ResultItem {
     case app(MatchResult)
     case calculation(value: Double)
     case settings
-    case caffeinate(isOn: Bool)
+    case caffeinate(state: CaffeineState)
 
     var title: String {
         switch self {
@@ -22,7 +22,7 @@ enum ResultItem {
     /// Rows that carry a switch instead of a detail label. The switch is the state, so
     /// the row needs no words to say whether it is on.
     var switchState: Bool? {
-        if case .caffeinate(let isOn) = self { return isOn }
+        if case .caffeinate(let state) = self { return state.isActive }
         return nil
     }
 
@@ -58,8 +58,8 @@ enum ResultItem {
         case .app(let match): return IconCache.shared.cached(for: match.entry.url)
         case .calculation: return ResultItem.calculationIcon
         case .settings: return ResultItem.settingsIcon
-        case .caffeinate(let isOn):
-            return isOn ? ResultItem.caffeineOnIcon : ResultItem.caffeineOffIcon
+        case .caffeinate(let state):
+            return state.isActive ? ResultItem.caffeineOnIcon : ResultItem.caffeineOffIcon
         }
     }
 

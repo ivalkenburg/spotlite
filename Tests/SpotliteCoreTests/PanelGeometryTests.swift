@@ -57,6 +57,14 @@ struct PanelGeometryTests {
         #expect(fitted.width == 864)
     }
 
+    @Test func draggingFromFittedGeometryHasNoStoredWidthDeadZone() {
+        let small = CGRect(x: 0, y: 0, width: 1024, height: 768)
+        let displayed = PanelGeometry(width: 1200).fitted(visibleFrame: small, chromeInset: 80,
+                                                         expandedHeight: 320)
+        let dragged = displayed.resized(edge: .trailing, pointerDelta: -20)
+        #expect(dragged.width == 824)
+    }
+
     @Test func fittingLeavesRoomForAFullList() {
         // 0.70 of 1130 is 791; a 320pt panel from there would run 0.5pt off the bottom.
         let fitted = PanelGeometry(verticalFraction: 0.70).fitted(visibleFrame: screen,

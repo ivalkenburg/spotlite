@@ -10,6 +10,8 @@
 	<string>Spotlite</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.igorv.spotlite</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon.icns</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

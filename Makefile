@@ -15,6 +15,7 @@ bundle: build
 	@mkdir -p $(BUNDLE)/Contents/MacOS $(BUNDLE)/Contents/Resources
 	@cp $(BIN) $(BUNDLE)/Contents/MacOS/$(APP)
 	@cp Resources/Info.plist $(BUNDLE)/Contents/Info.plist
+	@cp Resources/AppIcon.icns $(BUNDLE)/Contents/Resources/AppIcon.icns
 	@codesign --force --sign "$(IDENTITY)" --timestamp=none $(BUNDLE)
 	@echo "built $(BUNDLE)"
 

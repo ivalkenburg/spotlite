@@ -43,6 +43,16 @@ struct CalculatorTests {
         #expect(Calculator.evaluate("5%0") == nil)
     }
 
+    @Test func rejectsPathologicallyLargePastedExpressions() {
+        let input = String(repeating: "-", count: 100_000) + "1+1"
+        #expect(Calculator.evaluate(input) == nil)
+    }
+
+    @Test func inputLimitIsAppliedAfterTrimmingWithoutChangingAcceptedInput() {
+        let padding = String(repeating: " ", count: 10_000)
+        #expect(Calculator.evaluate(padding + "1+1" + padding) == 2)
+    }
+
     @Test func formatsWithoutTrailingZeros() {
         // Pinned locale: format() follows the user's locale, so a bare assertion here
         // would pass or fail depending on the machine running the tests.

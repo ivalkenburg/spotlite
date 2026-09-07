@@ -17,12 +17,18 @@ public enum AppIndex {
     /// Loads the cached index if present, otherwise scans. The cache turns a ~90ms
     /// cold scan of 88 bundles into a single small JSON read.
     public static func loadCachedOrScan() -> [AppEntry] {
-        if let cached = Storage.loadIndex(), !cached.isEmpty {
-            return cached.map(AppEntry.init(cached:))
-        }
+        if let cached = loadCached() { return cached }
         let scanned = scan()
         Storage.saveIndex(scanned.map(\.cached))
         return scanned
+    }
+
+    /// Returns an immediately usable cached snapshot. Callers that keep running must
+    /// revalidate it in the background: a cache cannot observe changes made while the
+    /// process was not alive.
+    public static func loadCached() -> [AppEntry]? {
+        guard let cached = Storage.loadIndex(), !cached.isEmpty else { return nil }
+        return cached.map(AppEntry.init(cached:))
     }
 
     /// Rescans and rewrites the cache. Called from the FSEvents watcher and from the
@@ -45,7 +51,8 @@ public enum AppIndex {
         return result
     }
 
-    /// Walks the search directories and returns every user-launchable app, de-duplicated by bundle ID.
+    /// Walks the search directories and returns every user-launchable app. Concrete paths
+    /// are de-duplicated, but two installed copies with the same bundle ID remain visible.
     public static func scan(directories: [URL] = searchDirectories) -> [AppEntry] {
         var seen = Set<String>()
         var results: [AppEntry] = []
@@ -53,12 +60,15 @@ public enum AppIndex {
         for dir in directories {
             for url in bundles(in: dir, depth: 2) {
                 guard let entry = makeEntry(for: url) else { continue }
-                if seen.insert(entry.id).inserted {
+                if seen.insert(entry.instanceID).inserted {
                     results.append(entry)
                 }
             }
         }
-        return results.sorted { $0.name.lowercased() < $1.name.lowercased() }
+        return results.sorted {
+            let left = $0.name.lowercased(), right = $1.name.lowercased()
+            return left == right ? $0.instanceID < $1.instanceID : left < right
+        }
     }
 
     /// Collects `.app` URLs, recursing into plain subfolders (vendor folders) but never into bundles.
@@ -67,7 +77,7 @@ public enum AppIndex {
         let fm = FileManager.default
         guard let children = try? fm.contentsOfDirectory(
             at: dir,
-            includingPropertiesForKeys: [.isDirectoryKey],
+            includingPropertiesForKeys: [.isDirectoryKey, .localizedNameKey],
             // NOT .skipsHiddenFiles: /Applications/Safari.app is a hidden symlink into
             // /System/Cryptexes, and skipping hidden entries silently loses it.
             options: [.skipsPackageDescendants]
@@ -91,9 +101,14 @@ public enum AppIndex {
 
         if truthy(info["LSUIElement"]) || truthy(info["LSBackgroundOnly"]) { return nil }
 
-        let name = (info["CFBundleDisplayName"] as? String)
-            ?? (info["CFBundleName"] as? String)
+        // Match what Finder shows, not an internal process name. Visual Studio Code, for
+        // example, declares both bundle-name keys as "Code" while its visible name is
+        // "Visual Studio Code". Resolve this once while indexing; matching remains fully
+        // precomputed and pays no filesystem or localization cost per keystroke.
+        var name = (try? url.resourceValues(forKeys: [.localizedNameKey]))?.localizedName
             ?? url.deletingPathExtension().lastPathComponent
+        if name.lowercased().hasSuffix(".app") { name.removeLast(4) }
+        name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return nil }
 
         return AppEntry(url: url, name: name, bundleID: bundle.bundleIdentifier)

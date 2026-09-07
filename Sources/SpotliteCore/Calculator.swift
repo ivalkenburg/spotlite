@@ -7,14 +7,18 @@ import Foundation
 /// evaluation. Every failure is a nil return, not an exception.
 public enum Calculator {
 
+    /// Caps both allocation and recursive parser depth for arbitrarily large pasted text.
+    public static let maxInputLength = 256
+
     /// Characters that make an input worth evaluating. Without this gate, typing "1"
     /// to reach 1Password would produce a calculator row.
     private static let operators: Set<Character> = ["+", "-", "*", "/", "^", "%", "(", "×", "÷"]
 
     /// Evaluates `input` if it looks like arithmetic. Returns nil for anything else.
     public static func evaluate(_ input: String) -> Double? {
-        let trimmed = input.trimmingCharacters(in: .whitespaces)
-        guard trimmed.count > 1, trimmed.contains(where: { operators.contains($0) }) else { return nil }
+        guard let trimmed = input.boundedTrimmedWhitespace(maximumCount: maxInputLength),
+              trimmed.count > 1,
+              trimmed.contains(where: { operators.contains($0) }) else { return nil }
         guard trimmed.allSatisfy({ $0.isNumber || $0 == "." || $0 == " " || operators.contains($0) || $0 == ")" })
         else { return nil }
 

@@ -20,15 +20,28 @@ if let i = CommandLine.arguments.firstIndex(of: "--search"), i + 1 < CommandLine
 if CommandLine.arguments.contains("--bench") {
     let entries = AppIndex.scan()
     let matcher = Matcher()
+    let preferences = Storage.loadPreferences()
+    let aliases = AliasIndex(aliases: preferences.aliases)
+    let frecency = Storage.loadFrecency()
     let queries = ["s", "sa", "saf", "safa", "safar", "safari", "gc", "term", "a", "cal", "xyz"]
     var sink = 0
     // Warm up, then time enough iterations to escape timer granularity.
-    for q in queries { sink &+= matcher.search(q, in: entries).count }
+    for q in queries {
+        let matches = matcher.search(q, in: entries, aliases: aliases,
+                                     limit: max(1, entries.count))
+        sink &+= AppRanking.rank(matches, hiddenBundleIDs: preferences.hiddenBundleIDs,
+                                 frecency: frecency).count
+    }
 
     let iterations = 2000
     let start = DispatchTime.now().uptimeNanoseconds
     for _ in 0..<iterations {
-        for q in queries { sink &+= matcher.search(q, in: entries).count }
+        for q in queries {
+            let matches = matcher.search(q, in: entries, aliases: aliases,
+                                         limit: max(1, entries.count))
+            sink &+= AppRanking.rank(matches, hiddenBundleIDs: preferences.hiddenBundleIDs,
+                                     frecency: frecency).count
+        }
     }
     let elapsed = DispatchTime.now().uptimeNanoseconds - start
     let perSearch = Double(elapsed) / Double(iterations * queries.count) / 1000.0

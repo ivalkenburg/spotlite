@@ -44,6 +44,14 @@ public struct Frecency: Codable, Sendable {
         return 1.0 + Frecency.maxBoost * frequency * recency
     }
 
+    /// Applies the bounded boost without reversing it when a weak textual match has a
+    /// negative score. Multiplication would make such a result more negative.
+    public func adjustedScore(_ textualScore: Int, for id: String, now: Date = Date()) -> Double {
+        let score = Double(textualScore)
+        let boost = multiplier(for: id, now: now) - 1.0
+        return score + max(abs(score), Double(Scoring.match)) * boost
+    }
+
     /// Hard ceiling on stored records, so the file cannot grow without bound even if
     /// every id stays valid.
     public static let maxRecords = 500

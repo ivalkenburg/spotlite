@@ -131,4 +131,21 @@ struct FuzzyScoringTests {
         #expect(String(app("QuickTime Player").initials) == "qtp")
         #expect(String(app("TextEdit").initials) == "te")
     }
+
+    @Test func namesBeyondTheOriginalScratchCapacityStillMatch() {
+        let longName = "Searchable" + String(repeating: " Application", count: 10)
+        let result = Matcher().search("search", in: [app(longName)])
+        #expect(result.first?.entry.name == longName)
+    }
+
+    @Test func invalidLimitsAndOversizedQueriesAreRejectedSafely() {
+        #expect(Matcher().search("s", in: corpus, limit: 0).isEmpty)
+        let oversized = String(repeating: "s", count: 100_000)
+        #expect(Matcher().search(oversized, in: corpus).isEmpty)
+    }
+
+    @Test func queryLimitIsAppliedAfterTrimmingWithoutChangingAcceptedInput() {
+        let padding = String(repeating: " ", count: 10_000)
+        #expect(Matcher().search(padding + "saf" + padding, in: corpus).first?.entry.name == "Safari")
+    }
 }

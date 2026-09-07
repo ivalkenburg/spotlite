@@ -10,13 +10,28 @@ public enum PanelScreen: String, Codable, Sendable {
     case primary
 }
 
+/// The appearance Spotlite uses. `system` follows the current macOS appearance.
+public enum ThemeMode: String, Codable, Sendable, CaseIterable {
+    case light
+    case dark
+    case system
+}
+
 public struct Preferences: Codable, Sendable, Equatable {
+    private static let currentFormatVersion = 1
+    private enum CodingKeys: String, CodingKey {
+        case formatVersion
+        case hiddenBundleIDs, aliases, panelScreen, panelGeometry, themeMode
+        case hotKeyCode, hotKeyModifiers, showMenuBarIcon, hasCompletedFirstRun
+    }
+
     public var hiddenBundleIDs: Set<String>
     /// Bundle ID to a short name the user types instead, e.g. "ps" for Photoshop.
     public var aliases: [String: String]
     public var panelScreen: PanelScreen
     /// Width and vertical position, adjusted by dragging the panel's edges and header.
     public var panelGeometry: PanelGeometry
+    public var themeMode: ThemeMode
     public var hotKeyCode: UInt32
     public var hotKeyModifiers: UInt32
     public var showMenuBarIcon: Bool
@@ -34,14 +49,36 @@ public struct Preferences: Codable, Sendable, Equatable {
     /// `aliases` or `panelScreen` key - still decodes instead of resetting everything.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let version = try c.decodeIfPresent(Int.self, forKey: .formatVersion) ?? 0
+        guard (0...Preferences.currentFormatVersion).contains(version) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .formatVersion, in: c,
+                debugDescription: "Unsupported preferences format version \(version)"
+            )
+        }
         hiddenBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .hiddenBundleIDs) ?? []
         aliases = try c.decodeIfPresent([String: String].self, forKey: .aliases) ?? [:]
         panelScreen = try c.decodeIfPresent(PanelScreen.self, forKey: .panelScreen) ?? .followPointer
         panelGeometry = try c.decodeIfPresent(PanelGeometry.self, forKey: .panelGeometry) ?? .default
+        themeMode = try c.decodeIfPresent(ThemeMode.self, forKey: .themeMode) ?? .system
         hotKeyCode = try c.decodeIfPresent(UInt32.self, forKey: .hotKeyCode) ?? Preferences.defaultKeyCode
         hotKeyModifiers = try c.decodeIfPresent(UInt32.self, forKey: .hotKeyModifiers) ?? Preferences.defaultModifiers
         showMenuBarIcon = try c.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? true
         hasCompletedFirstRun = try c.decodeIfPresent(Bool.self, forKey: .hasCompletedFirstRun) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(Preferences.currentFormatVersion, forKey: .formatVersion)
+        try c.encode(hiddenBundleIDs, forKey: .hiddenBundleIDs)
+        try c.encode(aliases, forKey: .aliases)
+        try c.encode(panelScreen, forKey: .panelScreen)
+        try c.encode(panelGeometry, forKey: .panelGeometry)
+        try c.encode(themeMode, forKey: .themeMode)
+        try c.encode(hotKeyCode, forKey: .hotKeyCode)
+        try c.encode(hotKeyModifiers, forKey: .hotKeyModifiers)
+        try c.encode(showMenuBarIcon, forKey: .showMenuBarIcon)
+        try c.encode(hasCompletedFirstRun, forKey: .hasCompletedFirstRun)
     }
 
     public init(
@@ -49,6 +86,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         aliases: [String: String] = [:],
         panelScreen: PanelScreen = .followPointer,
         panelGeometry: PanelGeometry = .default,
+        themeMode: ThemeMode = .system,
         hotKeyCode: UInt32 = Preferences.defaultKeyCode,
         hotKeyModifiers: UInt32 = Preferences.defaultModifiers,
         showMenuBarIcon: Bool = true,
@@ -58,6 +96,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         self.aliases = aliases
         self.panelScreen = panelScreen
         self.panelGeometry = panelGeometry
+        self.themeMode = themeMode
         self.hotKeyCode = hotKeyCode
         self.hotKeyModifiers = hotKeyModifiers
         self.showMenuBarIcon = showMenuBarIcon
@@ -84,28 +123,54 @@ public enum Storage {
     private static var indexURL: URL { cacheDirectory.appendingPathComponent("index.json") }
 
     public static func loadPreferences() -> Preferences {
-        load(Preferences.self, from: preferencesURL) ?? Preferences()
+        loadPreferences(from: preferencesURL)
+    }
+
+    /// Internal entry point used by tests and recovery tooling. A malformed preferences
+    /// file is moved aside before defaults are returned, so first-run persistence cannot
+    /// silently destroy the only copy of the user's settings.
+    static func loadPreferences(from url: URL) -> Preferences {
+        guard FileManager.default.fileExists(atPath: url.path) else { return Preferences() }
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode(Preferences.self, from: data)
+        else {
+            preserveCorruptFile(at: url)
+            return Preferences()
+        }
+        return decoded
     }
 
     public static func save(_ preferences: Preferences) {
         save(preferences, to: preferencesURL)
     }
 
+    static func save(_ preferences: Preferences, to url: URL) { write(preferences, to: url) }
+
     public static func loadFrecency() -> Frecency {
-        load(Frecency.self, from: frecencyURL) ?? Frecency()
+        loadFrecency(from: frecencyURL)
+    }
+
+    static func loadFrecency(from url: URL) -> Frecency {
+        load(Frecency.self, from: url) ?? Frecency()
     }
 
     public static func save(_ frecency: Frecency) {
         save(frecency, to: frecencyURL)
     }
 
+    static func save(_ frecency: Frecency, to url: URL) { write(frecency, to: url) }
+
     public static func loadIndex() -> [CachedApp]? {
-        load([CachedApp].self, from: indexURL)
+        loadIndex(from: indexURL)
     }
 
+    static func loadIndex(from url: URL) -> [CachedApp]? { load([CachedApp].self, from: url) }
+
     public static func saveIndex(_ apps: [CachedApp]) {
-        save(apps, to: indexURL)
+        saveIndex(apps, to: indexURL)
     }
+
+    static func saveIndex(_ apps: [CachedApp], to url: URL) { write(apps, to: url) }
 
     // MARK: -
 
@@ -114,9 +179,27 @@ public enum Storage {
         return try? JSONDecoder().decode(type, from: data)
     }
 
+    private static func preserveCorruptFile(at url: URL) {
+        let stamp = Int(Date().timeIntervalSince1970)
+        var backup = url.deletingPathExtension()
+            .appendingPathExtension("corrupt-\(stamp).json")
+        var suffix = 1
+        while FileManager.default.fileExists(atPath: backup.path) {
+            backup = url.deletingPathExtension()
+                .appendingPathExtension("corrupt-\(stamp)-\(suffix).json")
+            suffix += 1
+        }
+        do {
+            try FileManager.default.moveItem(at: url, to: backup)
+            NSLog("Spotlite: preserved invalid preferences as \(backup.lastPathComponent)")
+        } catch {
+            NSLog("Spotlite: could not preserve invalid preferences: \(error)")
+        }
+    }
+
     /// Writes atomically: a partial file from an interrupted write would otherwise
     /// fail to decode and silently reset the user's settings.
-    private static func save<T: Encodable>(_ value: T, to url: URL) {
+    private static func write<T: Encodable>(_ value: T, to url: URL) {
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                     withIntermediateDirectories: true)

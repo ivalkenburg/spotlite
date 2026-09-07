@@ -53,4 +53,11 @@ struct FrecencyTests {
         f.prune(keeping: ["kept"])
         #expect(f.records.keys.sorted() == ["kept"])
     }
+
+    @Test func frecencyImprovesANegativeTextualScore() {
+        var f = Frecency()
+        let now = Date()
+        for _ in 0..<20 { f.recordLaunch("familiar", now: now) }
+        #expect(f.adjustedScore(-4, for: "familiar", now: now) > -4)
+    }
 }

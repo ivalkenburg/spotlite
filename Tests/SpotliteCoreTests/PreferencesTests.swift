@@ -18,11 +18,13 @@ struct PreferencesTests {
         prefs.hiddenBundleIDs = ["com.example.one", "com.example.two"]
         prefs.aliases = ["com.adobe.Photoshop": "ps"]
         prefs.panelScreen = .primary
+        prefs.themeMode = .dark
         prefs.showMenuBarIcon = false
         prefs.hasCompletedFirstRun = true
 
         let data = try JSONEncoder().encode(prefs)
         #expect(try JSONDecoder().decode(Preferences.self, from: data) == prefs)
+        #expect(String(decoding: data, as: UTF8.self).contains(#""formatVersion":1"#))
     }
 
     /// A file written by an older build has no `aliases` or `panelScreen` key. It must
@@ -36,9 +38,19 @@ struct PreferencesTests {
         #expect(decoded.hasCompletedFirstRun)
         #expect(decoded.aliases.isEmpty)
         #expect(decoded.panelScreen == .followPointer)
+        #expect(decoded.themeMode == .system)
+    }
+
+    @Test func defaultsToSystemTheme() {
+        #expect(Preferences().themeMode == .system)
     }
 
     @Test func decodingRealGarbageStillFails() {
         #expect((try? JSONDecoder().decode(Preferences.self, from: Data("not json".utf8))) == nil)
+    }
+
+    @Test func rejectsUnknownFutureFormat() {
+        let future = Data(#"{"formatVersion":999}"#.utf8)
+        #expect((try? JSONDecoder().decode(Preferences.self, from: future)) == nil)
     }
 }

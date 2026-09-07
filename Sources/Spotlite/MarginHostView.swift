@@ -6,6 +6,12 @@ import AppKit
 /// panel neither dismisses it nor reaches the app underneath.
 final class MarginHostView: NSView {
     weak var glass: NSView?
+    var onEffectiveAppearanceChange: (() -> Void)?
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        onEffectiveAppearanceChange?()
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard let glass, glass.frame.contains(point) else { return nil }

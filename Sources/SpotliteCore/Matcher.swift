@@ -15,12 +15,19 @@ public final class Matcher {
     private var scoreEnding: [Int]
     /// Best score for query[0...i] considering text[0...j], match ending anywhere.
     private var scoreBest: [Int]
-    private let capacity: (query: Int, text: Int)
+    private var capacity: (query: Int, text: Int)
+
+    /// Defensive ceilings for pasted input and hostile bundle metadata. Ordinary names
+    /// remain far below these values, while the DP matrix stays predictably bounded.
+    public static let maxSupportedQuery = 128
+    public static let maxSupportedText = 4_096
 
     public init(maxQuery: Int = 48, maxText: Int = 96) {
-        capacity = (maxQuery, maxText)
-        scoreEnding = Array(repeating: 0, count: maxQuery * maxText)
-        scoreBest = Array(repeating: 0, count: maxQuery * maxText)
+        let query = max(1, min(maxQuery, Matcher.maxSupportedQuery))
+        let text = max(1, min(maxText, Matcher.maxSupportedText))
+        capacity = (query, text)
+        scoreEnding = Array(repeating: 0, count: query * text)
+        scoreBest = Array(repeating: 0, count: query * text)
     }
 
     public func search(
@@ -29,8 +36,15 @@ public final class Matcher {
         aliases: AliasIndex = .empty,
         limit: Int = 50
     ) -> [MatchResult] {
-        let q = Array(query.lowercased().trimmingCharacters(in: .whitespaces))
-        guard !q.isEmpty else { return [] }
+        guard limit > 0,
+              let trimmed = query.boundedTrimmedWhitespace(maximumCount: Matcher.maxSupportedQuery)
+        else { return [] }
+        let q = Array(trimmed.lowercased())
+        // Unicode case conversion can expand a character, so retain the post-conversion
+        // check even though the source substring was already bounded without copying.
+        guard !q.isEmpty, q.count <= Matcher.maxSupportedQuery else { return [] }
+
+        ensureCapacity(query: q.count, text: max(capacity.text, aliases.maxLength))
 
         let queryMask = Matcher.mask(of: q)
         var out: [MatchResult] = []
@@ -38,6 +52,13 @@ public final class Matcher {
 
         for entry in entries {
             let alias = aliases.isEmpty ? nil : aliases[entry.id]
+            // The common path is one integer comparison. A longer name grows the shared
+            // buffer once, when first encountered, and subsequent searches reuse it.
+            let neededText = max(entry.lowerChars.count, entry.initials.count,
+                                 alias?.chars.count ?? 0)
+            if neededText > capacity.text {
+                ensureCapacity(query: q.count, text: neededText)
+            }
 
             // Cheap reject: if the name lacks a letter the query needs, no match is
             // possible - unless an alias might supply it.
@@ -73,12 +94,22 @@ public final class Matcher {
             if a.entry.lowerChars.count != b.entry.lowerChars.count {
                 return a.entry.lowerChars.count < b.entry.lowerChars.count
             }
-            return a.entry.name < b.entry.name
+            if a.entry.name != b.entry.name { return a.entry.name < b.entry.name }
+            return a.entry.instanceID < b.entry.instanceID
         }
         return Array(out.prefix(limit))
     }
 
     // MARK: - DP
+
+    private func ensureCapacity(query: Int, text: Int) {
+        let neededQuery = min(max(query, capacity.query), Matcher.maxSupportedQuery)
+        let neededText = min(max(text, capacity.text), Matcher.maxSupportedText)
+        guard neededQuery != capacity.query || neededText != capacity.text else { return }
+        capacity = (neededQuery, neededText)
+        scoreEnding = Array(repeating: 0, count: neededQuery * neededText)
+        scoreBest = Array(repeating: 0, count: neededQuery * neededText)
+    }
 
     private func score(_ q: [Character], _ text: [Character], _ bonus: [Int]) -> (score: Int, positions: [Int])? {
         let m = q.count, n = text.count

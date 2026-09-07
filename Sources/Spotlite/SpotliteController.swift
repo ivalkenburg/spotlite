@@ -8,6 +8,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     private let panel = SpotlitePanel()
     private let glass = NSGlassEffectView()
+    private let content = NSView()
     let field = SearchField()
     private let magnifier = NSImageView()
     private let table = NSTableView()
@@ -17,19 +18,22 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private var entries: [AppEntry] = []
     private var items: [ResultItem] = []
     private var frecency = Storage.loadFrecency()
-    private var preferences = Storage.loadPreferences() {
+    private var preferences: Preferences {
         didSet { aliases = AliasIndex(aliases: preferences.aliases) }
     }
     /// Rebuilt only when preferences change, never per keystroke.
-    private var aliases = AliasIndex(aliases: Storage.loadPreferences().aliases)
+    private var aliases: AliasIndex
     /// Cached so pruning on every show doesn't rebuild it from the index each time.
     private var indexedIDs: Set<String> = []
     private var watcher: DirectoryWatcher?
     private var fingerprint: [String: Date] = [:]
+    private var hasLoadedIndex = false
+    private var refreshTask: Task<Void, Never>?
+    private var refreshPending = false
     /// Set when a query matches nothing but the Settings entry should still be offered.
     private static let settingsKeywords = ["settings", "preferences", "spotlite"]
     private static let caffeineKeywords = ["caffeinate", "caffeine"]
-    private let caffeine = CaffeineAssertion()
+    private let caffeine: CaffeineAssertion
     private var cursor = 0
     /// Resize is driven by row-count changes, not keystrokes.
     private var lastRowCount = -1
@@ -39,6 +43,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private var listHeight: NSLayoutConstraint!
     /// Top edge stays put while the panel grows downward.
     private var anchorTopY: CGFloat = 0
+    /// Fixed for one presentation so moving the pointer to another display cannot make
+    /// the panel jump while its result count changes.
+    private var activeVisibleFrame: CGRect?
 
     private let leadingEdge = ResizeEdgeView(edge: .leading)
     private let trailingEdge = ResizeEdgeView(edge: .trailing)
@@ -53,8 +60,12 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// Called when the user picks the Settings entry, or hides an app.
     var onOpenSettings: (() -> Void)?
     var onPreferencesChanged: ((Preferences) -> Void)?
+    var onIndexChanged: (([AppEntry]) -> Void)?
 
-    override init() {
+    init(caffeine: CaffeineAssertion, preferences: Preferences) {
+        self.caffeine = caffeine
+        self.preferences = preferences
+        aliases = AliasIndex(aliases: preferences.aliases)
         super.init()
         buildUI()
         NotificationCenter.default.addObserver(
@@ -68,8 +79,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private func buildUI() {
         glass.cornerRadius = Metrics.cornerRadius
         glass.style = .regular
-
-        let content = NSView()
+        applyResolvedAppearance()
 
         var symbolConfig = NSImage.SymbolConfiguration(pointSize: 22, weight: .regular)
         symbolConfig = symbolConfig.applying(.init(paletteColors: [.secondaryLabelColor]))
@@ -176,6 +186,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         // contentView: filling the frame exactly clips its shadow into a square halo.
         let host = MarginHostView()
         host.glass = glass
+        host.onEffectiveAppearanceChange = { [weak self] in
+            guard let self, self.preferences.themeMode == .system else { return }
+            self.applyResolvedAppearance()
+        }
         host.addSubview(glass)
         glass.translatesAutoresizingMaskIntoConstraints = false
         let m = Metrics.windowMargin
@@ -186,6 +200,31 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             glass.bottomAnchor.constraint(equalTo: host.bottomAnchor, constant: -m),
         ])
         panel.contentView = host
+    }
+
+    /// Glass gives its contents a vibrant appearance, which can keep label colors white
+    /// even when the glass itself has a light tint. Resolve the theme once and apply the
+    /// same concrete appearance to every layer before any of them becomes visible.
+    private func applyResolvedAppearance() {
+        let name: NSAppearance.Name
+        switch preferences.themeMode {
+        case .light:
+            name = .aqua
+        case .dark:
+            name = .darkAqua
+        case .system:
+            name = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                ? .darkAqua : .aqua
+        }
+        let appearance = NSAppearance(named: name)
+        // Leaving the panel itself inherited in System mode lets the host observe later
+        // system changes; glass and content still receive the resolved value immediately.
+        panel.appearance = preferences.themeMode == .system ? nil : appearance
+        glass.appearance = appearance
+        content.appearance = appearance
+        glass.tintColor = name == .darkAqua
+            ? NSColor(srgbRed: 0.10, green: 0.10, blue: 0.11, alpha: 1)
+            : NSColor(srgbRed: 0.91, green: 0.91, blue: 0.92, alpha: 1)
     }
 
     // MARK: - Lifecycle
@@ -204,9 +243,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     func show() {
+        applyResolvedAppearance()
+        caffeine.refresh()
         loadIndexIfNeeded()
-
-        pruneFrecency()
 
         // Dev hook: prefill a query so the expanded state can be inspected.
         field.stringValue = ProcessInfo.processInfo.environment["SPOTLITE_DEV_QUERY"] ?? ""
@@ -214,6 +253,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         // resize animation would otherwise finish last and clobber the placement.
         position()
         updateMatches(for: field.stringValue)
+        // Prepare the correctly-themed backing contents while the window is still
+        // hidden. Otherwise Liquid Glass can expose one inherited-appearance frame.
+        panel.contentView?.layoutSubtreeIfNeeded()
+        panel.contentView?.displayIfNeeded()
 
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
@@ -229,19 +272,51 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// Loads the index on first use and starts watching; on later calls does the cheap
     /// staleness check that catches changes FSEvents missed while the machine was asleep.
     private func loadIndexIfNeeded() {
-        guard !entries.isEmpty else {
-            entries = AppIndex.loadCachedOrScan()
+        guard hasLoadedIndex else {
+            hasLoadedIndex = true
+            entries = AppIndex.loadCached() ?? []
             indexedIDs = Set(entries.map(\.id))
+            pruneFrecency()
             fingerprint = AppIndex.directoriesFingerprint()
             startWatching()
+            // Cached results make the first frame immediate; this scan guarantees that
+            // changes made while Spotlite was not running are still discovered.
+            requestIndexRefresh()
             return
         }
 
         let current = AppIndex.directoriesFingerprint()
         guard current != fingerprint else { return }
         fingerprint = current
-        entries = AppIndex.refresh()
-        indexedIDs = Set(entries.map(\.id))
+        requestIndexRefresh()
+    }
+
+    /// Coalesces refresh requests and keeps bundle traversal plus cache writes off the
+    /// main actor. Only complete immutable snapshots cross back into the UI.
+    private func requestIndexRefresh() {
+        guard refreshTask == nil else {
+            refreshPending = true
+            return
+        }
+
+        refreshTask = Task { [weak self] in
+            let refreshed = await Task.detached(priority: .utility) {
+                AppIndex.refresh()
+            }.value
+            guard let self else { return }
+            self.entries = refreshed
+            self.indexedIDs = Set(refreshed.map(\.id))
+            self.pruneFrecency()
+            self.fingerprint = AppIndex.directoriesFingerprint()
+            self.onIndexChanged?(refreshed)
+            if self.panel.isVisible { self.updateMatches(for: self.field.stringValue) }
+
+            self.refreshTask = nil
+            if self.refreshPending {
+                self.refreshPending = false
+                self.requestIndexRefresh()
+            }
+        }
     }
 
     func hide() {
@@ -250,6 +325,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         items = []
         cursor = 0
         lastRowCount = -1
+        activeVisibleFrame = nil
     }
 
     /// Dev captures steal key focus, which would dismiss the panel mid-measurement.
@@ -264,6 +340,12 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// because your eyes are usually where your mouse is, but on a fixed multi-monitor
     /// setup an incidental pointer position is the wrong signal.
     private func position() {
+        guard let frame = selectedVisibleFrame() else { return }
+        activeVisibleFrame = frame
+        apply(fitted(for: frame), on: frame, rows: 0, animated: false)
+    }
+
+    private func selectedVisibleFrame() -> CGRect? {
         let screen: NSScreen?
         switch preferences.panelScreen {
         case .followPointer:
@@ -273,8 +355,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             // `screens.first` is the one with the menu bar; `main` follows key window.
             screen = NSScreen.screens.first ?? NSScreen.main
         }
-        guard let frame = screen?.visibleFrame else { return }
-        apply(fitted(for: frame), on: frame, rows: 0, animated: false)
+        return screen?.visibleFrame
     }
 
     /// Stored geometry clamped to what this screen can actually hold. The clamp is never
@@ -287,15 +368,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     private var currentVisibleFrame: CGRect {
         if let drag { return drag.screen }
-        let mouse = NSEvent.mouseLocation
-        let screen: NSScreen?
-        switch preferences.panelScreen {
-        case .followPointer:
-            screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
-        case .primary:
-            screen = NSScreen.screens.first ?? NSScreen.main
-        }
-        return screen?.visibleFrame ?? .zero
+        return activeVisibleFrame ?? selectedVisibleFrame() ?? .zero
     }
 
     /// The single place the panel's frame is computed, so width, vertical position and
@@ -322,7 +395,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         } completionHandler: { [weak panel] in
             // A borderless transparent window caches its shadow from the old alpha
             // mask; without this the previous size ghosts as chamfers at the corners.
-            panel?.invalidateShadow()
+            Task { @MainActor in panel?.invalidateShadow() }
         }
     }
 
@@ -360,7 +433,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     /// Assembles the result list: a calculation pinned on top when the query is
-    /// arithmetic, then apps ranked by score × frecency, then the Settings entry when
+    /// arithmetic, then apps ranked by textual score plus frecency, then Settings when
     /// the query asks for it. Apps still appear below a calculation, since `x^2`
     /// shouldn't hide an app named X.
     private func buildItems(for query: String) -> [ResultItem] {
@@ -372,27 +445,12 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             result.append(.calculation(value: value))
         }
 
-        let now = Date()
-        let matches = matcher.search(trimmed, in: entries, aliases: aliases)
-        var ranked: [(match: MatchResult, weighted: Double)] = []
-        ranked.reserveCapacity(matches.count)
-
-        for match in matches {
-            if let id = match.entry.bundleID, preferences.hiddenBundleIDs.contains(id) { continue }
-            ranked.append((match, Double(match.score) * frecency.multiplier(for: match.entry.id, now: now)))
-        }
-
-        // Swift's sort is not stable, so ties need an explicit order or results shuffle
-        // between identical queries.
-        ranked.sort { a, b in
-            if a.weighted != b.weighted { return a.weighted > b.weighted }
-            if a.match.entry.lowerChars.count != b.match.entry.lowerChars.count {
-                return a.match.entry.lowerChars.count < b.match.entry.lowerChars.count
-            }
-            return a.match.entry.name < b.match.entry.name
-        }
-
-        result.append(contentsOf: ranked.map { .app($0.match) })
+        let matches = matcher.search(trimmed, in: entries, aliases: aliases,
+                                     limit: max(1, entries.count))
+        let ranked = AppRanking.rank(matches,
+                                     hiddenBundleIDs: preferences.hiddenBundleIDs,
+                                     frecency: frecency)
+        result.append(contentsOf: ranked.map(ResultItem.app))
 
         // The self-indexed escape hatch: reachable even with the menu bar icon hidden.
         // Three characters minimum, or a bare "s" or "p" would summon it on every search.
@@ -401,7 +459,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             result.append(.settings)
         }
         if lowered.count >= 3, SpotliteController.caffeineKeywords.contains(where: { $0.hasPrefix(lowered) }) {
-            result.append(.caffeinate(isOn: caffeine.isActive))
+            result.append(.caffeinate(state: caffeine.state))
         }
         return result
     }
@@ -416,13 +474,15 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         listHeight.constant = Metrics.height(forRows: items.count) - Metrics.inputHeight
         scroll.isHidden = rows == 0
 
-        // Stand down while a drag is in flight. An animated setFrame finishing after a
-        // directly-set one is exactly how the panel's first placement bug happened; the
-        // drag reconciles the row count itself when it ends.
+        // Stand down while a drag is in flight. The drag reconciles the row count itself
+        // when it ends.
         guard drag == nil else { return }
 
         let visibleFrame = currentVisibleFrame
-        apply(fitted(for: visibleFrame), on: visibleFrame, rows: items.count, animated: true)
+        // NSGlassEffectView visibly nudges its top edge while its window is live-resized,
+        // even though the start and end frames share the exact same top coordinate.
+        // Applying the row-count resize directly avoids that transient glass morph.
+        apply(fitted(for: visibleFrame), on: visibleFrame, rows: items.count, animated: false)
     }
 
     // MARK: - Keyboard
@@ -487,11 +547,15 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             hide()
             onOpenSettings?()
 
-        case .caffeinate:
+        case .caffeinate(let state):
             // Stays open, unlike every other action: the switch is the only confirmation
             // that anything happened, and closing would hide it.
+            guard state != .external else {
+                NSSound.beep()
+                caffeine.refresh()
+                return
+            }
             caffeine.toggle()
-            updateMatches(for: field.stringValue)
 
         case .app(let match):
             let entry = match.entry
@@ -509,14 +573,12 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                     guard let self else { return }
                     // The app is gone, so the whole index is suspect: rescan rather than
                     // just dropping this entry, or the stale one returns from the cache.
-                    self.entries = AppIndex.refresh()
-                    self.indexedIDs = Set(self.entries.map(\.id))
-                    self.fingerprint = AppIndex.directoriesFingerprint()
                     self.show()
                     // show() clears the field. Restore the query, otherwise the panel
                     // reopens blank and the failure reads as nothing having happened.
                     self.field.stringValue = query
                     self.updateMatches(for: query)
+                    self.requestIndexRefresh()
                 }
             }
         }
@@ -537,17 +599,28 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// Re-reads preferences after the Settings window changes them, so hiding or
     /// un-hiding an app takes effect on the next keystroke rather than the next launch.
     func preferencesDidChange(_ updated: Preferences) {
+        let screenChanged = preferences.panelScreen != updated.panelScreen
         preferences = updated
+        applyResolvedAppearance()
         guard panel.isVisible else { return }
         updateMatches(for: field.stringValue)
         // Picks up a Reset Size & Position from Settings while the panel is on screen.
+        if screenChanged { activeVisibleFrame = selectedVisibleFrame() }
         let visibleFrame = currentVisibleFrame
         apply(fitted(for: visibleFrame), on: visibleFrame, rows: items.count, animated: true)
     }
 
-    /// Drops launch history for apps that are gone and caps what remains. Runs on every
-    /// show rather than only when the index changes: an index loaded from cache is never
-    /// refreshed on a quiet system, so pruning tied to refreshes could never run at all.
+    func caffeineStateDidChange() {
+        guard panel.isVisible else { return }
+        let query = field.stringValue.lowercased().trimmingCharacters(in: .whitespaces)
+        guard query.count >= 3,
+              SpotliteController.caffeineKeywords.contains(where: { $0.hasPrefix(query) })
+        else { return }
+        updateMatches(for: field.stringValue)
+    }
+
+    /// Drops launch history for apps that are gone and caps what remains. Called when a
+    /// cached or freshly scanned index is installed, never on the panel's hot path.
     private func pruneFrecency() {
         guard !indexedIDs.isEmpty else { return }
         if frecency.prune(keeping: indexedIDs) { Storage.save(frecency) }
@@ -558,10 +631,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         watcher = DirectoryWatcher(paths: paths) { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                self.entries = AppIndex.refresh()
-                self.indexedIDs = Set(self.entries.map(\.id))
-                self.fingerprint = AppIndex.directoriesFingerprint()
-                if self.panel.isVisible { self.updateMatches(for: self.field.stringValue) }
+                self.requestIndexRefresh()
             }
         }
     }
@@ -569,7 +639,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     // MARK: - Dragging
 
     func dragBegan(_ kind: PanelDrag, at screenPoint: NSPoint) {
-        drag = (kind, screenPoint, geometry, currentVisibleFrame, engaged: false)
+        let frame = currentVisibleFrame
+        drag = (kind, screenPoint, fitted(for: frame), frame, engaged: false)
     }
 
     func dragChanged(to screenPoint: NSPoint) {

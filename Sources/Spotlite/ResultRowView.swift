@@ -19,7 +19,7 @@ final class ResultRowView: NSTableCellView {
         highlight.wantsLayer = true
         highlight.layer?.cornerRadius = 10
         highlight.layer?.cornerCurve = .continuous
-        highlight.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.14).cgColor
+        updateHighlightColor()
         highlight.isHidden = true
 
         icon.imageScaling = .scaleProportionallyUpOrDown
@@ -74,6 +74,17 @@ final class ResultRowView: NSTableCellView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateHighlightColor()
+    }
+
+    private func updateHighlightColor() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            highlight.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.14).cgColor
+        }
+    }
 
     /// Identifies which icon this reused row is currently waiting for, so a slow load
     /// that lands after the row has been recycled is discarded instead of showing the

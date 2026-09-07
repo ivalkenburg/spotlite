@@ -3,6 +3,7 @@ import Carbon.HIToolbox
 
 /// Click-to-record shortcut field. Rejects bare keys and modifier-only chords, since
 /// either would make the hotkey fire constantly or never.
+@MainActor
 final class HotKeyRecorder: NSButton {
 
     private(set) var keyCode: UInt32
@@ -10,7 +11,9 @@ final class HotKeyRecorder: NSButton {
     private var recording = false
     private var monitor: Any?
 
-    var onChange: ((UInt32, UInt32) -> Void)?
+    /// Returns false when the chord could not be registered; the previous display and
+    /// binding are retained in that case.
+    var onChange: ((UInt32, UInt32) -> Bool)?
 
     init(keyCode: UInt32, modifiers: UInt32) {
         self.keyCode = keyCode
@@ -23,10 +26,6 @@ final class HotKeyRecorder: NSButton {
     }
 
     required init?(coder: NSCoder) { fatalError() }
-
-    deinit {
-        if let monitor { NSEvent.removeMonitor(monitor) }
-    }
 
     @objc private func startRecording() {
         guard !recording else { return }
@@ -49,12 +48,22 @@ final class HotKeyRecorder: NSButton {
                 return nil
             }
 
-            self.keyCode = UInt32(event.keyCode)
-            self.modifiers = carbonModifiers
+            let proposedCode = UInt32(event.keyCode)
             self.stopRecording()
-            self.onChange?(self.keyCode, self.modifiers)
+            guard self.onChange?(proposedCode, carbonModifiers) ?? true else {
+                NSSound.beep()
+                return nil
+            }
+            self.keyCode = proposedCode
+            self.modifiers = carbonModifiers
+            self.refreshTitle()
             return nil
         }
+    }
+
+    func cancelRecording() {
+        guard recording else { return }
+        stopRecording()
     }
 
     private func stopRecording() {

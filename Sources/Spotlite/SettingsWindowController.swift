@@ -2,7 +2,7 @@ import AppKit
 import ServiceManagement
 import SpotliteCore
 
-/// Settings: hotkey, launch-at-login, menu bar visibility, and the full app list with
+/// Settings: theme, hotkey, launch-at-login, menu bar visibility, and the full app list with
 /// checkboxes. All changes apply live — macOS settings behave that way everywhere, and
 /// an OK button would just add a state to get wrong.
 @MainActor
@@ -12,13 +12,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
     private let table = NSTableView()
     private let filterField = NSSearchField()
     private var loginItemWarning = NSTextField(labelWithString: "")
+    private var hotKeyWarning = NSTextField(labelWithString: "")
+    private var loginItemButton: NSButton?
+    private var hotKeyRecorder: HotKeyRecorder?
 
     private var preferences: Preferences
     private var allApps: [AppEntry] = []
     private var visibleApps: [AppEntry] = []
 
     var onChange: ((Preferences) -> Void)?
-    var onHotKeyChange: ((UInt32, UInt32) -> Void)?
+    var onHotKeyChange: ((UInt32, UInt32) -> Bool)?
 
     init(preferences: Preferences) {
         self.preferences = preferences
@@ -31,7 +34,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
 
         if window == nil { buildWindow() }
         table.reloadData()
-        updateLoginItemWarning()
+        updateLoginItemState()
 
         // Stay .accessory and force activation: flipping to .regular would make a Dock
         // icon appear and disappear, which reads as a bug.
@@ -55,16 +58,29 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         let hotKeyLabel = NSTextField(labelWithString: "Shortcut")
         let recorder = HotKeyRecorder(keyCode: preferences.hotKeyCode, modifiers: preferences.hotKeyModifiers)
         recorder.onChange = { [weak self] code, modifiers in
-            guard let self else { return }
+            guard let self else { return false }
+            guard self.onHotKeyChange?(code, modifiers) == true else {
+                self.hotKeyWarning.stringValue = "That shortcut is already in use. The previous shortcut is still active."
+                self.hotKeyWarning.isHidden = false
+                return false
+            }
             self.preferences.hotKeyCode = code
             self.preferences.hotKeyModifiers = modifiers
             self.persist()
-            self.onHotKeyChange?(code, modifiers)
+            self.hotKeyWarning.isHidden = true
+            return true
         }
+        hotKeyRecorder = recorder
+
+        hotKeyWarning.font = .systemFont(ofSize: 11)
+        hotKeyWarning.textColor = .systemRed
+        hotKeyWarning.lineBreakMode = .byWordWrapping
+        hotKeyWarning.maximumNumberOfLines = 2
+        hotKeyWarning.isHidden = true
 
         let loginItem = NSButton(checkboxWithTitle: "Start at login", target: self,
                                  action: #selector(toggleLoginItem))
-        loginItem.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
+        loginItemButton = loginItem
 
         loginItemWarning.font = .systemFont(ofSize: 11)
         loginItemWarning.textColor = .systemOrange
@@ -74,6 +90,20 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         let menuBar = NSButton(checkboxWithTitle: "Show menu bar icon", target: self,
                                action: #selector(toggleMenuBarIcon))
         menuBar.state = preferences.showMenuBarIcon ? .on : .off
+
+        let themeLabel = NSTextField(labelWithString: "Appearance")
+        let themePicker = NSPopUpButton()
+        themePicker.addItems(withTitles: ["System", "Light", "Dark"])
+        switch preferences.themeMode {
+        case .system: themePicker.selectItem(at: 0)
+        case .light: themePicker.selectItem(at: 1)
+        case .dark: themePicker.selectItem(at: 2)
+        }
+        themePicker.target = self
+        themePicker.action = #selector(themeChoiceChanged)
+        let themeRow = NSStackView(views: [themeLabel, themePicker])
+        themeRow.orientation = .horizontal
+        themeRow.spacing = 12
 
         let screenLabel = NSTextField(labelWithString: "Open on")
         let screenPicker = NSPopUpButton()
@@ -120,7 +150,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         hotKeyRow.spacing = 12
 
         let stack = NSStackView(views: [
-            hotKeyRow, screenRow, loginItem, loginItemWarning, menuBar, hint,
+            hotKeyRow, hotKeyWarning, themeRow, screenRow, loginItem, loginItemWarning, menuBar, hint,
             listLabel, filterField, scroll,
         ])
         stack.orientation = .vertical
@@ -142,6 +172,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         ])
         window.contentView = content
         self.window = window
+        updateLoginItemState()
     }
 
     // MARK: - Actions
@@ -159,6 +190,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
     }
 
     @objc private func toggleLoginItem(_ sender: NSButton) {
+        let installed = Bundle.main.bundlePath.hasPrefix("/Applications/")
+        guard sender.state == .off || installed else {
+            sender.state = .off
+            updateLoginItemState()
+            return
+        }
         do {
             if sender.state == .on {
                 try SMAppService.mainApp.register()
@@ -167,20 +204,30 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
             }
         } catch {
             NSLog("Spotlite: login item change failed: \(error)")
-            sender.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
         }
-        updateLoginItemWarning()
+        updateLoginItemState()
     }
 
     /// SMAppService registers an absolute path. Registering from a build directory
     /// produces a login item pointing at a path that `make clean` deletes.
-    private func updateLoginItemWarning() {
+    private func updateLoginItemState() {
         let path = Bundle.main.bundlePath
         let installed = path.hasPrefix("/Applications/")
-        let enabled = SMAppService.mainApp.status == .enabled
-        loginItemWarning.stringValue = (enabled && !installed)
-            ? "Running from \(path) — move the app to /Applications, or the login item will break."
-            : ""
+        let status = SMAppService.mainApp.status
+        loginItemButton?.state = (status == .enabled || status == .requiresApproval) ? .on : .off
+        // A previously registered development copy must remain removable.
+        loginItemButton?.isEnabled = installed || status == .enabled || status == .requiresApproval
+
+        switch status {
+        case .requiresApproval:
+            loginItemWarning.stringValue = "Allow Spotlite in System Settings › General › Login Items."
+        case .notFound:
+            loginItemWarning.stringValue = "macOS could not find this login item. Reinstall Spotlite in /Applications."
+        default:
+            loginItemWarning.stringValue = installed
+                ? ""
+                : "Move Spotlite to /Applications before enabling Start at login."
+        }
         loginItemWarning.isHidden = loginItemWarning.stringValue.isEmpty
     }
 
@@ -193,6 +240,15 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
 
     @objc private func screenChoiceChanged(_ sender: NSPopUpButton) {
         preferences.panelScreen = (sender.indexOfSelectedItem == 1) ? .primary : .followPointer
+        persist()
+    }
+
+    @objc private func themeChoiceChanged(_ sender: NSPopUpButton) {
+        switch sender.indexOfSelectedItem {
+        case 1: preferences.themeMode = .light
+        case 2: preferences.themeMode = .dark
+        default: preferences.themeMode = .system
+        }
         persist()
     }
 
@@ -209,6 +265,20 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
     func preferencesDidChange(_ updated: Preferences) {
         preferences = updated
         table.reloadData()
+    }
+
+    func appsDidChange(_ apps: [AppEntry]) {
+        allApps = apps
+        applyFilter()
+        table.reloadData()
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        hotKeyRecorder?.cancelRecording()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        hotKeyRecorder?.cancelRecording()
     }
 
     // MARK: - Table

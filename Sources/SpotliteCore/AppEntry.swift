@@ -36,7 +36,12 @@ public struct AppEntry: Sendable, Hashable {
     /// allocate this array for every candidate on every keystroke.
     public let initialBonuses: [Int]
 
-    public var id: String { bundleID ?? url.path }
+    /// Preference/history identity. Copies of the same app deliberately share aliases,
+    /// visibility and frecency even though they remain separate launchable entries.
+    public let id: String
+    /// Identity of this concrete installation. Unlike `id`, this never merges two copies
+    /// of an app that happen to advertise the same bundle identifier.
+    public let instanceID: String
     public var cached: CachedApp { CachedApp(path: url.path, name: name, bundleID: bundleID) }
 
     public init(cached: CachedApp) {
@@ -47,6 +52,8 @@ public struct AppEntry: Sendable, Hashable {
         self.url = url
         self.name = name
         self.bundleID = bundleID
+        instanceID = url.standardizedFileURL.path
+        id = bundleID ?? instanceID
 
         let chars = Array(name)
         var lower = [Character]()
@@ -106,6 +113,6 @@ public struct AppEntry: Sendable, Hashable {
         ch == " " || ch == "-" || ch == "_" || ch == "." || ch == "/" || ch == "("
     }
 
-    public static func == (a: AppEntry, b: AppEntry) -> Bool { a.id == b.id }
-    public func hash(into hasher: inout Hasher) { hasher.combine(id) }
+    public static func == (a: AppEntry, b: AppEntry) -> Bool { a.instanceID == b.instanceID }
+    public func hash(into hasher: inout Hasher) { hasher.combine(instanceID) }
 }

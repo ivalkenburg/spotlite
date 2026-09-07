@@ -4,7 +4,8 @@ A lightweight application launcher for macOS 26. Press a shortcut, type a few
 letters, hit return.
 
 It exists because a launcher should be invisible until you need it: Spotlite sits
-at 0% CPU while idle and does its matching in about 17 microseconds per keystroke.
+at 0% CPU while idle and does its matching and ranking in about 28 microseconds per
+keystroke.
 
 ![Spotlite](docs/screenshot.png)
 
@@ -21,8 +22,12 @@ at 0% CPU while idle and does its matching in about 17 microseconds per keystrok
 - **Aliases.** Teach it that `ps` means Photoshop. An alias always outranks an
   incidental name match, and works even when the name shares no letters with it.
 - **Caffeinate.** Search for it to get a row with a switch that keeps the display
-  awake. Toggling leaves the panel open so you can see the switch move.
+  awake. The switch also reflects display-sleep assertions from other apps and
+  `/usr/bin/caffeinate`; externally owned assertions are shown read-only. A separate
+  filled-cup menu-bar item appears only while caffeine is active, leaving Spotlite's
+  normal search icon unchanged and remaining visible when that icon is disabled.
 - **Liquid Glass.** Uses the native `NSGlassEffectView` introduced in macOS 26.
+  Its fixed light or dark tint does not change with the window behind it.
 
 ## Requirements
 
@@ -38,8 +43,8 @@ make install
 
 `make` builds a signed `Spotlite.app` into `./build`. `make install` copies it to
 `/Applications`, which is where it needs to live before you enable "Start at
-login" — `SMAppService` registers an absolute path, so a login item pointing into
-a build directory breaks the moment you clean it.
+login". Spotlite disables that option when it is running elsewhere so a login
+item cannot point into a build directory that may later be cleaned.
 
 On first launch Spotlite opens its Settings window once to show you the shortcut.
 It does not add itself as a login item unless you ask it to.
@@ -61,7 +66,8 @@ incidental mouse position can never change what Return does. The selected row
 shows where the app lives, which tells two copies of the same app apart.
 
 By default the panel opens on whichever display holds the pointer. Settings can
-pin it to the main display instead.
+pin it to the main display instead. Appearance can follow the system or stay in
+light or dark mode.
 
 The panel can be resized by dragging either edge, and moved up or down by
 dragging an empty part of the search bar. It stays locked to the horizontal
@@ -90,22 +96,30 @@ cannot launch arbitrary applications.
 
 The app index is a depth-2 scan of `/Applications`, `/System/Applications`,
 `/System/Applications/Utilities`, `/System/Library/CoreServices/Applications` and
-`~/Applications`, skipping background-only agents. It is cached to
-`~/Library/Caches/Spotlite` and refreshed by an `FSEventStream` with a 2 second
-coalescing latency, plus a modification-time check when the panel opens to catch
-anything missed while the machine was asleep.
+`~/Applications`, skipping background-only agents. Apps are indexed under the
+localized name Finder shows, rather than potentially abbreviated internal bundle
+metadata. It is cached to
+`~/Library/Caches/Spotlite` and refreshed in the background on first use, by an
+`FSEventStream` with a 2 second coalescing latency, and by a modification-time
+check when the panel opens. Cached results remain immediately available while a
+refresh is running.
 
 Preferences and launch history live in `~/Library/Application Support/Spotlite`,
 separate from the cache: the index is regenerable, your hidden-app list is not.
 
-Matching runs synchronously on the main thread. Scoring the whole index takes
-about 16 microseconds, so a background queue would add dispatch overhead and
+Matching runs synchronously on the main thread. Scoring and ranking the whole index
+takes about 28 microseconds, so a background queue would add dispatch overhead and
 cancellation bugs to save nothing.
 
 Icons are the opposite case, and are loaded on a background queue: only rows that
 are actually on screen request one, but a fetch plus its first rasterise costs
 roughly 670 microseconds, which is enough to stall a keystroke. Rows show the
 generic bundle icon and fade the real one in.
+
+External caffeine state is refreshed when Spotlite launches, when the panel or menu
+opens, and after Spotlite toggles its own assertion. A coalescible five-second timer
+keeps the independent caffeine indicator current even when the normal Spotlite menu-bar
+icon is hidden.
 
 ## Development
 
@@ -139,7 +153,7 @@ From the author's machine, indexing 88 applications:
 
 | | |
 | --- | --- |
-| Match cost | 17 µs per keystroke across the full index |
+| Match and ranking cost | 28 µs per keystroke across the full index |
 | Idle CPU | 0.0% |
 | Idle memory | 32 MB, or 45 MB with the menu bar icon enabled |
 | After use | ~88 MB, stable across repeated open and close |

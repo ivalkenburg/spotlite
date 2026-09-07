@@ -6,18 +6,15 @@ let package = Package(
     platforms: [.macOS("26.0")],
     targets: [
         .target(
-            name: "SpotliteCore",
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            name: "SpotliteCore"
         ),
         .executableTarget(
             name: "Spotlite",
-            dependencies: ["SpotliteCore"],
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            dependencies: ["SpotliteCore"]
         ),
         .testTarget(
             name: "SpotliteCoreTests",
-            dependencies: ["SpotliteCore"],
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            dependencies: ["SpotliteCore"]
         ),
     ]
 )

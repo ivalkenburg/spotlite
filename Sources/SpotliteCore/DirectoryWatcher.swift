@@ -8,6 +8,7 @@ import Foundation
 public final class DirectoryWatcher {
 
     private var stream: FSEventStreamRef?
+    var isWatching: Bool { stream != nil }
     private let onChange: @Sendable () -> Void
     private let queue = DispatchQueue(label: "com.igorv.spotlite.fsevents")
 
@@ -33,9 +34,14 @@ public final class DirectoryWatcher {
             FSEventStreamCreateFlags(kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagNoDefer)
         ) else { return }
 
-        self.stream = stream
         FSEventStreamSetDispatchQueue(stream, queue)
-        FSEventStreamStart(stream)
+        guard FSEventStreamStart(stream) else {
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+            NSLog("Spotlite: could not start application-directory watcher")
+            return
+        }
+        self.stream = stream
     }
 
     deinit {
