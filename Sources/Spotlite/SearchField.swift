@@ -24,6 +24,16 @@ final class SearchField: NSTextField {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Spotlite has no Edit menu, which is where these shortcuts normally come from, so
+    /// without this a focused field ignores Command-A, C, V, X and Z entirely.
+    private static let editingActions: [String: Selector] = [
+        "a": #selector(NSText.selectAll(_:)),
+        "c": #selector(NSText.copy(_:)),
+        "v": #selector(NSText.paste(_:)),
+        "x": #selector(NSText.cut(_:)),
+        "z": Selector(("undo:")),
+    ]
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         // Only the user-facing modifiers: keypad Enter also carries .numericPad.
         guard event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command
@@ -42,7 +52,10 @@ final class SearchField: NSTextField {
             onCommandQ?()
             return true
         }
-        if let digit = Int(chars), (1...Metrics.maxVisibleRows).contains(digit) {
+        if let action = SearchField.editingActions[chars], currentEditor() != nil {
+            return NSApp.sendAction(action, to: nil, from: self)
+        }
+        if let digit = Int(chars), (1...9).contains(digit) {
             onCommandDigit?(digit - 1)
             return true
         }
