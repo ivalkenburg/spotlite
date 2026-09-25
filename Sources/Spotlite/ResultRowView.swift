@@ -1,15 +1,20 @@
 import AppKit
 import SpotliteCore
 
-/// One result row: icon, title with matched characters emboldened, optional right-hand
-/// detail, and a tinted rounded rect for the selection cursor. Deliberately not
-/// glass-on-glass — glass over glass reads as muddy.
+/// How a row shows the selection. Spotlight marks the top hit softly and turns the
+/// selection solid accent blue once the user starts moving it with the arrow keys.
+enum RowSelection {
+    case none, topHit, navigated
+}
+
+/// One result row: icon, title, the selected row's hints, and the selection highlight.
+/// Deliberately not glass-on-glass: glass over glass reads as muddy.
 final class ResultRowView: NSTableCellView {
     static let reuseID = NSUserInterfaceItemIdentifier("ResultRow")
 
     private let icon = NSImageView()
     private let label = NSTextField(labelWithString: "")
-    private let detail = NSTextField(labelWithString: "")
+    private let hintStack = NSStackView()
     private let highlight = NSView()
     private let stateSwitch = NSSwitch()
 
@@ -19,71 +24,68 @@ final class ResultRowView: NSTableCellView {
         highlight.wantsLayer = true
         highlight.layer?.cornerRadius = Metrics.highlightRadius
         highlight.layer?.cornerCurve = .continuous
-        updateHighlightColor()
         highlight.isHidden = true
 
         icon.imageScaling = .scaleProportionallyUpOrDown
         icon.contentTintColor = .secondaryLabelColor
 
-        label.font = .systemFont(ofSize: 17, weight: .regular)
-        label.textColor = .labelColor
+        label.font = .systemFont(ofSize: Metrics.titleFontSize, weight: .regular)
         label.lineBreakMode = .byTruncatingTail
-
-        detail.font = .systemFont(ofSize: 13, weight: .regular)
-        detail.textColor = .tertiaryLabelColor
-        detail.alignment = .right
-        // At the narrowest width a long name and a deep path compete. The name is the
-        // thing being chosen, so the path yields — from the head, because the tail
-        // ("/Utilities") is what distinguishes it and "/System/Applica…" says nothing.
-        detail.lineBreakMode = .byTruncatingHead
-        detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         label.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        hintStack.orientation = .horizontal
+        hintStack.alignment = .centerY
+        hintStack.spacing = Metrics.hintPairGap
+        // At the narrowest width a long name and a deep path compete. The name is the
+        // thing being chosen, so the hints yield.
+        hintStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         stateSwitch.controlSize = .mini
         stateSwitch.isHidden = true
         // The row owns the click; the switch only reports state.
         stateSwitch.isEnabled = false
 
-        for v in [highlight, icon, label, detail, stateSwitch] {
+        for v in [highlight, icon, label, hintStack, stateSwitch] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
 
+        // Everything centres on the highlight, not the row: the top hit's row is taller
+        // by the gap that follows it.
         NSLayoutConstraint.activate([
-            highlight.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.listPadding),
-            highlight.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.listPadding),
-            highlight.topAnchor.constraint(equalTo: topAnchor, constant: 1),
-            highlight.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -1),
+            highlight.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.highlightInset),
+            highlight.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.highlightInset),
+            highlight.topAnchor.constraint(equalTo: topAnchor),
+            highlight.heightAnchor.constraint(equalToConstant: Metrics.rowHeight),
 
             icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.rowIconInset),
-            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.centerYAnchor.constraint(equalTo: highlight.centerYAnchor, constant: Metrics.rowIconDrop),
             icon.widthAnchor.constraint(equalToConstant: Metrics.iconSize),
             icon.heightAnchor.constraint(equalToConstant: Metrics.iconSize),
 
             label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: Metrics.rowIconGap),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.centerYAnchor.constraint(equalTo: highlight.centerYAnchor),
 
-            detail.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 12),
-            detail.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.horizontalInset),
-            detail.centerYAnchor.constraint(equalTo: centerYAnchor),
+            hintStack.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 12),
+            hintStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.horizontalInset),
+            hintStack.centerYAnchor.constraint(equalTo: highlight.centerYAnchor),
 
             stateSwitch.trailingAnchor.constraint(equalTo: trailingAnchor,
                                                   constant: -Metrics.horizontalInset),
-            stateSwitch.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stateSwitch.centerYAnchor.constraint(equalTo: highlight.centerYAnchor),
         ])
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
+    private var lastConfiguration: (item: ResultItem, selection: RowSelection,
+                                    modifiers: NSEvent.ModifierFlags)?
+
+    /// Colours depend on the appearance, so a theme change re-applies them.
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        updateHighlightColor()
-    }
-
-    private func updateHighlightColor() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            highlight.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.14).cgColor
-        }
+        guard let last = lastConfiguration else { return }
+        configure(with: last.item, selection: last.selection, modifiers: last.modifiers)
     }
 
     /// Identifies which icon this reused row is currently waiting for, so a slow load
@@ -91,10 +93,29 @@ final class ResultRowView: NSTableCellView {
     /// wrong app's icon.
     private var pendingIconURL: URL?
 
-    func configure(with item: ResultItem, selected: Bool, modifiers: NSEvent.ModifierFlags) {
-        label.attributedStringValue = ResultRowView.attributed(item.title, bold: item.highlighted)
-        detail.stringValue = item.detail(isSelected: selected, modifiers: modifiers) ?? ""
-        highlight.isHidden = !selected
+    func configure(with item: ResultItem, selection: RowSelection, modifiers: NSEvent.ModifierFlags) {
+        lastConfiguration = (item, selection, modifiers)
+        let mode = Vibrancy.mode(for: effectiveAppearance)
+
+        label.stringValue = item.title
+        // Spotlight's titles are full white or black, not the slightly translucent label colour.
+        label.textColor = selection == .navigated || mode == .lighten ? .white : .black
+
+        switch selection {
+        case .none:
+            highlight.isHidden = true
+        case .topHit:
+            highlight.isHidden = false
+            Vibrancy.fill(highlight, Vibrancy.fill, mode)
+        case .navigated:
+            highlight.isHidden = false
+            highlight.layer?.compositingFilter = nil
+            highlight.layer?.backgroundColor = Vibrancy.selectionColor.cgColor
+        }
+
+        let hints = selection == .none ? [] : item.hints(modifiers: modifiers)
+        // Over the blue, hints lighten in both themes: darkening would muddy the accent.
+        buildHints(hints, mode: selection == .navigated ? .lighten : mode)
 
         if let state = item.switchState {
             stateSwitch.isHidden = false
@@ -103,12 +124,43 @@ final class ResultRowView: NSTableCellView {
             stateSwitch.isHidden = true
         }
 
-        icon.layer?.removeAllAnimations()
-        icon.alphaValue = 1
+        configureIcon(for: item)
+    }
 
+    private func buildHints(_ hints: [ResultItem.Hint], mode: Vibrancy.Mode) {
+        hintStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for hint in hints {
+            let pair = NSStackView()
+            pair.orientation = .horizontal
+            pair.alignment = .centerY
+            pair.spacing = Metrics.hintBadgeGap
+
+            let text = ResultRowView.vibrantLabel(hint.text, size: Metrics.hintFontSize, mode: mode)
+            // The tail of a path ("/Utilities") is what distinguishes it, so it truncates
+            // from the head.
+            text.lineBreakMode = .byTruncatingHead
+            text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            pair.addArrangedSubview(text)
+            if let key = hint.key { pair.addArrangedSubview(KeyBadge(key, textMode: mode)) }
+            hintStack.addArrangedSubview(pair)
+        }
+    }
+
+    static func vibrantLabel(_ string: String, size: CGFloat, mode: Vibrancy.Mode) -> NSTextField {
+        let text = NSTextField(labelWithString: string)
+        text.font = .systemFont(ofSize: size, weight: .regular)
+        text.textColor = Vibrancy.color(Vibrancy.hint, mode)
+        text.wantsLayer = true
+        Vibrancy.apply(mode, to: text.layer)
+        return text
+    }
+
+    private func configureIcon(for item: ResultItem) {
         // App icons fill the frame; symbols keep their own size, or they would scale up
         // to the app icon's padded canvas and read far larger than the artwork beside them.
         icon.imageScaling = item.iconURL == nil ? .scaleProportionallyDown : .scaleProportionallyUpOrDown
+        icon.layer?.removeAllAnimations()
+        icon.alphaValue = 1
 
         if let ready = item.immediateIcon {
             pendingIconURL = nil
@@ -137,27 +189,28 @@ final class ResultRowView: NSTableCellView {
             }
         }
     }
+}
 
-    /// Emboldens exactly the characters the matcher consumed, so it's visible *why*
-    /// a result ranked where it did.
-    private static func attributed(_ title: String, bold: [Int]) -> NSAttributedString {
-        let base = NSMutableAttributedString(
-            string: title,
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 17, weight: .regular),
-                .foregroundColor: NSColor.labelColor,
-            ]
-        )
-        guard !bold.isEmpty else { return base }
+/// A keyboard key drawn as Spotlight draws its "tab" badge. The badge always lightens,
+/// in both themes and over the blue selection alike; that is what Spotlight measures as.
+final class KeyBadge: NSView {
+    init(_ key: String, textMode: Vibrancy.Mode) {
+        super.init(frame: .zero)
+        Vibrancy.fill(self, Vibrancy.badge, .lighten)
+        layer?.cornerRadius = Metrics.badgeRadius
+        layer?.cornerCurve = .continuous
 
-        let emphasis = NSFont.systemFont(ofSize: 17, weight: .bold)
-        let characters = Array(title)
-        for index in bold where index >= 0 && index < characters.count {
-            // Character indices are not UTF-16 offsets; convert before ranging.
-            let start = String(characters[0..<index]).utf16.count
-            let length = String(characters[index]).utf16.count
-            base.addAttribute(.font, value: emphasis, range: NSRange(location: start, length: length))
-        }
-        return base
+        let text = ResultRowView.vibrantLabel(key, size: Metrics.badgeFontSize, mode: textMode)
+        text.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(text)
+        translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: Metrics.badgeHeight),
+            text.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.badgePadding),
+            text.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.badgePadding),
+            text.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
     }
+
+    required init?(coder: NSCoder) { fatalError() }
 }

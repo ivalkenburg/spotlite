@@ -8,11 +8,20 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     private let panel = SpotlitePanel()
     private let glass = NSGlassEffectView()
-    private let content = NSView()
+    private let content = FlippedView()
     let field = SearchField()
     private let magnifier = NSImageView()
     /// Hairline between the query and the results, so the two don't read as one surface.
-    private let divider = NSBox()
+    private let divider = NSView()
+    /// The selected result's icon at the bar's right end.
+    private let barIcon = NSImageView()
+    /// Inline completion: a pill after the typed text naming what Return will do. It is
+    /// drawn over the field rather than inserted as selected text, so Right Arrow and End
+    /// move the caret as usual instead of accepting it, as in Spotlight.
+    private let completion = PassthroughView()
+    private let completionPill = NSView()
+    private let completionLabel = NSTextField(labelWithString: "")
+    private var completionLeading: NSLayoutConstraint!
     private let table = NSTableView()
     private let scroll = NSScrollView()
     private let matcher = Matcher()
@@ -37,18 +46,32 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private static let caffeineKeywords = ["caffeinate", "caffeine"]
     private let caffeine: CaffeineAssertion
     private var cursor = 0
+
+    /// Spotlight's three selection states. The top hit is marked softly; arrowing turns
+    /// the selection solid accent blue; the first Backspace after a completion removes
+    /// the completion and shows no selection at all, while Return still launches the
+    /// top result.
+    private enum Selection { case topHit, navigated, dismissed }
+    private var selection = Selection.topHit
+    /// The query before the latest edit, to tell typing from deleting.
+    private var lastQuery = ""
     /// Modifiers currently held, which swap the selected row's detail for action hints.
     private var modifiers: NSEvent.ModifierFlags = []
     private var flagsMonitor: Any?
     /// True while the close fade runs. The panel is still on screen, but toggling must
     /// treat it as hidden, and a show that lands mid-fade must cancel the pending cleanup.
     private var isDismissing = false
-    /// Resize is driven by row-count changes, not keystrokes.
-    private var lastRowCount = -1
     /// The list height is set explicitly rather than inferred: an implicit Auto Layout
-    /// minimum (input height + content insets) otherwise becomes a floor the window
+    /// minimum (input height + content insets) otherwise becomes a floor the panel
     /// cannot collapse below once the scroll view has held rows.
     private var listHeight: NSLayoutConstraint!
+    /// The glass's own size inside the fixed-size window: the height animates as results
+    /// come and go, and the side insets animate for the collapse bulge.
+    private var glassHeight: NSLayoutConstraint!
+    private var glassLeading: NSLayoutConstraint!
+    private var glassTrailing: NSLayoutConstraint!
+    /// Steps the glass's size constraints frame by frame; see `FrameAnimator`.
+    private var animator: FrameAnimator!
     /// Top edge stays put while the panel grows downward.
     private var anchorTopY: CGFloat = 0
     /// Fixed for one presentation so moving the pointer to another display cannot make
@@ -93,20 +116,30 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         glass.style = .regular
         applyResolvedAppearance()
 
-        // Primary label color, as Spotlight uses: secondary reads washed out on glass.
-        var symbolConfig = NSImage.SymbolConfiguration(pointSize: 24, weight: .medium)
-        symbolConfig = symbolConfig.applying(.init(paletteColors: [.labelColor]))
-        magnifier.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "Search")?
-            .withSymbolConfiguration(symbolConfig)
-        magnifier.contentTintColor = .labelColor
+        magnifier.wantsLayer = true
+        field.wantsLayer = true
+        completionLabel.wantsLayer = true
 
         field.delegate = self
         field.onCommandDigit = { [weak self] index in self?.launch(at: index) }
         field.onCommandReturn = { [weak self] in self?.revealInFinder() }
         field.onCommandQ = { [weak self] in self?.quitApp() }
 
-        divider.boxType = .separator
         divider.isHidden = true
+        barIcon.imageScaling = .scaleProportionallyDown
+        barIcon.isHidden = true
+
+        completionPill.wantsLayer = true
+        completionPill.layer?.cornerRadius = Metrics.pillRadius
+        completionPill.layer?.cornerCurve = .continuous
+        completionLabel.font = .systemFont(ofSize: Metrics.queryFontSize, weight: .regular)
+        completionLabel.lineBreakMode = .byTruncatingTail
+        completionLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        completion.isHidden = true
+        for v in [completionPill, completionLabel] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            completion.addSubview(v)
+        }
 
         table.headerView = nil
         table.rowHeight = Metrics.rowHeight
@@ -125,12 +158,12 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         scroll.documentView = table
         scroll.drawsBackground = false
         scroll.backgroundColor = .clear
-        scroll.hasVerticalScroller = false
+        scroll.hasVerticalScroller = true
+        scroll.scrollerStyle = .overlay
+        scroll.autohidesScrollers = true
         scroll.automaticallyAdjustsContentInsets = false
-        scroll.contentInsets = NSEdgeInsets(top: Metrics.listPadding, left: 0,
-                                            bottom: Metrics.listPadding, right: 0)
 
-        for v in [magnifier, field, scroll, divider] {
+        for v in [magnifier, field, barIcon, completion, scroll, divider] {
             v.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(v)
         }
@@ -139,29 +172,51 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
         NSLayoutConstraint.activate([
             magnifier.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: Metrics.magnifierInset),
-            magnifier.topAnchor.constraint(equalTo: content.topAnchor),
-            magnifier.heightAnchor.constraint(equalToConstant: Metrics.inputHeight),
+            magnifier.centerYAnchor.constraint(equalTo: content.topAnchor,
+                                               constant: Metrics.barCenterY + Metrics.magnifierDrop),
+            magnifier.heightAnchor.constraint(equalToConstant: Metrics.magnifierWidth),
             magnifier.widthAnchor.constraint(equalToConstant: Metrics.magnifierWidth),
 
             field.leadingAnchor.constraint(equalTo: magnifier.trailingAnchor, constant: Metrics.magnifierGap),
-            field.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -Metrics.horizontalInset),
+            field.trailingAnchor.constraint(equalTo: barIcon.leadingAnchor, constant: -8),
             // Centered against the magnifier, not stretched to the input height:
             // a text field taller than its line draws the text at the top, not the middle.
-            field.centerYAnchor.constraint(equalTo: magnifier.centerYAnchor),
+            field.centerYAnchor.constraint(equalTo: content.topAnchor,
+                                           constant: Metrics.barCenterY - Metrics.queryRaise),
+
+            barIcon.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -Metrics.barIconInset),
+            barIcon.centerYAnchor.constraint(equalTo: content.topAnchor, constant: Metrics.barCenterY),
+            barIcon.widthAnchor.constraint(equalToConstant: Metrics.barIconSize),
+            barIcon.heightAnchor.constraint(equalToConstant: Metrics.barIconSize),
+
+            completion.topAnchor.constraint(equalTo: content.topAnchor),
+            completion.heightAnchor.constraint(equalToConstant: Metrics.inputHeight),
+            completion.trailingAnchor.constraint(lessThanOrEqualTo: barIcon.leadingAnchor, constant: -8),
+            completionPill.leadingAnchor.constraint(equalTo: completion.leadingAnchor),
+            completionPill.trailingAnchor.constraint(equalTo: completion.trailingAnchor),
+            completionPill.centerYAnchor.constraint(equalTo: content.topAnchor, constant: Metrics.barCenterY),
+            completionPill.heightAnchor.constraint(equalToConstant: Metrics.pillHeight),
+            // Flush with the typed text, so "saf" + "ari" reads as one word.
+            completionLabel.leadingAnchor.constraint(equalTo: completionPill.leadingAnchor),
+            completionLabel.trailingAnchor.constraint(equalTo: completionPill.trailingAnchor,
+                                                      constant: -Metrics.pillTrailingPadding),
+            completionLabel.firstBaselineAnchor.constraint(equalTo: field.firstBaselineAnchor),
 
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             // Zero constant: padding baked into a constraint becomes an Auto Layout
             // minimum height, which would stop the panel collapsing back to the input height.
             // The list padding lives in the scroll view's content insets instead.
-            scroll.topAnchor.constraint(equalTo: magnifier.bottomAnchor),
+            scroll.topAnchor.constraint(equalTo: content.topAnchor, constant: Metrics.inputHeight),
             listHeight,
 
-            // Overlaps the list's top content inset, so it adds no height of its own.
             divider.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: Metrics.horizontalInset),
             divider.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -Metrics.horizontalInset),
-            divider.topAnchor.constraint(equalTo: magnifier.bottomAnchor),
+            divider.topAnchor.constraint(equalTo: content.topAnchor, constant: Metrics.dividerY),
+            divider.heightAnchor.constraint(equalToConstant: 1),
         ])
+        completionLeading = completion.leadingAnchor.constraint(equalTo: content.leadingAnchor)
+        completionLeading.isActive = true
 
         for handle in [moveHandle, leadingEdge, trailingEdge] as [NSView] {
             handle.translatesAutoresizingMaskIntoConstraints = false
@@ -174,8 +229,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         // click-and-drag to select text still works.
         moveHandle.textEndX = { [weak self] in
             guard let self else { return 0 }
-            let textWidth = self.field.attributedStringValue.size().width
-            return self.field.frame.minX + textWidth + 8
+            return self.typedTextEndX() + 8
         }
 
         NSLayoutConstraint.activate([
@@ -196,10 +250,13 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         ])
 
         glass.contentView = content
+        // Rows are laid out at the list's final height and revealed by the glass's
+        // growing edge, so anything past the glass must not draw.
+        content.clipsToBounds = true
         glass.wantsLayer = true
         glass.shadow = {
             let sh = NSShadow()
-            sh.shadowColor = NSColor.black.withAlphaComponent(CGFloat(Metrics.shadowOpacity))
+            sh.shadowColor = NSColor.black.withAlphaComponent(Metrics.shadowOpacity)
             sh.shadowBlurRadius = Metrics.shadowRadius
             sh.shadowOffset = NSSize(width: 0, height: Metrics.shadowOffsetY)
             return sh
@@ -216,13 +273,16 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         host.addSubview(glass)
         glass.translatesAutoresizingMaskIntoConstraints = false
         let m = Metrics.windowMargin
+        glassLeading = glass.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: m)
+        glassTrailing = glass.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -m)
+        glassHeight = glass.heightAnchor.constraint(equalToConstant: Metrics.inputHeight)
         NSLayoutConstraint.activate([
-            glass.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: m),
-            glass.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -m),
+            glassLeading, glassTrailing, glassHeight,
             glass.topAnchor.constraint(equalTo: host.topAnchor, constant: m),
-            glass.bottomAnchor.constraint(equalTo: host.bottomAnchor, constant: -m),
         ])
         panel.contentView = host
+        animator = FrameAnimator(view: host)
+        applyVibrancy()
     }
 
     /// Glass gives its contents a vibrant appearance, which can keep label colors white
@@ -246,6 +306,34 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         panel.appearance = preferences.themeMode == .system ? nil : appearance
         glass.appearance = appearance
         content.appearance = appearance
+        applyVibrancy()
+    }
+
+    /// The bar's secondary elements blend additively, as Spotlight's do; see `Vibrancy`.
+    /// Typed text is full white or black, which the same blend leaves unchanged, so the
+    /// field's one layer can carry both it and the dimmer placeholder.
+    private func applyVibrancy() {
+        guard let appearance = content.appearance else { return }
+        let mode = Vibrancy.mode(for: appearance)
+        let secondary = Vibrancy.color(Vibrancy.secondary, mode)
+
+        let config = NSImage.SymbolConfiguration(pointSize: 24, weight: .regular)
+            .applying(.init(paletteColors: [secondary]))
+        magnifier.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "Search")?
+            .withSymbolConfiguration(config)
+        Vibrancy.apply(mode, to: magnifier.layer)
+
+        field.textColor = mode == .lighten ? .white : .black
+        field.placeholderAttributedString = NSAttributedString(string: "Spotlite Search", attributes: [
+            .font: NSFont.systemFont(ofSize: Metrics.queryFontSize, weight: .regular),
+            .foregroundColor: secondary,
+        ])
+        Vibrancy.apply(mode, to: field.layer)
+
+        Vibrancy.fill(divider, Vibrancy.fill, mode)
+        Vibrancy.fill(completionPill, Vibrancy.pill, mode)
+        completionLabel.textColor = Vibrancy.color(Vibrancy.completion, mode)
+        Vibrancy.apply(mode, to: completionLabel.layer)
     }
 
     // MARK: - Lifecycle
@@ -260,7 +348,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         print("[\(tag)] host=\(panel.contentView?.frame ?? .zero)")
         print("[\(tag)] glass=\(glass.frame)  cornerRadius=\(glass.cornerRadius)")
         print("[\(tag)] content=\(glass.contentView?.frame ?? .zero)")
-        print("[\(tag)] scroll=\(scroll.frame) listHeight=\(listHeight.constant)")
+        print("[\(tag)] scroll=\(scroll.frame) listHeight=\(listHeight.constant) glassHeight=\(glassHeight.constant)")
     }
 
     func show() {
@@ -272,8 +360,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
         // Dev hook: prefill a query so the expanded state can be inspected.
         field.stringValue = ProcessInfo.processInfo.environment["SPOTLITE_DEV_QUERY"] ?? ""
-        // Anchor first: updateMatches resizes against anchorTopY, and an in-flight
-        // resize animation would otherwise finish last and clobber the placement.
+        lastQuery = field.stringValue
+        selection = .topHit
+        // Anchor first: the glass grows downward from the placed top edge.
         position()
         updateMatches(for: field.stringValue)
         // Prepare the correctly-themed backing contents while the window is still
@@ -287,33 +376,46 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(field)
+        // Becoming first responder selects a prefilled dev query; typing leaves the caret
+        // at the end, so do the same.
+        if let editor = field.currentEditor() {
+            editor.selectedRange = NSRange(location: (field.stringValue as NSString).length, length: 0)
+        }
+        // The completion is placed from the field editor's layout, which exists only
+        // once the field is first responder.
+        updateChrome()
         animateIn()
     }
 
-    /// A short fade with a slight grow from the centre. The window frame is left alone:
-    /// it is owned by the geometry code, and animating it would fight row-count resizes.
+    /// Spotlight's open: a quick fade while the panel settles from slightly larger.
     private func animateIn() {
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = Metrics.showDuration
+            ctx.duration = Metrics.showFadeDuration
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 1
         }
+        glass.layer?.removeAnimation(forKey: "hide")
+        let settle = scaleAnimation(from: Metrics.showStartScale, to: 1,
+                                    duration: Metrics.showScaleDuration)
+        glass.layer?.add(settle, forKey: "show")
+    }
 
-        // Presentation-only: the model transform stays identity, so AppKit's own layer
-        // management never sees a scaled view. A view's layer anchors at its origin,
-        // so the scale is wrapped in translations to grow from the centre.
-        guard let layer = glass.layer else { return }
-        let w = layer.bounds.width / 2, h = layer.bounds.height / 2
-        let s = Metrics.showStartScale
-        var from = CATransform3DMakeTranslation(-w, -h, 0)
-        from = CATransform3DConcat(from, CATransform3DMakeScale(s, s, 1))
-        from = CATransform3DConcat(from, CATransform3DMakeTranslation(w, h, 0))
-        let grow = CABasicAnimation(keyPath: "transform")
-        grow.fromValue = from
-        grow.toValue = CATransform3DIdentity
-        grow.duration = Metrics.showDuration
-        grow.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        layer.add(grow, forKey: "show")
+    /// Presentation-only: the model transform stays identity, so AppKit's own layer
+    /// management never sees a scaled view. A view's layer anchors at its origin, so the
+    /// scale is wrapped in translations to act about the centre.
+    private func scaleAnimation(from start: CGFloat, to end: CGFloat, duration: Double) -> CABasicAnimation {
+        let bounds = glass.layer?.bounds ?? .zero
+        func scaled(_ s: CGFloat) -> CATransform3D {
+            var t = CATransform3DMakeTranslation(-bounds.width / 2, -bounds.height / 2, 0)
+            t = CATransform3DConcat(t, CATransform3DMakeScale(s, s, 1))
+            return CATransform3DConcat(t, CATransform3DMakeTranslation(bounds.width / 2, bounds.height / 2, 0))
+        }
+        let animation = CABasicAnimation(keyPath: "transform")
+        animation.fromValue = scaled(start)
+        animation.toValue = scaled(end)
+        animation.duration = duration
+        animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        return animation
     }
 
     /// The current index, for the Settings app list. Already sorted by name.
@@ -375,6 +477,11 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     func hide() {
         guard panel.isVisible, !isDismissing else { return }
         isDismissing = true
+        // Holds the shrunk transform until the window is ordered out; removed on show.
+        let shrink = scaleAnimation(from: 1, to: Metrics.hideEndScale, duration: Metrics.hideDuration)
+        shrink.fillMode = .forwards
+        shrink.isRemovedOnCompletion = false
+        glass.layer?.add(shrink, forKey: "hide")
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = Metrics.hideDuration
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
@@ -391,10 +498,15 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     private func finishHide() {
         panel.orderOut(nil)
+        glass.layer?.removeAnimation(forKey: "hide")
         field.stringValue = ""
+        lastQuery = ""
+        selection = .topHit
         items = []
         cursor = 0
-        lastRowCount = -1
+        table.reloadData()
+        layoutList(animated: false)
+        updateChrome()
         activeVisibleFrame = nil
     }
 
@@ -412,7 +524,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private func position() {
         guard let frame = selectedVisibleFrame() else { return }
         activeVisibleFrame = frame
-        apply(fitted(for: frame), on: frame, rows: 0, animated: false)
+        apply(fitted(for: frame), on: frame)
     }
 
     private func selectedVisibleFrame() -> CGRect? {
@@ -433,7 +545,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private func fitted(for visibleFrame: CGRect) -> PanelGeometry {
         geometry.fitted(visibleFrame: visibleFrame,
                         chromeInset: Metrics.chromeInset,
-                        expandedHeight: Metrics.height(forRows: Metrics.maxVisibleRows))
+                        expandedHeight: Metrics.maxPanelHeight)
     }
 
     private var currentVisibleFrame: CGRect {
@@ -441,32 +553,18 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         return activeVisibleFrame ?? selectedVisibleFrame() ?? .zero
     }
 
-    /// The single place the panel's frame is computed, so width, vertical position and
-    /// row-count growth can never disagree about where the panel belongs.
-    private func apply(_ geometry: PanelGeometry, on visibleFrame: CGRect, rows: Int, animated: Bool) {
+    /// The single place the window's frame is computed, so width and vertical position
+    /// can never disagree about where the panel belongs. The window is always full
+    /// height; the glass inside it sizes itself to the results.
+    private func apply(_ geometry: PanelGeometry, on visibleFrame: CGRect) {
         anchorTopY = geometry.anchorTopY(visibleFrame: visibleFrame)
 
-        let height = Metrics.windowHeight(forRows: rows)
+        let height = Metrics.windowHeight
         let width = Metrics.windowWidth(for: geometry.width)
         let frame = NSRect(x: visibleFrame.midX - width / 2,
                            y: anchorTopY + Metrics.chromeInset - height,
                            width: width, height: height)
-
-        guard animated, panel.isVisible else {
-            panel.setFrame(frame, display: true)
-            panel.invalidateShadow()
-            return
-        }
-
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.12
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel.animator().setFrame(frame, display: true)
-        } completionHandler: { [weak panel] in
-            // A borderless transparent window caches its shadow from the old alpha
-            // mask; without this the previous size ghosts as chamfers at the corners.
-            Task { @MainActor in panel?.invalidateShadow() }
-        }
+        panel.setFrame(frame, display: true)
     }
 
     /// Dev harness: show -> type -> clear, logging the panel frame at each step,
@@ -491,15 +589,23 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     // MARK: - Query
 
     func controlTextDidChange(_ obj: Notification) {
-        updateMatches(for: field.stringValue)
+        let query = field.stringValue
+        // Typing brings the completion back. Deleting after Backspace dismissed it does
+        // not, so a run of Backspaces keeps the bare query, as in Spotlight.
+        if query.count > lastQuery.count || query.isEmpty { selection = .topHit }
+        lastQuery = query
+        updateMatches(for: query)
     }
 
     func updateMatches(for query: String) {
         items = buildItems(for: query)
         cursor = 0
+        // A new result list starts from the top hit again; a dismissed completion stays
+        // dismissed until the user types.
+        if selection == .navigated { selection = .topHit }
         table.reloadData()
-        resizeIfRowCountChanged()
-        scrollCursorIntoView()
+        layoutList(animated: true)
+        updateChrome()
     }
 
     /// Assembles the result list: a calculation pinned on top when the query is
@@ -512,7 +618,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
         var result: [ResultItem] = []
         if let value = Calculator.evaluate(trimmed) {
-            result.append(.calculation(value: value))
+            result.append(.calculation(expression: trimmed, value: value))
         }
 
         let matches = matcher.search(trimmed, in: entries, aliases: aliases,
@@ -534,26 +640,163 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         return result
     }
 
-    /// The whole point of row-count-triggered resizing: typing narrows results constantly,
-    /// but the window only moves when the number of *visible* rows actually changes.
-    private func resizeIfRowCountChanged() {
-        let rows = min(items.count, Metrics.maxVisibleRows)
-        guard rows != lastRowCount else { return }
-        lastRowCount = rows
+    private var calculationFirst: Bool {
+        if case .calculation = items.first { return true }
+        return false
+    }
 
-        listHeight.constant = Metrics.height(forRows: items.count) - Metrics.inputHeight
-        scroll.isHidden = rows == 0
-        divider.isHidden = rows == 0
+    /// The top hit is followed by a small gap, and the calculator card carries its own
+    /// separator and spacing.
+    private func rowHeight(at row: Int) -> CGFloat {
+        guard row == 0 else { return Metrics.rowHeight }
+        guard calculationFirst else { return Metrics.rowHeight + Metrics.topHitGap }
+        // With nothing under it, the card needs no separator; the list's bottom padding
+        // follows it directly.
+        return items.count > 1 ? Metrics.cardRowHeight : Metrics.cardHeight
+    }
 
-        // Stand down while a drag is in flight. The drag reconciles the row count itself
-        // when it ends.
-        guard drag == nil else { return }
+    /// The card sits directly under the bar with no divider; rows start after a gap.
+    private var listTopInset: CGFloat { calculationFirst ? 0 : Metrics.listTopPadding }
 
-        let visibleFrame = currentVisibleFrame
-        // NSGlassEffectView visibly nudges its top edge while its window is live-resized,
-        // even though the start and end frames share the exact same top coordinate.
-        // Applying the row-count resize directly avoids that transient glass morph.
-        apply(fitted(for: visibleFrame), on: visibleFrame, rows: items.count, animated: false)
+    private var listContentHeight: CGFloat {
+        guard !items.isEmpty else { return 0 }
+        let rows = items.indices.reduce(0) { $0 + rowHeight(at: $1) }
+        return listTopInset + rows + Metrics.listBottomPadding
+    }
+
+    /// Capped at Spotlight's maximum, where a partly visible row shows the list scrolls.
+    private var panelHeight: CGFloat {
+        min(Metrics.inputHeight + listContentHeight, Metrics.maxPanelHeight)
+    }
+
+    /// Lays the list out at its final size, then resizes the glass to reveal it.
+    private func layoutList(animated: Bool) {
+        let target = panelHeight
+        listHeight.constant = target - Metrics.inputHeight
+        scroll.contentInsets = NSEdgeInsets(top: listTopInset, left: 0,
+                                            bottom: Metrics.listBottomPadding, right: 0)
+        // Contents vanish at once when the list empties; only the glass animates away.
+        scroll.isHidden = items.isEmpty
+        divider.isHidden = items.isEmpty || calculationFirst
+
+        scroll.layoutSubtreeIfNeeded()
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: -listTopInset))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        scrollCursorIntoView()
+
+        resizeGlass(to: target, animated: animated)
+        if Metrics.inputHeight + listContentHeight > Metrics.maxPanelHeight { scroll.flashScrollers() }
+    }
+
+    /// Stands down while a drag is in flight; the size is applied directly then, since an
+    /// animation would lag the pointer.
+    private func resizeGlass(to target: CGFloat, animated: Bool) {
+        // Any resize ends a bulge still in progress from an earlier collapse.
+        animator.cancel("bulge")
+        setGlassInset(Metrics.windowMargin)
+        guard target != glassHeight.constant else { return }
+
+        guard animated, panel.isVisible, !isDismissing, drag == nil else {
+            animator.cancel("height")
+            glassHeight.constant = target
+            return
+        }
+
+        let from = glassHeight.constant
+        let collapsing = target == Metrics.inputHeight
+        animator.run("height", duration: collapsing ? Metrics.collapseDuration : Metrics.growDuration,
+                     curve: collapsing ? .easeInOut : .easeOut) { [weak self] p in
+            guard let self else { return }
+            self.glassHeight.constant = from + (target - from) * p
+            self.panel.contentView?.layoutSubtreeIfNeeded()
+        }
+        if collapsing { bulge() }
+    }
+
+    /// Spotlight's collapse ends with the capsule briefly bulging wider and springing back.
+    private func bulge() {
+        let amount = glass.frame.width * Metrics.bulgeFraction / 2
+        let delay = Metrics.bulgeDelay, out = Metrics.bulgeOutDuration, back = Metrics.bulgeBackDuration
+        let total = delay + out + back
+        animator.run("bulge", duration: total, curve: .linear) { [weak self] p in
+            let t = p * total
+            let widening: Double
+            if t < delay {
+                widening = 0
+            } else if t < delay + out {
+                widening = FrameAnimator.Curve.easeOut((t - delay) / out)
+            } else {
+                widening = 1 - FrameAnimator.Curve.easeInOut((t - delay - out) / back)
+            }
+            self?.setGlassInset(Metrics.windowMargin - amount * widening)
+        }
+    }
+
+    private func setGlassInset(_ inset: CGFloat) {
+        glassLeading.constant = inset
+        glassTrailing.constant = -inset
+        panel.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    // MARK: - Completion and bar icon
+
+    /// The completion pill and the bar icon both follow the selected row, and both
+    /// disappear when Backspace dismisses the completion.
+    private func updateChrome() {
+        let query = field.stringValue
+        guard selection != .dismissed, items.indices.contains(cursor), !query.isEmpty else {
+            completion.isHidden = true
+            barIcon.isHidden = true
+            barIcon.image = nil
+            setCaretVisible(true)
+            return
+        }
+        // Spotlight hides the caret while a completion shows; it would sit on the pill.
+        setCaretVisible(false)
+        let item = items[cursor]
+        completionLabel.stringValue = item.completion(for: query)
+        completionLeading.constant = typedTextEndX() - Metrics.pillOverlap
+        completion.isHidden = false
+        showBarIcon(for: item)
+    }
+
+    private func setCaretVisible(_ visible: Bool) {
+        (field.currentEditor() as? NSTextView)?.insertionPointColor = visible ? field.textColor ?? .labelColor : .clear
+    }
+
+    /// Where the typed text ends, in content coordinates, read from the field editor's
+    /// own layout so the pill lands flush against the last glyph.
+    private func typedTextEndX() -> CGFloat {
+        guard let editor = field.currentEditor() as? NSTextView,
+              let layout = editor.layoutManager, let container = editor.textContainer else {
+            return field.frame.minX + field.attributedStringValue.size().width
+        }
+        layout.ensureLayout(for: container)
+        let end = layout.usedRect(for: container).maxX + editor.textContainerOrigin.x
+        return editor.convert(NSPoint(x: end, y: 0), to: content).x
+    }
+
+    private func showBarIcon(for item: ResultItem) {
+        let wasHidden = barIcon.isHidden
+        func reveal(_ image: NSImage?) {
+            barIcon.image = image
+            barIcon.isHidden = image == nil
+            guard wasHidden, image != nil else { return }
+            barIcon.alphaValue = 0
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = Metrics.barIconFadeDuration
+                barIcon.animator().alphaValue = 1
+            }
+        }
+        if let ready = item.barIcon {
+            reveal(ready)
+        } else if let url = item.iconURL {
+            IconCache.shared.load(for: url) { [weak self] loaded in
+                guard let self, self.items.indices.contains(self.cursor),
+                      self.items[self.cursor].iconURL == url else { return }
+                reveal(loaded)
+            }
+        }
     }
 
     // MARK: - Keyboard
@@ -571,6 +814,11 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             copyPath(); return true
         case #selector(NSResponder.cancelOperation(_:)):
             hide(); return true
+        case #selector(NSResponder.deleteBackward(_:)):
+            // Spotlight's first Backspace removes only the completion; the typed text
+            // stays. A selection is being deleted on purpose, so that goes through.
+            guard !completion.isHidden, textView.selectedRange().length == 0 else { return false }
+            dismissCompletion(); return true
         case #selector(NSResponder.deleteToBeginningOfLine(_:)):
             // Command-Delete inside a text field arrives as deleteToBeginningOfLine.
             hideAppUnderCursor(); return true
@@ -579,14 +827,29 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         }
     }
 
-    /// Wraps in both directions — standard for a short list.
+    /// Wraps in both directions — standard for a short list. With the completion
+    /// dismissed nothing is selected, so Down starts from the first row.
     private func moveCursor(by delta: Int) {
         guard !items.isEmpty else { return }
+        let next = selection == .dismissed
+            ? (delta > 0 ? 0 : items.count - 1)
+            : (cursor + delta + items.count) % items.count
+        select(next, as: .navigated)
+    }
+
+    /// Return still launches the top result, so the cursor goes back to it.
+    private func dismissCompletion() {
+        select(0, as: .dismissed)
+    }
+
+    private func select(_ row: Int, as style: Selection) {
         let previous = cursor
-        cursor = (cursor + delta + items.count) % items.count
+        cursor = row
+        selection = style
         table.reloadData(forRowIndexes: IndexSet([previous, cursor]),
                          columnIndexes: IndexSet(integer: 0))
         scrollCursorIntoView()
+        updateChrome()
     }
 
     private func scrollCursorIntoView() {
@@ -606,7 +869,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         guard items.indices.contains(index) else { return }
 
         switch items[index] {
-        case .calculation(let value):
+        case .calculation(_, let value):
             let text = Calculator.format(value)
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
@@ -719,7 +982,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         // Picks up a Reset Size & Position from Settings while the panel is on screen.
         if screenChanged { activeVisibleFrame = selectedVisibleFrame() }
         let visibleFrame = currentVisibleFrame
-        apply(fitted(for: visibleFrame), on: visibleFrame, rows: items.count, animated: true)
+        apply(fitted(for: visibleFrame), on: visibleFrame)
     }
 
     func caffeineStateDidChange() {
@@ -779,7 +1042,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
         preferences.panelGeometry = updated
         // Never animated: an animation here would leave the panel lagging the pointer.
-        apply(fitted(for: session.screen), on: session.screen, rows: items.count, animated: false)
+        apply(fitted(for: session.screen), on: session.screen)
     }
 
     func dragEnded() {
@@ -789,26 +1052,56 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
         Storage.save(preferences)
         onPreferencesChanged?(preferences)
-        // Reconcile whatever row-count change was suppressed while dragging.
-        apply(fitted(for: session.screen), on: session.screen, rows: items.count, animated: false)
+        apply(fitted(for: session.screen), on: session.screen)
     }
 
     // MARK: - Table
 
     func numberOfRows(in tableView: NSTableView) -> Int { items.count }
 
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { rowHeight(at: row) }
+
+    private func rowSelection(_ row: Int) -> RowSelection {
+        guard row == cursor, selection != .dismissed else { return .none }
+        return selection == .navigated ? .navigated : .topHit
+    }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        if case .calculation(let expression, let value) = items[row] {
+            let card = tableView.makeView(withIdentifier: CalculationCardView.reuseID, owner: self)
+                as? CalculationCardView ?? {
+                    let v = CalculationCardView(frame: .zero)
+                    v.identifier = CalculationCardView.reuseID
+                    return v
+                }()
+            card.configure(expression: expression, value: Calculator.format(value),
+                           selection: rowSelection(row), showsSeparator: items.count > 1)
+            return card
+        }
         let view = tableView.makeView(withIdentifier: ResultRowView.reuseID, owner: self) as? ResultRowView
             ?? {
                 let v = ResultRowView(frame: .zero)
                 v.identifier = ResultRowView.reuseID
                 return v
             }()
-        view.configure(with: items[row], selected: row == cursor, modifiers: modifiers)
+        view.configure(with: items[row], selection: rowSelection(row), modifiers: modifiers)
         return view
     }
 
     /// Hover must never move the cursor: an incidental mouse position silently
     /// changing what Enter does is a genuinely dangerous interaction in a launcher.
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { false }
+}
+
+/// Top-left origin, so everything pinned to the top keeps its frame while the glass
+/// grows or shrinks beneath it. With AppKit's usual bottom-left origin those frames all
+/// change with the height, and the resize animation slides the bar's contents up.
+final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+/// A view that never takes clicks, so the completion drawn over the field leaves the
+/// field itself clickable underneath.
+final class PassthroughView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

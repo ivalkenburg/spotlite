@@ -12,11 +12,11 @@ keystroke.
 ## Features
 
 - **Fuzzy app search.** Bonus-weighted subsequence matching, so `saf` finds Safari
-  and `gc` finds Google Chrome. Matched characters are shown in bold.
+  and `gc` finds Google Chrome.
 - **Frecency ranking.** Apps you launch often rank higher, but the boost is capped
   so a familiar app can never hijack a query it doesn't match well.
-- **Built-in calculator.** Type an expression and the result is pinned at the top.
-  Return copies it to the clipboard.
+- **Built-in calculator.** Type an expression and the result appears on a card at
+  the top. Return copies it to the clipboard.
 - **Hide apps you never launch.** Command-Delete on a result hides it; the full
   list with checkboxes lives in Settings.
 - **Aliases.** Teach it that `ps` means Photoshop. An alias always outranks an
@@ -26,9 +26,11 @@ keystroke.
   `/usr/bin/caffeinate`; externally owned assertions are shown read-only. A separate
   filled-cup menu-bar item appears only while caffeine is active, leaving Spotlite's
   normal search icon unchanged and remaining visible when that icon is disabled.
-- **Liquid Glass.** Uses the native `NSGlassEffectView` introduced in macOS 26,
-  untinted like Spotlight's, so the colour of whatever is behind it shows through
-  the blur. A capsule while empty, a rounded panel once results appear.
+- **Looks like Spotlight.** The panel matches macOS 26 Spotlight's layout, colours
+  and animations, measured from side-by-side captures in both themes: untinted
+  Liquid Glass (`NSGlassEffectView`), an inline completion after the query
+  (`saf` + `ari — Open`), the selected result's icon at the bar's end, a soft
+  highlight on the top hit that turns accent blue once you use the arrow keys.
 
 ## Requirements
 
@@ -57,7 +59,8 @@ It does not add itself as a login item unless you ask it to.
 | `Option-Space` | Show or hide the launcher (configurable) |
 | `Up` / `Down` | Move the cursor, wrapping at both ends |
 | `Return` | Launch the selected app, or copy a calculator result |
-| `Command-1` to `Command-5` | Launch the nth result directly |
+| `Backspace` | First removes the completion, then deletes as usual |
+| `Command-1` to `Command-9` | Launch the nth result directly |
 | `Command-Return` | Reveal the selected app in Finder |
 | `Option-Return` | Copy the selected app's path |
 | `Command-Q` | Quit the selected app, if it is running |

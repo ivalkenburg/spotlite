@@ -6,14 +6,15 @@ import SpotliteCore
 @MainActor
 enum ResultItem {
     case app(MatchResult)
-    case calculation(value: Double)
+    /// The expression is kept as typed: the card shows it above the result.
+    case calculation(expression: String, value: Double)
     case settings
     case caffeinate(state: CaffeineState)
 
     var title: String {
         switch self {
         case .app(let match): return match.entry.name
-        case .calculation(let value): return Calculator.format(value)
+        case .calculation(_, let value): return Calculator.format(value)
         case .settings: return "Spotlite Settings"
         case .caffeinate: return "Caffeinate"
         }
@@ -26,31 +27,39 @@ enum ResultItem {
         return nil
     }
 
-    /// Character indices to embolden — the matched characters of a fuzzy hit.
-    var highlighted: [Int] {
-        if case .app(let match) = self { return match.positions }
-        return []
+    /// The verb the completion pill names.
+    private var action: String {
+        if case .caffeinate(let state) = self { return state.isActive ? "Turn Off" : "Turn On" }
+        return "Open"
     }
 
-    /// The right-hand hint. An app shows where it lives, but only while selected —
-    /// on every row it would be noise, and on the selected row it disambiguates two
-    /// copies of the same app. Holding a modifier swaps the path for what that modifier
-    /// does, so the alternate actions are discoverable without a legend.
-    func detail(isSelected: Bool, modifiers: NSEvent.ModifierFlags = []) -> String? {
-        switch self {
-        case .calculation: return "return to copy"
-        case .settings: return "preferences"
-        case .caffeinate: return nil
-        case .app(let match):
-            guard isSelected else { return nil }
-            if modifiers.contains(.command) {
-                return runningApplications.isEmpty
-                    ? "⌘↩ Reveal in Finder   ⌘⌫ Hide"
-                    : "⌘↩ Reveal in Finder   ⌘Q Quit   ⌘⌫ Hide"
-            }
-            if modifiers.contains(.option) { return "⌥↩ Copy Path" }
-            return ResultItem.abbreviate(match.entry.url.deletingLastPathComponent().path)
+    /// What the pill after the query says while this row is selected.
+    func completion(for query: String) -> String {
+        if case .calculation(_, let value) = self { return " = " + Calculator.format(value) }
+        return Completion.suffix(query: query, title: title, action: action)
+    }
+
+    /// Text drawn at the right of the selected row, each optionally followed by a key
+    /// badge, the way Spotlight draws "Search Safari" and a "tab" key.
+    struct Hint: Equatable {
+        let text: String
+        let key: String?
+    }
+
+    /// An app shows where it lives, which tells two copies of the same app apart.
+    /// Holding a modifier swaps the path for what that modifier does, so the alternate
+    /// actions are discoverable without a legend.
+    func hints(modifiers: NSEvent.ModifierFlags) -> [Hint] {
+        guard case .app(let match) = self else { return [] }
+        if modifiers.contains(.command) {
+            var hints = [Hint(text: "Reveal in Finder", key: "⌘↩")]
+            if !runningApplications.isEmpty { hints.append(Hint(text: "Quit", key: "⌘Q")) }
+            hints.append(Hint(text: "Hide", key: "⌘⌫"))
+            return hints
         }
+        if modifiers.contains(.option) { return [Hint(text: "Copy Path", key: "⌥↩")] }
+        return [Hint(text: ResultItem.abbreviate(match.entry.url.deletingLastPathComponent().path),
+                     key: nil)]
     }
 
     /// Running instances of this row's app, matched by bundle location rather than
@@ -73,11 +82,18 @@ enum ResultItem {
     var immediateIcon: NSImage? {
         switch self {
         case .app(let match): return IconCache.shared.cached(for: match.entry.url)
-        case .calculation: return ResultItem.calculationIcon
+        case .calculation: return ResultItem.calculatorIcon
         case .settings: return ResultItem.settingsIcon
         case .caffeinate(let state):
             return state.isActive ? ResultItem.caffeineOnIcon : ResultItem.caffeineOffIcon
         }
+    }
+
+    /// The icon at the bar's right end. Spotlight shows the app a result belongs to,
+    /// so Settings shows Spotlite itself rather than the row's gear.
+    var barIcon: NSImage? {
+        if case .settings = self { return NSApp.applicationIconImage }
+        return immediateIcon
     }
 
     private static func abbreviate(_ path: String) -> String {
@@ -86,7 +102,7 @@ enum ResultItem {
     }
 
     // Built once rather than per row render: `icon` is read every time a row is configured.
-    private static let calculationIcon = symbol("equal.square")
+    private static let calculatorIcon = NSWorkspace.shared.icon(forFile: "/System/Applications/Calculator.app")
     private static let settingsIcon = symbol("gearshape")
     private static let caffeineOffIcon = symbol("cup.and.saucer")
     private static let caffeineOnIcon = symbol("cup.and.saucer.fill")

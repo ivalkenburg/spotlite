@@ -18,7 +18,7 @@ final class IconCache {
     private init() {
         // Sized to hold the whole index rather than a screenful. Scrolling the Settings
         // list past 64 apps would otherwise evict entries and re-rasterise them on the
-        // way back. At 32pt @2x an entry is 64x64x4 bytes, so 160 cost about 2.5MB.
+        // way back. At 44pt @2x an entry is 88x88x4 bytes, so 160 cost about 5MB.
         cache.countLimit = 160
     }
 
@@ -39,7 +39,9 @@ final class IconCache {
         waiting[key] = [completion]
 
         queue.async {
-            let icon = NSWorkspace.shared.icon(forFile: key)
+            // Resolved first: an app in /Applications that is a symlink (Safari, into its
+            // cryptex) would otherwise carry Finder's alias arrow, which Spotlight omits.
+            let icon = NSWorkspace.shared.icon(forFile: (key as NSString).resolvingSymlinksInPath)
             let flattened = IconCache.rasterize(icon, to: Metrics.iconSize)
             Task { @MainActor in
                 self.cache.setObject(flattened, forKey: key as NSString)
