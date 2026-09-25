@@ -91,9 +91,9 @@ final class ResultRowView: NSTableCellView {
     /// wrong app's icon.
     private var pendingIconURL: URL?
 
-    func configure(with item: ResultItem, selected: Bool) {
+    func configure(with item: ResultItem, selected: Bool, modifiers: NSEvent.ModifierFlags) {
         label.attributedStringValue = ResultRowView.attributed(item.title, bold: item.highlighted)
-        detail.stringValue = item.detail(isSelected: selected) ?? ""
+        detail.stringValue = item.detail(isSelected: selected, modifiers: modifiers) ?? ""
         highlight.isHidden = !selected
 
         if let state = item.switchState {

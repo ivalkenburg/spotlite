@@ -34,15 +34,32 @@ enum ResultItem {
 
     /// The right-hand hint. An app shows where it lives, but only while selected —
     /// on every row it would be noise, and on the selected row it disambiguates two
-    /// copies of the same app.
-    func detail(isSelected: Bool) -> String? {
+    /// copies of the same app. Holding a modifier swaps the path for what that modifier
+    /// does, so the alternate actions are discoverable without a legend.
+    func detail(isSelected: Bool, modifiers: NSEvent.ModifierFlags = []) -> String? {
         switch self {
         case .calculation: return "return to copy"
         case .settings: return "preferences"
         case .caffeinate: return nil
         case .app(let match):
             guard isSelected else { return nil }
+            if modifiers.contains(.command) {
+                return runningApplications.isEmpty
+                    ? "⌘↩ Reveal in Finder   ⌘⌫ Hide"
+                    : "⌘↩ Reveal in Finder   ⌘Q Quit   ⌘⌫ Hide"
+            }
+            if modifiers.contains(.option) { return "⌥↩ Copy Path" }
             return ResultItem.abbreviate(match.entry.url.deletingLastPathComponent().path)
+        }
+    }
+
+    /// Running instances of this row's app, matched by bundle location rather than
+    /// bundle ID so two copies of the same app are told apart.
+    var runningApplications: [NSRunningApplication] {
+        guard case .app(let match) = self else { return [] }
+        let url = match.entry.url.standardizedFileURL
+        return NSWorkspace.shared.runningApplications.filter {
+            $0.bundleURL?.standardizedFileURL == url
         }
     }
 

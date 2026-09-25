@@ -11,6 +11,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private let content = NSView()
     let field = SearchField()
     private let magnifier = NSImageView()
+    /// Hairline between the query and the results, so the two don't read as one surface.
+    private let divider = NSBox()
     private let table = NSTableView()
     private let scroll = NSScrollView()
     private let matcher = Matcher()
@@ -35,6 +37,12 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private static let caffeineKeywords = ["caffeinate", "caffeine"]
     private let caffeine: CaffeineAssertion
     private var cursor = 0
+    /// Modifiers currently held, which swap the selected row's detail for action hints.
+    private var modifiers: NSEvent.ModifierFlags = []
+    private var flagsMonitor: Any?
+    /// True while the close fade runs. The panel is still on screen, but toggling must
+    /// treat it as hidden, and a show that lands mid-fade must cancel the pending cleanup.
+    private var isDismissing = false
     /// Resize is driven by row-count changes, not keystrokes.
     private var lastRowCount = -1
     /// The list height is set explicitly rather than inferred: an implicit Auto Layout
@@ -72,6 +80,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             self, selector: #selector(resignedKey),
             name: NSWindow.didResignKeyNotification, object: panel
         )
+        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.modifiersChanged(event.modifierFlags)
+            return event
+        }
     }
 
     // MARK: - Construction
@@ -89,6 +101,11 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
         field.delegate = self
         field.onCommandDigit = { [weak self] index in self?.launch(at: index) }
+        field.onCommandReturn = { [weak self] in self?.revealInFinder() }
+        field.onCommandQ = { [weak self] in self?.quitApp() }
+
+        divider.boxType = .separator
+        divider.isHidden = true
 
         table.headerView = nil
         table.rowHeight = Metrics.rowHeight
@@ -112,7 +129,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         scroll.contentInsets = NSEdgeInsets(top: Metrics.listPadding, left: 0,
                                             bottom: Metrics.listPadding, right: 0)
 
-        for v in [magnifier, field, scroll] {
+        for v in [magnifier, field, scroll, divider] {
             v.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(v)
         }
@@ -138,6 +155,11 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             // The list padding lives in the scroll view's content insets instead.
             scroll.topAnchor.constraint(equalTo: magnifier.bottomAnchor),
             listHeight,
+
+            // Overlaps the list's top content inset, so it adds no height of its own.
+            divider.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: Metrics.horizontalInset),
+            divider.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -Metrics.horizontalInset),
+            divider.topAnchor.constraint(equalTo: magnifier.bottomAnchor),
         ])
 
         for handle in [moveHandle, leadingEdge, trailingEdge] as [NSView] {
@@ -230,7 +252,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     // MARK: - Lifecycle
 
     func toggle() {
-        panel.isVisible ? hide() : show()
+        panel.isVisible && !isDismissing ? hide() : show()
     }
 
     func dumpFrames(_ tag: String) {
@@ -243,6 +265,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     func show() {
+        isDismissing = false
+        modifiers = NSEvent.modifierFlags
         applyResolvedAppearance()
         caffeine.refresh()
         loadIndexIfNeeded()
@@ -258,9 +282,39 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         panel.contentView?.layoutSubtreeIfNeeded()
         panel.contentView?.displayIfNeeded()
 
+        // Starts from wherever a cancelled close fade left off, not from zero, so a
+        // quick re-open doesn't flash.
+        if !panel.isVisible { panel.alphaValue = 0 }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(field)
+        animateIn()
+    }
+
+    /// A short fade with a slight grow from the centre. The window frame is left alone:
+    /// it is owned by the geometry code, and animating it would fight row-count resizes.
+    private func animateIn() {
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = Metrics.showDuration
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
+        }
+
+        // Presentation-only: the model transform stays identity, so AppKit's own layer
+        // management never sees a scaled view. A view's layer anchors at its origin,
+        // so the scale is wrapped in translations to grow from the centre.
+        guard let layer = glass.layer else { return }
+        let w = layer.bounds.width / 2, h = layer.bounds.height / 2
+        let s = Metrics.showStartScale
+        var from = CATransform3DMakeTranslation(-w, -h, 0)
+        from = CATransform3DConcat(from, CATransform3DMakeScale(s, s, 1))
+        from = CATransform3DConcat(from, CATransform3DMakeTranslation(w, h, 0))
+        let grow = CABasicAnimation(keyPath: "transform")
+        grow.fromValue = from
+        grow.toValue = CATransform3DIdentity
+        grow.duration = Metrics.showDuration
+        grow.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer.add(grow, forKey: "show")
     }
 
     /// The current index, for the Settings app list. Already sorted by name.
@@ -320,6 +374,23 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     func hide() {
+        guard panel.isVisible, !isDismissing else { return }
+        isDismissing = true
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = Metrics.hideDuration
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            Task { @MainActor in
+                // A show() during the fade cleared the flag and owns the panel now.
+                guard let self, self.isDismissing else { return }
+                self.isDismissing = false
+                self.finishHide()
+            }
+        }
+    }
+
+    private func finishHide() {
         panel.orderOut(nil)
         field.stringValue = ""
         items = []
@@ -333,7 +404,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     @objc private func resignedKey() {
         guard !pinnedOpen else { return }
-        if panel.isVisible { hide() }
+        hide()
     }
 
     /// Placed on whichever display the user chose. Following the pointer is the default
@@ -473,6 +544,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
         listHeight.constant = Metrics.height(forRows: items.count) - Metrics.inputHeight
         scroll.isHidden = rows == 0
+        divider.isHidden = rows == 0
 
         // Stand down while a drag is in flight. The drag reconciles the row count itself
         // when it ends.
@@ -495,12 +567,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             moveCursor(by: -1); return true
         case #selector(NSResponder.insertNewline(_:)):
             launch(at: cursor); return true
+        case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
+            // Option-Return arrives as this, not as insertNewline.
+            copyPath(); return true
         case #selector(NSResponder.cancelOperation(_:)):
-            hide(); return true
-        case #selector(NSResponder.deleteBackward(_:)):
-            // Backspace on an empty query closes, so clearing out and dismissing is one
-            // continuous gesture. With text present, fall through to normal deletion.
-            guard field.stringValue.isEmpty else { return false }
             hide(); return true
         case #selector(NSResponder.deleteToBeginningOfLine(_:)):
             // Command-Delete inside a text field arrives as deleteToBeginningOfLine.
@@ -582,6 +652,49 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                 }
             }
         }
+    }
+
+    /// The app under the cursor, or a beep when the cursor is on something that isn't
+    /// an app — the alternate actions have no meaning for a calculation or Settings.
+    private func appUnderCursor() -> MatchResult? {
+        guard items.indices.contains(cursor), case .app(let match) = items[cursor] else {
+            NSSound.beep()
+            return nil
+        }
+        return match
+    }
+
+    private func revealInFinder() {
+        guard let match = appUnderCursor() else { return }
+        hide()
+        NSWorkspace.shared.activateFileViewerSelecting([match.entry.url])
+    }
+
+    private func copyPath() {
+        guard let match = appUnderCursor() else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(match.entry.url.path, forType: .string)
+        hide()
+    }
+
+    private func quitApp() {
+        guard appUnderCursor() != nil else { return }
+        let running = items[cursor].runningApplications
+        guard !running.isEmpty else {
+            NSSound.beep()
+            return
+        }
+        running.forEach { $0.terminate() }
+        hide()
+    }
+
+    /// Redraws only the selected row: it is the only one whose detail depends on modifiers.
+    private func modifiersChanged(_ flags: NSEvent.ModifierFlags) {
+        let relevant = flags.intersection([.command, .option])
+        guard relevant != modifiers.intersection([.command, .option]) else { return }
+        modifiers = flags
+        guard panel.isVisible, items.indices.contains(cursor) else { return }
+        table.reloadData(forRowIndexes: IndexSet(integer: cursor), columnIndexes: IndexSet(integer: 0))
     }
 
     /// Hides the app under the cursor. Bound to Command-Delete: the fast path, with the
@@ -692,7 +805,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                 v.identifier = ResultRowView.reuseID
                 return v
             }()
-        view.configure(with: items[row], selected: row == cursor)
+        view.configure(with: items[row], selected: row == cursor, modifiers: modifiers)
         return view
     }
 

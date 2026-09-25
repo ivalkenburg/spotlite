@@ -35,6 +35,12 @@ enum Metrics {
     /// Without it, every click to focus the field nudges the panel.
     static let dragThreshold: CGFloat = 3
 
+    /// Open is a fade plus a slight grow; close is a quicker plain fade, because the
+    /// user has already moved on by the time it runs.
+    static let showDuration: Double = 0.14
+    static let hideDuration: Double = 0.1
+    static let showStartScale: CGFloat = 0.97
+
     static func windowHeight(forRows rows: Int) -> CGFloat {
         height(forRows: rows) + chromeInset * 2
     }

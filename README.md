@@ -57,13 +57,16 @@ It does not add itself as a login item unless you ask it to.
 | `Up` / `Down` | Move the cursor, wrapping at both ends |
 | `Return` | Launch the selected app, or copy a calculator result |
 | `Command-1` to `Command-5` | Launch the nth result directly |
+| `Command-Return` | Reveal the selected app in Finder |
+| `Option-Return` | Copy the selected app's path |
+| `Command-Q` | Quit the selected app, if it is running |
 | `Command-Delete` | Hide the selected app from results |
-| `Delete` | Close, when the query is already empty |
 | `Escape` | Close |
 
 Clicking outside the window closes it. Hovering does not move the cursor, so an
 incidental mouse position can never change what Return does. The selected row
-shows where the app lives, which tells two copies of the same app apart.
+shows where the app lives, which tells two copies of the same app apart. Holding
+Command or Option swaps that path for what those modifiers do.
 
 By default the panel opens on whichever display holds the pointer. Settings can
 pin it to the main display instead. Appearance can follow the system or stay in
