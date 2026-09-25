@@ -29,7 +29,8 @@ enum Metrics {
     /// App icon artwork sits slightly above its canvas's centre; this re-centres it.
     static let rowIconDrop: CGFloat = 0.75
     static let highlightInset: CGFloat = 10
-    static let highlightRadius: CGFloat = 14
+    /// Concentric with the panel's corners: the panel radius less the highlight's inset.
+    static let highlightRadius: CGFloat = cornerRadius - highlightInset
     static let titleFontSize: CGFloat = 17
 
     /// The magnifier's frame, independent of the row icons so resizing those never
@@ -85,7 +86,7 @@ enum Metrics {
     /// Transparent margin around the glass view, inside the window. The glass view's
     /// shadow is clipped hard at the window bounds, so this must exceed the shadow's
     /// full reach (blur + downward offset + the blur's tail) or the clip shows as a
-    /// square halo. It also leaves room for the collapse animation's sideways bulge.
+    /// square halo.
     static let windowMargin: CGFloat = 110
 
     static let shadowRadius: CGFloat = 40
@@ -123,12 +124,6 @@ enum Metrics {
     static let hideEndScale: CGFloat = 0.97
     /// Results appearing: the glass grows downward, revealing rows with its edge.
     static let growDuration: Double = 0.15
-    /// Query cleared: the glass shrinks back up, then bulges wider and springs back.
-    static let collapseDuration: Double = 0.2
-    static let bulgeDelay: Double = 0.12
-    static let bulgeOutDuration: Double = 0.08
-    static let bulgeBackDuration: Double = 0.12
-    static let bulgeFraction: CGFloat = 0.04
     /// The bar icon fades in shortly after its completion appears.
     static let barIconFadeDuration: Double = 0.12
 }

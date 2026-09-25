@@ -65,11 +65,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// minimum (input height + content insets) otherwise becomes a floor the panel
     /// cannot collapse below once the scroll view has held rows.
     private var listHeight: NSLayoutConstraint!
-    /// The glass's own size inside the fixed-size window: the height animates as results
-    /// come and go, and the side insets animate for the collapse bulge.
+    /// The glass's own height inside the fixed-size window, animated as results appear.
     private var glassHeight: NSLayoutConstraint!
-    private var glassLeading: NSLayoutConstraint!
-    private var glassTrailing: NSLayoutConstraint!
     /// Steps the glass's size constraints frame by frame; see `FrameAnimator`.
     private var animator: FrameAnimator!
     /// Top edge stays put while the panel grows downward.
@@ -273,11 +270,11 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         host.addSubview(glass)
         glass.translatesAutoresizingMaskIntoConstraints = false
         let m = Metrics.windowMargin
-        glassLeading = glass.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: m)
-        glassTrailing = glass.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -m)
         glassHeight = glass.heightAnchor.constraint(equalToConstant: Metrics.inputHeight)
         NSLayoutConstraint.activate([
-            glassLeading, glassTrailing, glassHeight,
+            glass.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: m),
+            glass.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -m),
+            glassHeight,
             glass.topAnchor.constraint(equalTo: host.topAnchor, constant: m),
         ])
         panel.contentView = host
@@ -690,52 +687,25 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     /// Stands down while a drag is in flight; the size is applied directly then, since an
     /// animation would lag the pointer.
+    ///
+    /// Clearing the query snaps back to the bar: its contents are already gone, so a
+    /// shrinking empty panel only delays the next keystroke's feedback.
     private func resizeGlass(to target: CGFloat, animated: Bool) {
-        // Any resize ends a bulge still in progress from an earlier collapse.
-        animator.cancel("bulge")
-        setGlassInset(Metrics.windowMargin)
         guard target != glassHeight.constant else { return }
 
-        guard animated, panel.isVisible, !isDismissing, drag == nil else {
+        let collapsing = target == Metrics.inputHeight
+        guard animated, !collapsing, panel.isVisible, !isDismissing, drag == nil else {
             animator.cancel("height")
             glassHeight.constant = target
             return
         }
 
         let from = glassHeight.constant
-        let collapsing = target == Metrics.inputHeight
-        animator.run("height", duration: collapsing ? Metrics.collapseDuration : Metrics.growDuration,
-                     curve: collapsing ? .easeInOut : .easeOut) { [weak self] p in
+        animator.run("height", duration: Metrics.growDuration, curve: .easeOut) { [weak self] p in
             guard let self else { return }
             self.glassHeight.constant = from + (target - from) * p
             self.panel.contentView?.layoutSubtreeIfNeeded()
         }
-        if collapsing { bulge() }
-    }
-
-    /// Spotlight's collapse ends with the capsule briefly bulging wider and springing back.
-    private func bulge() {
-        let amount = glass.frame.width * Metrics.bulgeFraction / 2
-        let delay = Metrics.bulgeDelay, out = Metrics.bulgeOutDuration, back = Metrics.bulgeBackDuration
-        let total = delay + out + back
-        animator.run("bulge", duration: total, curve: .linear) { [weak self] p in
-            let t = p * total
-            let widening: Double
-            if t < delay {
-                widening = 0
-            } else if t < delay + out {
-                widening = FrameAnimator.Curve.easeOut((t - delay) / out)
-            } else {
-                widening = 1 - FrameAnimator.Curve.easeInOut((t - delay - out) / back)
-            }
-            self?.setGlassInset(Metrics.windowMargin - amount * widening)
-        }
-    }
-
-    private func setGlassInset(_ inset: CGFloat) {
-        glassLeading.constant = inset
-        glassTrailing.constant = -inset
-        panel.contentView?.layoutSubtreeIfNeeded()
     }
 
     // MARK: - Completion and bar icon
