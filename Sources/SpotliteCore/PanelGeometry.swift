@@ -9,14 +9,19 @@ import Foundation
 /// calculation that read as obviously correct and wasn't.
 public struct PanelGeometry: Sendable, Equatable, Codable {
 
-    public static let defaultWidth: CGFloat = 720
+    /// Spotlight's width on macOS 26.
+    public static let defaultWidth: CGFloat = 640
     public static let minWidth: CGFloat = 480
     public static let maxWidth: CGFloat = 1200
 
     /// Distance from the top of the visible frame to the panel's top edge, as a fraction
     /// of the visible frame's height. A fraction rather than points so the panel lands in
     /// the same visual place on a laptop screen and a large external display.
-    public static let defaultVerticalFraction: CGFloat = 0.22
+    ///
+    /// Spotlight's top edge sits 259pt below the menu bar on a 1130pt-tall visible frame.
+    /// How Spotlight places itself on other screen sizes is unmeasured; a fraction matches
+    /// it exactly there and scales sensibly elsewhere.
+    public static let defaultVerticalFraction: CGFloat = 259.0 / 1130.0
     public static let minVerticalFraction: CGFloat = 0.05
     public static let maxVerticalFraction: CGFloat = 0.70
 
@@ -24,6 +29,11 @@ public struct PanelGeometry: Sendable, Equatable, Codable {
     public private(set) var verticalFraction: CGFloat
 
     public static let `default` = PanelGeometry()
+
+    /// What `default` was before Spotlite matched Spotlight's placement. Preferences
+    /// always store geometry explicitly, so a panel nobody ever dragged still holds these
+    /// values and would never pick up the new default without a migration.
+    public static let legacyDefault = PanelGeometry(width: 720, verticalFraction: 0.22)
 
     public init(width: CGFloat = PanelGeometry.defaultWidth,
                 verticalFraction: CGFloat = PanelGeometry.defaultVerticalFraction) {

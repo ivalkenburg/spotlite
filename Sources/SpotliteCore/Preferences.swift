@@ -18,7 +18,8 @@ public enum ThemeMode: String, Codable, Sendable, CaseIterable {
 }
 
 public struct Preferences: Codable, Sendable, Equatable {
-    private static let currentFormatVersion = 1
+    /// 2: geometry left at the version-1 default moves to Spotlight's placement.
+    private static let currentFormatVersion = 2
     private enum CodingKeys: String, CodingKey {
         case formatVersion
         case hiddenBundleIDs, aliases, panelScreen, panelGeometry, themeMode
@@ -60,6 +61,9 @@ public struct Preferences: Codable, Sendable, Equatable {
         aliases = try c.decodeIfPresent([String: String].self, forKey: .aliases) ?? [:]
         panelScreen = try c.decodeIfPresent(PanelScreen.self, forKey: .panelScreen) ?? .followPointer
         panelGeometry = try c.decodeIfPresent(PanelGeometry.self, forKey: .panelGeometry) ?? .default
+        // Only an untouched panel moves: a width or position the user dragged to on
+        // purpose is kept.
+        if version < 2, panelGeometry == .legacyDefault { panelGeometry = .default }
         themeMode = try c.decodeIfPresent(ThemeMode.self, forKey: .themeMode) ?? .system
         hotKeyCode = try c.decodeIfPresent(UInt32.self, forKey: .hotKeyCode) ?? Preferences.defaultKeyCode
         hotKeyModifiers = try c.decodeIfPresent(UInt32.self, forKey: .hotKeyModifiers) ?? Preferences.defaultModifiers

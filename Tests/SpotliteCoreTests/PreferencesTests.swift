@@ -24,7 +24,7 @@ struct PreferencesTests {
 
         let data = try JSONEncoder().encode(prefs)
         #expect(try JSONDecoder().decode(Preferences.self, from: data) == prefs)
-        #expect(String(decoding: data, as: UTF8.self).contains(#""formatVersion":1"#))
+        #expect(String(decoding: data, as: UTF8.self).contains(#""formatVersion":2"#))
     }
 
     /// A file written by an older build has no `aliases` or `panelScreen` key. It must
@@ -39,6 +39,22 @@ struct PreferencesTests {
         #expect(decoded.aliases.isEmpty)
         #expect(decoded.panelScreen == .followPointer)
         #expect(decoded.themeMode == .system)
+    }
+
+    @Test func movesAnUntouchedPanelToTheNewDefault() throws {
+        let untouched = Data(#"{"formatVersion":1,"panelGeometry":{"width":720,"verticalFraction":0.22}}"#.utf8)
+        #expect(try JSONDecoder().decode(Preferences.self, from: untouched).panelGeometry == .default)
+    }
+
+    @Test func keepsAPanelTheUserDragged() throws {
+        let dragged = Data(#"{"formatVersion":1,"panelGeometry":{"width":900,"verticalFraction":0.22}}"#.utf8)
+        #expect(try JSONDecoder().decode(Preferences.self, from: dragged).panelGeometry.width == 900)
+    }
+
+    /// Once migrated, the old default is an ordinary choice the user may make again.
+    @Test func doesNotMigrateTwice() throws {
+        let current = Data(#"{"formatVersion":2,"panelGeometry":{"width":720,"verticalFraction":0.22}}"#.utf8)
+        #expect(try JSONDecoder().decode(Preferences.self, from: current).panelGeometry == .legacyDefault)
     }
 
     @Test func defaultsToSystemTheme() {
