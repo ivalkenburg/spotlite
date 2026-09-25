@@ -93,11 +93,12 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         glass.style = .regular
         applyResolvedAppearance()
 
-        var symbolConfig = NSImage.SymbolConfiguration(pointSize: 22, weight: .regular)
-        symbolConfig = symbolConfig.applying(.init(paletteColors: [.secondaryLabelColor]))
+        // Primary label color, as Spotlight uses: secondary reads washed out on glass.
+        var symbolConfig = NSImage.SymbolConfiguration(pointSize: 24, weight: .medium)
+        symbolConfig = symbolConfig.applying(.init(paletteColors: [.labelColor]))
         magnifier.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "Search")?
             .withSymbolConfiguration(symbolConfig)
-        magnifier.contentTintColor = .secondaryLabelColor
+        magnifier.contentTintColor = .labelColor
 
         field.delegate = self
         field.onCommandDigit = { [weak self] index in self?.launch(at: index) }
@@ -137,12 +138,12 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         listHeight = scroll.heightAnchor.constraint(equalToConstant: 0)
 
         NSLayoutConstraint.activate([
-            magnifier.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: Metrics.horizontalInset),
+            magnifier.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: Metrics.magnifierInset),
             magnifier.topAnchor.constraint(equalTo: content.topAnchor),
             magnifier.heightAnchor.constraint(equalToConstant: Metrics.inputHeight),
-            magnifier.widthAnchor.constraint(equalToConstant: Metrics.iconSize),
+            magnifier.widthAnchor.constraint(equalToConstant: Metrics.magnifierWidth),
 
-            field.leadingAnchor.constraint(equalTo: magnifier.trailingAnchor, constant: 12),
+            field.leadingAnchor.constraint(equalTo: magnifier.trailingAnchor, constant: Metrics.magnifierGap),
             field.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -Metrics.horizontalInset),
             // Centered against the magnifier, not stretched to the input height:
             // a text field taller than its line draws the text at the top, not the middle.
@@ -151,7 +152,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             // Zero constant: padding baked into a constraint becomes an Auto Layout
-            // minimum height, which would stop the panel collapsing back to 64pt.
+            // minimum height, which would stop the panel collapsing back to the input height.
             // The list padding lives in the scroll view's content insets instead.
             scroll.topAnchor.constraint(equalTo: magnifier.bottomAnchor),
             listHeight,
@@ -225,8 +226,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     /// Glass gives its contents a vibrant appearance, which can keep label colors white
-    /// even when the glass itself has a light tint. Resolve the theme once and apply the
-    /// same concrete appearance to every layer before any of them becomes visible.
+    /// even when the glass itself is light. Resolve the theme once and apply the same
+    /// concrete appearance to every layer before any of them becomes visible. The glass
+    /// is left untinted, as Spotlight's is, so the backdrop's colour shows through the blur.
     private func applyResolvedAppearance() {
         let name: NSAppearance.Name
         switch preferences.themeMode {
@@ -244,9 +246,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         panel.appearance = preferences.themeMode == .system ? nil : appearance
         glass.appearance = appearance
         content.appearance = appearance
-        glass.tintColor = name == .darkAqua
-            ? NSColor(srgbRed: 0.10, green: 0.10, blue: 0.11, alpha: 1)
-            : NSColor(srgbRed: 0.91, green: 0.91, blue: 0.92, alpha: 1)
     }
 
     // MARK: - Lifecycle

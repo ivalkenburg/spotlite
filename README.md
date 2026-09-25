@@ -26,8 +26,9 @@ keystroke.
   `/usr/bin/caffeinate`; externally owned assertions are shown read-only. A separate
   filled-cup menu-bar item appears only while caffeine is active, leaving Spotlite's
   normal search icon unchanged and remaining visible when that icon is disabled.
-- **Liquid Glass.** Uses the native `NSGlassEffectView` introduced in macOS 26.
-  Its fixed light or dark tint does not change with the window behind it.
+- **Liquid Glass.** Uses the native `NSGlassEffectView` introduced in macOS 26,
+  untinted like Spotlight's, so the colour of whatever is behind it shows through
+  the blur. A capsule while empty, a rounded panel once results appear.
 
 ## Requirements
 

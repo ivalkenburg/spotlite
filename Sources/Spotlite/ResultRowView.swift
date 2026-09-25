@@ -17,7 +17,7 @@ final class ResultRowView: NSTableCellView {
         super.init(frame: frameRect)
 
         highlight.wantsLayer = true
-        highlight.layer?.cornerRadius = 10
+        highlight.layer?.cornerRadius = Metrics.highlightRadius
         highlight.layer?.cornerCurve = .continuous
         updateHighlightColor()
         highlight.isHidden = true
@@ -52,15 +52,15 @@ final class ResultRowView: NSTableCellView {
         NSLayoutConstraint.activate([
             highlight.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.listPadding),
             highlight.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.listPadding),
-            highlight.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-            highlight.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
+            highlight.topAnchor.constraint(equalTo: topAnchor, constant: 1),
+            highlight.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -1),
 
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.horizontalInset),
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.rowIconInset),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: Metrics.iconSize),
             icon.heightAnchor.constraint(equalToConstant: Metrics.iconSize),
 
-            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 14),
+            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: Metrics.rowIconGap),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
 
             detail.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 12),
@@ -105,6 +105,10 @@ final class ResultRowView: NSTableCellView {
 
         icon.layer?.removeAllAnimations()
         icon.alphaValue = 1
+
+        // App icons fill the frame; symbols keep their own size, or they would scale up
+        // to the app icon's padded canvas and read far larger than the artwork beside them.
+        icon.imageScaling = item.iconURL == nil ? .scaleProportionallyDown : .scaleProportionallyUpOrDown
 
         if let ready = item.immediateIcon {
             pendingIconURL = nil

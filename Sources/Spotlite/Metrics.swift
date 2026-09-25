@@ -1,14 +1,27 @@
 import CoreGraphics
 
 /// Single source of truth for layout. Every size the panel uses comes from here.
+/// Values are measured from macOS 26 Spotlight captures, so the two read as one family.
 enum Metrics {
-    static let inputHeight: CGFloat = 64
-    static let rowHeight: CGFloat = 48
+    static let inputHeight: CGFloat = 56
+    static let rowHeight: CGFloat = 58
     static let maxVisibleRows = 5
-    static let cornerRadius: CGFloat = 24
-    static let listPadding: CGFloat = 8
+    /// Half the input height, as Spotlight does: a capsule while collapsed, a rounded
+    /// rect once results expand it.
+    static let cornerRadius: CGFloat = inputHeight / 2
+    static let listPadding: CGFloat = 10
     static let horizontalInset: CGFloat = 20
-    static let iconSize: CGFloat = 32
+    /// App icon artwork fills only ~80% of its canvas, so a 44pt frame shows the same
+    /// ~36pt squircle Spotlight does. Inset and gap are measured to the frame, not the art.
+    static let iconSize: CGFloat = 44
+    static let rowIconInset: CGFloat = 13
+    static let rowIconGap: CGFloat = 14
+    static let highlightRadius: CGFloat = 14
+    /// The magnifier's frame, independent of the row icons so resizing those never
+    /// shifts the query text.
+    static let magnifierInset: CGFloat = 18
+    static let magnifierWidth: CGFloat = 32
+    static let magnifierGap: CGFloat = 12
 
     /// Transparent margin around the glass view, inside the window. The glass view's
     /// shadow is clipped hard at the window bounds, so this must exceed the shadow's

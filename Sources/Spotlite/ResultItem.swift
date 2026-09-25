@@ -92,7 +92,7 @@ enum ResultItem {
     private static let caffeineOnIcon = symbol("cup.and.saucer.fill")
 
     private static func symbol(_ name: String) -> NSImage? {
-        let config = NSImage.SymbolConfiguration(pointSize: 24, weight: .regular)
+        let config = NSImage.SymbolConfiguration(pointSize: 30, weight: .regular)
         return NSImage(systemSymbolName: name, accessibilityDescription: nil)?
             .withSymbolConfiguration(config)
     }
