@@ -51,6 +51,19 @@ macOS 26.0 or later. Xcode 26 to build.
 
 ## Install
 
+With Homebrew:
+
+```sh
+brew install ivalkenburg/tap/spotlite
+xattr -dr com.apple.quarantine /Applications/Spotlite.app
+```
+
+Spotlite is not notarized by Apple, so macOS blocks its first launch. The `xattr`
+line allows it; alternatively, open it once and click "Open Anyway" in System
+Settings › Privacy & Security.
+
+Or build it yourself:
+
 ```sh
 git clone https://github.com/ivalkenburg/spotlite.git
 cd spotlite
@@ -182,7 +195,9 @@ Then, for each release:
 
 1. Bump `CFBundleShortVersionString` and `CFBundleVersion` in `Resources/Info.plist`.
 2. `make release` signs with the hardened runtime, notarizes, and staples the ticket
-   to `build/Spotlite-<version>.dmg`.
+   to `build/Spotlite-<version>.dmg`. Without a Developer ID certificate, use
+   `make dmg IDENTITY="Apple Development: …"` instead; the download then needs the
+   quarantine step described under Install.
 3. `gh release create v<version> build/Spotlite-<version>.dmg`
 4. `make cask` writes `build/spotlite.rb` from `packaging/spotlite.rb` with the new
    version and checksum. Copy it to `Casks/` in a tap repository such as

@@ -19,4 +19,12 @@ cask "spotlite" do
     "~/Library/Application Support/Spotlite",
     "~/Library/Caches/Spotlite",
   ]
+
+  caveats <<~EOS
+    Spotlite is not notarized by Apple, so macOS blocks its first launch.
+    Allow it once with:
+      xattr -dr com.apple.quarantine /Applications/Spotlite.app
+    or open it, then click "Open Anyway" in
+    System Settings > Privacy & Security.
+  EOS
 end
