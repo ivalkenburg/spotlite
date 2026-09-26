@@ -8,7 +8,7 @@ cask "spotlite" do
   desc "Lightweight application launcher"
   homepage "https://github.com/ivalkenburg/spotlite"
 
-  depends_on macos: ">= :tahoe"
+  depends_on macos: :tahoe
 
   app "Spotlite.app"
 
