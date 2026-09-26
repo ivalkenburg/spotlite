@@ -203,9 +203,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         hotKeyRow.orientation = .horizontal
         hotKeyRow.spacing = 12
 
+        // With the menu bar icon hidden, this is the only way to quit.
+        let quitButton = NSButton(title: "Quit Spotlite", target: NSApp,
+                                  action: #selector(NSApplication.terminate(_:)))
+        quitButton.bezelStyle = .rounded
+
         let stack = NSStackView(views: [
             hotKeyRow, hotKeyWarning, themeRow, tintRow, retentionRow, screenRow, loginItem, loginItemWarning, menuBar, hint,
-            historyRow, historyHint, listLabel, filterField, scroll,
+            historyRow, historyHint, listLabel, filterField, scroll, quitButton,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
