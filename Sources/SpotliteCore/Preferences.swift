@@ -1,7 +1,5 @@
 import Foundation
 
-/// User settings. Lives in Application Support, never in Caches: the hidden-app list
-/// is not regenerable, and eviction would silently un-hide everything.
 /// Which display the panel opens on.
 public enum PanelScreen: String, Codable, Sendable {
     /// The display holding the pointer — your eyes are usually where your mouse is.
@@ -17,13 +15,16 @@ public enum ThemeMode: String, Codable, Sendable, CaseIterable {
     case system
 }
 
+/// User settings. Lives in Application Support, never in Caches: the hidden-app list
+/// is not regenerable, and eviction would silently un-hide everything.
 public struct Preferences: Codable, Sendable, Equatable {
     /// 2: geometry left at the version-1 default moves to Spotlight's placement.
     private static let currentFormatVersion = 2
     private enum CodingKeys: String, CodingKey {
         case formatVersion
-        case hiddenBundleIDs, aliases, panelScreen, panelGeometry, themeMode
+        case hiddenBundleIDs, aliases, panelScreen, panelGeometry, themeMode, glassTint
         case hotKeyCode, hotKeyModifiers, showMenuBarIcon, hasCompletedFirstRun
+        case queryRetention
     }
 
     public var hiddenBundleIDs: Set<String>
@@ -33,10 +34,16 @@ public struct Preferences: Codable, Sendable, Equatable {
     /// Width and vertical position, adjusted by dragging the panel's edges and header.
     public var panelGeometry: PanelGeometry
     public var themeMode: ThemeMode
+    /// How far the panel's glass is tinted toward the theme's neutral colour: 0 is
+    /// untinted, as Spotlight's is; 1 is solid.
+    public var glassTint: Double
     public var hotKeyCode: UInt32
     public var hotKeyModifiers: UInt32
     public var showMenuBarIcon: Bool
     public var hasCompletedFirstRun: Bool
+    /// Seconds after closing during which reopening brings the last query back. Zero,
+    /// the default, always opens empty.
+    public var queryRetention: TimeInterval
 
     /// Option-Space: free on a stock system, unlike Control-Space and Command-Space.
     ///
@@ -65,10 +72,13 @@ public struct Preferences: Codable, Sendable, Equatable {
         // purpose is kept.
         if version < 2, panelGeometry == .legacyDefault { panelGeometry = .default }
         themeMode = try c.decodeIfPresent(ThemeMode.self, forKey: .themeMode) ?? .system
+        glassTint = Preferences.clampedTint(try c.decodeIfPresent(Double.self, forKey: .glassTint) ?? 0)
         hotKeyCode = try c.decodeIfPresent(UInt32.self, forKey: .hotKeyCode) ?? Preferences.defaultKeyCode
         hotKeyModifiers = try c.decodeIfPresent(UInt32.self, forKey: .hotKeyModifiers) ?? Preferences.defaultModifiers
         showMenuBarIcon = try c.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? true
         hasCompletedFirstRun = try c.decodeIfPresent(Bool.self, forKey: .hasCompletedFirstRun) ?? false
+        queryRetention = Preferences.clampedRetention(
+            try c.decodeIfPresent(TimeInterval.self, forKey: .queryRetention) ?? 0)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -79,10 +89,12 @@ public struct Preferences: Codable, Sendable, Equatable {
         try c.encode(panelScreen, forKey: .panelScreen)
         try c.encode(panelGeometry, forKey: .panelGeometry)
         try c.encode(themeMode, forKey: .themeMode)
+        try c.encode(glassTint, forKey: .glassTint)
         try c.encode(hotKeyCode, forKey: .hotKeyCode)
         try c.encode(hotKeyModifiers, forKey: .hotKeyModifiers)
         try c.encode(showMenuBarIcon, forKey: .showMenuBarIcon)
         try c.encode(hasCompletedFirstRun, forKey: .hasCompletedFirstRun)
+        try c.encode(queryRetention, forKey: .queryRetention)
     }
 
     public init(
@@ -91,20 +103,33 @@ public struct Preferences: Codable, Sendable, Equatable {
         panelScreen: PanelScreen = .followPointer,
         panelGeometry: PanelGeometry = .default,
         themeMode: ThemeMode = .system,
+        glassTint: Double = 0,
         hotKeyCode: UInt32 = Preferences.defaultKeyCode,
         hotKeyModifiers: UInt32 = Preferences.defaultModifiers,
         showMenuBarIcon: Bool = true,
-        hasCompletedFirstRun: Bool = false
+        hasCompletedFirstRun: Bool = false,
+        queryRetention: TimeInterval = 0
     ) {
         self.hiddenBundleIDs = hiddenBundleIDs
         self.aliases = aliases
         self.panelScreen = panelScreen
         self.panelGeometry = panelGeometry
         self.themeMode = themeMode
+        self.glassTint = Preferences.clampedTint(glassTint)
         self.hotKeyCode = hotKeyCode
         self.hotKeyModifiers = hotKeyModifiers
         self.showMenuBarIcon = showMenuBarIcon
         self.hasCompletedFirstRun = hasCompletedFirstRun
+        self.queryRetention = Preferences.clampedRetention(queryRetention)
+    }
+
+    /// A hand-edited file must not produce a tint the glass cannot represent.
+    private static func clampedTint(_ value: Double) -> Double {
+        value.isFinite ? min(max(value, 0), 1) : 0
+    }
+
+    private static func clampedRetention(_ value: TimeInterval) -> TimeInterval {
+        value.isFinite ? min(max(value, 0), QueryMemory.maxRetention) : 0
     }
 }
 

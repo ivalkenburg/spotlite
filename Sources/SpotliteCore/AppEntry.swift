@@ -109,6 +109,15 @@ public struct AppEntry: Sendable, Hashable {
         self.initialBonuses = Array(repeating: Scoring.bonusBoundary, count: inits.count)
     }
 
+    /// Deterministic order between equally scored entries: shorter name first, then
+    /// alphabetical, then path. `lowerChars.count` is O(1); `name.count` would walk the
+    /// string on every comparison.
+    func tieBreaksBefore(_ other: AppEntry) -> Bool {
+        if lowerChars.count != other.lowerChars.count { return lowerChars.count < other.lowerChars.count }
+        if name != other.name { return name < other.name }
+        return instanceID < other.instanceID
+    }
+
     static func isSeparator(_ ch: Character) -> Bool {
         ch == " " || ch == "-" || ch == "_" || ch == "." || ch == "/" || ch == "("
     }

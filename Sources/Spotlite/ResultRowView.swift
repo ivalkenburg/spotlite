@@ -17,6 +17,9 @@ final class ResultRowView: NSTableCellView {
     private let hintStack = NSStackView()
     private let highlight = NSView()
     private let stateSwitch = NSSwitch()
+    /// Hints end at the row's edge, or just before the switch on rows that carry one.
+    private var hintsBeforeEdge: NSLayoutConstraint!
+    private var hintsBeforeSwitch: NSLayoutConstraint!
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -67,13 +70,17 @@ final class ResultRowView: NSTableCellView {
             label.centerYAnchor.constraint(equalTo: highlight.centerYAnchor),
 
             hintStack.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 12),
-            hintStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.horizontalInset),
             hintStack.centerYAnchor.constraint(equalTo: highlight.centerYAnchor),
 
             stateSwitch.trailingAnchor.constraint(equalTo: trailingAnchor,
                                                   constant: -Metrics.horizontalInset),
             stateSwitch.centerYAnchor.constraint(equalTo: highlight.centerYAnchor),
         ])
+        hintsBeforeEdge = hintStack.trailingAnchor.constraint(equalTo: trailingAnchor,
+                                                              constant: -Metrics.horizontalInset)
+        hintsBeforeSwitch = hintStack.trailingAnchor.constraint(equalTo: stateSwitch.leadingAnchor,
+                                                                constant: -Metrics.hintPairGap)
+        hintsBeforeEdge.isActive = true
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -123,6 +130,10 @@ final class ResultRowView: NSTableCellView {
         } else {
             stateSwitch.isHidden = true
         }
+        // Deactivate before activating, so the two are never both active.
+        let showsSwitch = !stateSwitch.isHidden
+        NSLayoutConstraint.deactivate([showsSwitch ? hintsBeforeEdge : hintsBeforeSwitch])
+        NSLayoutConstraint.activate([showsSwitch ? hintsBeforeSwitch : hintsBeforeEdge])
 
         configureIcon(for: item)
     }

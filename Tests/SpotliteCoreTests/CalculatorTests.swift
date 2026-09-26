@@ -63,3 +63,71 @@ struct CalculatorTests {
         #expect(Calculator.format(1.0 / 3.0, locale: us) == "0.3333333333")
     }
 }
+
+@Suite("Calculator functions and constants")
+struct CalculatorFunctionTests {
+
+    private func close(_ input: String, _ expected: Double, previous: Double? = nil) -> Bool {
+        guard let value = Calculator.evaluate(input, previous: previous) else { return false }
+        return abs(value - expected) < 1e-9
+    }
+
+    @Test func evaluatesFunctions() {
+        #expect(Calculator.evaluate("sqrt(16)") == 4)
+        #expect(Calculator.evaluate("abs(-3)") == 3)
+        #expect(Calculator.evaluate("floor(2.7)+ceil(2.2)") == 5)
+        #expect(Calculator.evaluate("log(1000)") == 3)
+        #expect(Calculator.evaluate("log2(8)") == 3)
+        #expect(close("ln(e^2)", 2))
+        #expect(close("sin(pi/2)", 1))
+        #expect(close("cos(0)", 1))
+    }
+
+    @Test func functionNamesIgnoreCase() {
+        #expect(Calculator.evaluate("SQRT(9)") == 3)
+    }
+
+    @Test func squareRootSign() {
+        #expect(Calculator.evaluate("√16") == 4)
+        #expect(Calculator.evaluate("√(9+7)") == 4)
+        #expect(Calculator.evaluate("2*√4") == 4)
+    }
+
+    @Test func constants() {
+        #expect(close("2*pi", 2 * .pi))
+        #expect(close("π/2", .pi / 2))
+        #expect(close("e*1", M_E))
+    }
+
+    @Test func constantsAloneAreNotCalculations() {
+        // "pi" or "e" typed toward an app name must stay a search.
+        #expect(Calculator.evaluate("pi") == nil)
+        #expect(Calculator.evaluate("e") == nil)
+    }
+
+    @Test func radixLiterals() {
+        #expect(Calculator.evaluate("0xff+1") == 256)
+        #expect(Calculator.evaluate("0b1010*1") == 10)
+        #expect(Calculator.evaluate("0o17+0") == 15)
+        #expect(Calculator.evaluate("0x+1") == nil)
+        #expect(Calculator.evaluate("0b12+1") == nil)
+    }
+
+    @Test func ansIsThePreviousResult() {
+        #expect(Calculator.evaluate("ans*2", previous: 21) == 42)
+        #expect(Calculator.evaluate("ans*2") == nil)
+    }
+
+    @Test func domainErrorsProduceNoResult() {
+        #expect(Calculator.evaluate("sqrt(-1)") == nil)
+        #expect(Calculator.evaluate("ln(0)") == nil)
+        #expect(Calculator.evaluate("√-4") == nil)
+    }
+
+    @Test func rejectsUnknownNamesAndMissingParentheses() {
+        #expect(Calculator.evaluate("foo(2)") == nil)
+        #expect(Calculator.evaluate("sqrt 4+1") == nil)
+        #expect(Calculator.evaluate("sqrt(") == nil)
+        #expect(Calculator.evaluate("e-mail") == nil)
+    }
+}

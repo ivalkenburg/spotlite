@@ -11,6 +11,15 @@ enum ResultItem {
     case settings
     case caffeinate(state: CaffeineState)
 
+    init(_ result: SearchResult, caffeine: CaffeineState) {
+        switch result {
+        case .app(let match): self = .app(match)
+        case .calculation(let expression, let value): self = .calculation(expression: expression, value: value)
+        case .settings: self = .settings
+        case .caffeinate: self = .caffeinate(state: caffeine)
+        }
+    }
+
     var title: String {
         switch self {
         case .app(let match): return match.entry.name
@@ -20,16 +29,17 @@ enum ResultItem {
         }
     }
 
-    /// Rows that carry a switch instead of a detail label. The switch is the state, so
-    /// the row needs no words to say whether it is on.
+    /// Rows that carry a switch. The switch is the state, so the row needs no words to
+    /// say whether it is on. For Caffeinate it is Spotlite's own assertion only: exactly
+    /// what Return toggles.
     var switchState: Bool? {
-        if case .caffeinate(let state) = self { return state.isActive }
+        if case .caffeinate(let state) = self { return state.spotlite }
         return nil
     }
 
     /// The verb the completion pill names.
     private var action: String {
-        if case .caffeinate(let state) = self { return state.isActive ? "Turn Off" : "Turn On" }
+        if case .caffeinate(let state) = self { return state.spotlite ? "Turn Off" : "Turn On" }
         return "Open"
     }
 
@@ -49,7 +59,13 @@ enum ResultItem {
     /// An app shows where it lives, which tells two copies of the same app apart.
     /// Holding a modifier swaps the path for what that modifier does, so the alternate
     /// actions are discoverable without a legend.
+    ///
+    /// Caffeinate says when another process is also keeping the display awake, since its
+    /// switch shows only Spotlite's own assertion.
     func hints(modifiers: NSEvent.ModifierFlags) -> [Hint] {
+        if case .caffeinate(let state) = self, state.external {
+            return [Hint(text: "Also active in another app", key: nil)]
+        }
         guard case .app(let match) = self else { return [] }
         if modifiers.contains(.command) {
             var hints = [Hint(text: "Reveal in Finder", key: "⌘↩")]
@@ -85,7 +101,7 @@ enum ResultItem {
         case .calculation: return ResultItem.calculatorIcon
         case .settings: return ResultItem.settingsIcon
         case .caffeinate(let state):
-            return state.isActive ? ResultItem.caffeineOnIcon : ResultItem.caffeineOffIcon
+            return state.spotlite ? ResultItem.caffeineOnIcon : ResultItem.caffeineOffIcon
         }
     }
 

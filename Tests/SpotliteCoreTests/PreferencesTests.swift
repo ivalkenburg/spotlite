@@ -19,8 +19,10 @@ struct PreferencesTests {
         prefs.aliases = ["com.adobe.Photoshop": "ps"]
         prefs.panelScreen = .primary
         prefs.themeMode = .dark
+        prefs.glassTint = 0.4
         prefs.showMenuBarIcon = false
         prefs.hasCompletedFirstRun = true
+        prefs.queryRetention = 12
 
         let data = try JSONEncoder().encode(prefs)
         #expect(try JSONDecoder().decode(Preferences.self, from: data) == prefs)
@@ -39,6 +41,8 @@ struct PreferencesTests {
         #expect(decoded.aliases.isEmpty)
         #expect(decoded.panelScreen == .followPointer)
         #expect(decoded.themeMode == .system)
+        #expect(decoded.glassTint == 0)
+        #expect(decoded.queryRetention == 0)
     }
 
     @Test func movesAnUntouchedPanelToTheNewDefault() throws {
@@ -59,6 +63,24 @@ struct PreferencesTests {
 
     @Test func defaultsToSystemTheme() {
         #expect(Preferences().themeMode == .system)
+    }
+
+    @Test func defaultsToUntintedGlass() {
+        #expect(Preferences().glassTint == 0)
+    }
+
+    @Test func clampsAHandEditedTint() throws {
+        let high = Data(#"{"formatVersion":2,"glassTint":3.5}"#.utf8)
+        let low = Data(#"{"formatVersion":2,"glassTint":-1}"#.utf8)
+        #expect(try JSONDecoder().decode(Preferences.self, from: high).glassTint == 1)
+        #expect(try JSONDecoder().decode(Preferences.self, from: low).glassTint == 0)
+    }
+
+    @Test func clampsAHandEditedQueryRetention() throws {
+        let high = Data(#"{"formatVersion":2,"queryRetention":600}"#.utf8)
+        let low = Data(#"{"formatVersion":2,"queryRetention":-5}"#.utf8)
+        #expect(try JSONDecoder().decode(Preferences.self, from: high).queryRetention == 30)
+        #expect(try JSONDecoder().decode(Preferences.self, from: low).queryRetention == 0)
     }
 
     @Test func decodingRealGarbageStillFails() {

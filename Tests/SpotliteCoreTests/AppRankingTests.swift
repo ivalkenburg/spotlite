@@ -4,10 +4,11 @@ import Testing
 
 @Suite("App ranking")
 struct AppRankingTests {
-    private func match(_ name: String, id: String, score: Int) -> MatchResult {
+    private func match(_ name: String, id: String, score: Int,
+                       tier: MatchTier = .other) -> MatchResult {
         let entry = AppEntry(url: URL(fileURLWithPath: "/Applications/\(name).app"),
                              name: name, bundleID: id)
-        return MatchResult(entry: entry, score: score, positions: [])
+        return MatchResult(entry: entry, score: score, positions: [], tier: tier)
     }
 
     @Test func hiddenCandidatesAreRemovedBeforeTheLimit() {
@@ -33,5 +34,19 @@ struct AppRankingTests {
         let ranked = AppRanking.rank(matches, hiddenBundleIDs: [],
                                      frecency: frecency, now: now)
         #expect(ranked.first?.entry.bundleID == "familiar")
+    }
+
+    @Test func frecencyNeverLiftsAnAcronymAboveANameStart() {
+        let now = Date()
+        var frecency = Frecency()
+        for _ in 0..<50 { frecency.recordLaunch("github", now: now) }
+        let matches = [
+            match("GitHub Desktop", id: "github", score: 134),
+            match("Ghostty", id: "ghostty", score: 104, tier: .namePrefix),
+        ]
+
+        let ranked = AppRanking.rank(matches, hiddenBundleIDs: [],
+                                     frecency: frecency, now: now)
+        #expect(ranked.map(\.entry.bundleID) == ["ghostty", "github"])
     }
 }

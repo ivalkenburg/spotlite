@@ -12,25 +12,38 @@ keystroke.
 ## Features
 
 - **Fuzzy app search.** Bonus-weighted subsequence matching, so `saf` finds Safari
-  and `gc` finds Google Chrome.
+  and `gc` finds Google Chrome. Typing the start of a name always beats an acronym,
+  as in Spotlight: `gh` finds Ghostty before GitHub Desktop.
 - **Frecency ranking.** Apps you launch often rank higher, but the boost is capped
-  so a familiar app can never hijack a query it doesn't match well.
+  so a familiar app can never hijack a query it doesn't match well, and it never
+  lifts an acronym match above an app whose name starts with the query. Settings can
+  reset the whole history, or forget one app's from the right-click menu in its list.
+- **Remembers the last search, if you want.** With "Remember last search" set in
+  Settings (up to 30 seconds; off by default), reopening the panel within that time
+  brings the query back, selected, so typing replaces it and Return repeats it.
 - **Built-in calculator.** Type an expression and the result appears on a card at
-  the top. Return copies it to the clipboard.
+  the top. Return copies it to the clipboard. Beyond `+ - * / ^ %` it knows
+  `sqrt`, `cbrt`, `abs`, `round`, `floor`, `ceil`, `exp`, `ln`, `log` (base 10),
+  `log2`, and `sin`, `cos`, `tan` and their inverses in radians, all written with
+  parentheses; `√` as a prefix; `pi`, `π` and `e`; `0x`, `0b` and `0o` literals; and
+  `ans`, the result that was on screen when the panel last closed.
 - **Hide apps you never launch.** Command-Delete on a result hides it; the full
   list with checkboxes lives in Settings.
-- **Aliases.** Teach it that `ps` means Photoshop. An alias always outranks an
-  incidental name match, and works even when the name shares no letters with it.
+- **Aliases.** Teach it that `ps` means Photoshop. Typing the start of an alias
+  outranks every name match, and works even when the name shares no letters with it.
 - **Caffeinate.** Search for it to get a row with a switch that keeps the display
-  awake. The switch also reflects display-sleep assertions from other apps and
-  `/usr/bin/caffeinate`; externally owned assertions are shown read-only. A separate
-  filled-cup menu-bar item appears only while caffeine is active, leaving Spotlite's
-  normal search icon unchanged and remaining visible when that icon is disabled.
+  awake. The switch controls Spotlite's own assertion and always works; when a
+  `caffeinate -d` elsewhere is also keeping the display awake, the row says so. A
+  separate filled-cup menu-bar item appears only while either is active, leaving
+  Spotlite's normal search icon unchanged and remaining visible when that icon is
+  disabled.
 - **Looks like Spotlight.** The panel matches macOS 26 Spotlight's layout, colours
   and animations, measured from side-by-side captures in both themes: untinted
   Liquid Glass (`NSGlassEffectView`), an inline completion after the query
   (`saf` + `ari — Open`), the selected result's icon at the bar's end, a soft
   highlight on the top hit that turns accent blue once you use the arrow keys.
+  A Tint slider in Settings blends the glass toward solid grey if you prefer less
+  of the backdrop showing through.
 
 ## Requirements
 
@@ -134,10 +147,11 @@ icon is hidden.
 make          # build and sign into ./build
 make test     # run the test suite
 make install  # copy to /Applications
+make dmg      # package ./build/Spotlite-<version>.dmg for local testing
 ```
 
 The package splits into `SpotliteCore`, which is pure Swift with no AppKit
-dependency and holds the matcher, calculator, index and preferences, and
+dependency and holds the matcher, calculator, result assembly, index and preferences, and
 `Spotlite`, which is the AppKit layer. The split keeps the tests headless.
 
 There are a few dev hooks, all off by default:
@@ -153,6 +167,26 @@ There are a few dev hooks, all off by default:
 `SPOTLITE_DEV_FRAMES` earned its place: several layout bugs were only findable by
 comparing real frames against what the layout code claimed, rather than by
 reading screenshots.
+
+### Releasing
+
+A download that opens without a Gatekeeper warning needs a Developer ID
+Application certificate (Apple Developer Program) and notarization. Once per machine,
+store the notarization credentials in the keychain:
+
+```sh
+xcrun notarytool store-credentials spotlite --apple-id <id> --team-id <team>
+```
+
+Then, for each release:
+
+1. Bump `CFBundleShortVersionString` and `CFBundleVersion` in `Resources/Info.plist`.
+2. `make release` signs with the hardened runtime, notarizes, and staples the ticket
+   to `build/Spotlite-<version>.dmg`.
+3. `gh release create v<version> build/Spotlite-<version>.dmg`
+4. `make cask` writes `build/spotlite.rb` from `packaging/spotlite.rb` with the new
+   version and checksum. Copy it to `Casks/` in a tap repository such as
+   `ivalkenburg/homebrew-tap`; `brew install ivalkenburg/tap/spotlite` then works.
 
 ## Measurements
 

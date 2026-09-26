@@ -5,24 +5,33 @@ import Foundation
 /// Hand-written rather than NSExpression: it never throws on the 95% of keystrokes
 /// that aren't arithmetic, supports `^` and `%`, and builds no object graph per
 /// evaluation. Every failure is a nil return, not an exception.
+///
+/// Beyond the operators it knows functions written with parentheses (`sqrt(2)`,
+/// `sin(pi/2)`, trigonometry in radians), `√` as a prefix, the constants `pi`, `π` and
+/// `e`, `ans` for the previous result, and `0x`, `0b` and `0o` integer literals.
 public enum Calculator {
 
     /// Caps both allocation and recursive parser depth for arbitrarily large pasted text.
     public static let maxInputLength = 256
 
     /// Characters that make an input worth evaluating. Without this gate, typing "1"
-    /// to reach 1Password would produce a calculator row.
-    private static let operators: Set<Character> = ["+", "-", "*", "/", "^", "%", "(", "×", "÷"]
+    /// to reach 1Password would produce a calculator row, and "pi" or "e" typed toward
+    /// an app name would too.
+    private static let operators: Set<Character> = ["+", "-", "*", "/", "^", "%", "(", "×", "÷", "√"]
 
     /// Evaluates `input` if it looks like arithmetic. Returns nil for anything else.
-    public static func evaluate(_ input: String) -> Double? {
+    /// - Parameter previous: What `ans` stands for; without one, `ans` is unknown.
+    public static func evaluate(_ input: String, previous: Double? = nil) -> Double? {
         guard let trimmed = input.boundedTrimmedWhitespace(maximumCount: maxInputLength),
               trimmed.count > 1,
               trimmed.contains(where: { operators.contains($0) }) else { return nil }
-        guard trimmed.allSatisfy({ $0.isNumber || $0 == "." || $0 == " " || operators.contains($0) || $0 == ")" })
-        else { return nil }
+        let chars = Array(trimmed.lowercased())
+        guard chars.allSatisfy({
+            $0.isNumber || ("a"..."z").contains($0) || $0 == "π" || $0 == "." || $0 == " "
+                || $0 == ")" || operators.contains($0)
+        }) else { return nil }
 
-        var parser = Parser(Array(trimmed))
+        var parser = Parser(chars, previous: previous)
         guard let value = parser.expression(), parser.atEnd, value.isFinite else { return nil }
         return value
     }
@@ -58,9 +67,13 @@ public enum Calculator {
 
     private struct Parser {
         let chars: [Character]
+        let previous: Double?
         var pos = 0
 
-        init(_ chars: [Character]) { self.chars = chars }
+        init(_ chars: [Character], previous: Double?) {
+            self.chars = chars
+            self.previous = previous
+        }
 
         var atEnd: Bool {
             mutating get {
@@ -119,7 +132,7 @@ public enum Calculator {
             return base
         }
 
-        /// unary := ('-' | '+')? primary
+        /// unary := ('-' | '+' | '√')? primary
         mutating func unary() -> Double? {
             guard let op = peek() else { return nil }
             if op == "-" {
@@ -131,23 +144,61 @@ public enum Calculator {
                 pos += 1
                 return unary()
             }
+            if op == "√" {
+                pos += 1
+                guard let value = unary() else { return nil }
+                return value.squareRoot()
+            }
             return primary()
         }
 
-        /// primary := number | '(' expression ')'
+        /// primary := number | name | name '(' expression ')' | '(' expression ')'
         mutating func primary() -> Double? {
             guard let ch = peek() else { return nil }
-            if ch == "(" {
+            if ch == "(" { return parenthesized() }
+            if ch == "π" {
                 pos += 1
-                guard let value = expression(), peek() == ")" else { return nil }
-                pos += 1
-                return value
+                return .pi
             }
+            if ("a"..."z").contains(ch) { return named() }
             return number()
         }
 
+        mutating func parenthesized() -> Double? {
+            guard peek() == "(" else { return nil }
+            pos += 1
+            guard let value = expression(), peek() == ")" else { return nil }
+            pos += 1
+            return value
+        }
+
+        /// A constant, or a function applied to a parenthesized argument. Domain errors
+        /// such as `sqrt(-1)` yield NaN, which the final finiteness check rejects.
+        mutating func named() -> Double? {
+            let start = pos
+            while pos < chars.count, ("a"..."z").contains(chars[pos]) || chars[pos].isNumber { pos += 1 }
+            let name = String(chars[start..<pos])
+
+            switch name {
+            case "pi": return .pi
+            case "e": return M_E
+            case "ans": return previous
+            default: break
+            }
+            guard let function = Parser.functions[name], let argument = parenthesized() else { return nil }
+            return function(argument)
+        }
+
+        static let functions: [String: @Sendable (Double) -> Double] = [
+            "sqrt": { $0.squareRoot() }, "cbrt": cbrt, "abs": { abs($0) },
+            "round": { $0.rounded() }, "floor": { $0.rounded(.down) }, "ceil": { $0.rounded(.up) },
+            "exp": exp, "ln": log, "log": log10, "log10": log10, "log2": log2,
+            "sin": sin, "cos": cos, "tan": tan, "asin": asin, "acos": acos, "atan": atan,
+        ]
+
         mutating func number() -> Double? {
             skipSpaces()
+            if let value = prefixedInteger() { return value }
             let start = pos
             while pos < chars.count, chars[pos].isNumber { pos += 1 }
             if pos < chars.count, chars[pos] == "." {
@@ -156,6 +207,25 @@ public enum Calculator {
             }
             guard pos > start else { return nil }
             return Double(String(chars[start..<pos]))
+        }
+
+        /// `0x1f`, `0b101` or `0o17`. Nil, consuming nothing, when there is no prefix.
+        mutating func prefixedInteger() -> Double? {
+            guard pos + 1 < chars.count, chars[pos] == "0" else { return nil }
+            let radix: Int
+            switch chars[pos + 1] {
+            case "x": radix = 16
+            case "b": radix = 2
+            case "o": radix = 8
+            default: return nil
+            }
+            var end = pos + 2
+            while end < chars.count, chars[end].isASCII, chars[end].isHexDigit { end += 1 }
+            // Beyond 64 bits the literal is rejected rather than silently rounded.
+            guard end > pos + 2, let value = UInt64(String(chars[(pos + 2)..<end]), radix: radix)
+            else { return nil }
+            pos = end
+            return Double(value)
         }
     }
 }

@@ -18,12 +18,9 @@ public enum AppRanking {
             }
             return (match, frecency.adjustedScore(match.score, for: match.entry.id, now: now))
         }.sorted { a, b in
-            if a.1 != b.1 { return a.1 > b.1 }
-            if a.0.entry.lowerChars.count != b.0.entry.lowerChars.count {
-                return a.0.entry.lowerChars.count < b.0.entry.lowerChars.count
-            }
-            if a.0.entry.name != b.0.entry.name { return a.0.entry.name < b.0.entry.name }
-            return a.0.entry.instanceID < b.0.entry.instanceID
+            // Launch history reorders apps within a tier, never across tiers.
+            if a.0.tier.rawValue != b.0.tier.rawValue { return a.0.tier.rawValue > b.0.tier.rawValue }
+            return a.1 != b.1 ? a.1 > b.1 : a.0.entry.tieBreaksBefore(b.0.entry)
         }
 
         return ranked.prefix(limit).map(\.0)

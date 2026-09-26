@@ -14,9 +14,7 @@ final class SearchField: NSTextField {
         isBezeled = false
         drawsBackground = false
         focusRingType = .none
-        font = .systemFont(ofSize: 26, weight: .regular)
-        textColor = .labelColor
-        placeholderString = "Search"
+        font = .systemFont(ofSize: Metrics.queryFontSize, weight: .regular)
         cell?.usesSingleLineMode = true
         cell?.wraps = false
         cell?.isScrollable = true

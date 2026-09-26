@@ -1,4 +1,4 @@
-import CoreGraphics
+import AppKit
 
 /// Single source of truth for layout. Every size the panel uses comes from here.
 /// Values are measured from macOS 26 Spotlight captures, so the two are indistinguishable.
@@ -21,7 +21,7 @@ enum Metrics {
     /// The divider occupies the input's last point rather than sitting below it.
     static let dividerY: CGFloat = 56
 
-    /// App icon artwork fills only ~80% of its canvas, so a 44pt frame shows the same
+    /// App icon artwork fills only ~80% of its canvas, so a 45pt frame shows the same
     /// ~36pt squircle Spotlight does. Inset and gap are measured to the frame, not the art.
     static let iconSize: CGFloat = 45
     static let rowIconInset: CGFloat = 12.75
@@ -88,6 +88,13 @@ enum Metrics {
     /// full reach (blur + downward offset + the blur's tail) or the clip shows as a
     /// square halo.
     static let windowMargin: CGFloat = 110
+
+    /// The neutral colour the Tint setting blends the glass toward, per theme. At full
+    /// strength the panel is solid.
+    static func glassTint(dark: Bool) -> NSColor {
+        dark ? NSColor(srgbRed: 0.10, green: 0.10, blue: 0.11, alpha: 1)
+             : NSColor(srgbRed: 0.91, green: 0.91, blue: 0.92, alpha: 1)
+    }
 
     static let shadowRadius: CGFloat = 40
     static let shadowOffsetY: CGFloat = -18

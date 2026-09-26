@@ -61,3 +61,30 @@ struct FrecencyTests {
         #expect(f.adjustedScore(-4, for: "familiar", now: now) > -4)
     }
 }
+
+@Suite("Frecency editing")
+struct FrecencyEditingTests {
+    @Test func forgetRemovesOnlyThatApp() {
+        var f = Frecency()
+        f.recordLaunch("a")
+        f.recordLaunch("b")
+        let forgot = f.forget("a")
+        #expect(forgot)
+        #expect(f.records.keys.sorted() == ["b"])
+        #expect(f.multiplier(for: "a") == 1.0)
+    }
+
+    @Test func forgettingAnUnknownAppReportsNoChange() {
+        var f = Frecency()
+        let forgot = f.forget("never.launched")
+        #expect(!forgot)
+    }
+
+    @Test func removeAllClearsEverything() {
+        var f = Frecency()
+        f.recordLaunch("a")
+        f.recordLaunch("b")
+        f.removeAll()
+        #expect(f.records.isEmpty)
+    }
+}

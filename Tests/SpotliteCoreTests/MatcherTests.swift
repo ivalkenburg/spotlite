@@ -37,6 +37,15 @@ struct FuzzyScoringTests {
         #expect(top("am") == "Activity Monitor")
     }
 
+    @Test func nameStartBeatsAnAcronym() {
+        // "gh" is GitHub Desktop's acronym (the H is a camel hump) but Ghostty's start.
+        let ranked = Matcher().search("gh", in: [app("GitHub Desktop"), app("Ghostty")])
+        #expect(ranked.map(\.entry.name) == ["Ghostty", "GitHub Desktop"])
+        #expect(ranked.first?.positions == [0, 1])
+        #expect(Matcher().search("tv", in: [app("Ticket Viewer"), app("TV")]).first?.entry.name == "TV")
+        #expect(Matcher().search("map", in: [app("Markdown Preview"), app("Maps")]).first?.entry.name == "Maps")
+    }
+
     @Test func wordStartBeatsMidWord() {
         // "mo" starts a word in "Activity Monitor" but sits mid-word in "Automator".
         let names = search("mo").map(\.entry.name)
@@ -120,6 +129,14 @@ struct FuzzyScoringTests {
         let aliases = AliasIndex(aliases: ["test.Photoshop": "ps"])
         // The matched characters live in the alias, not in the displayed name.
         #expect(Matcher().search("ps", in: apps, aliases: aliases).first?.positions.isEmpty == true)
+    }
+
+    @Test func aliasOnlyOutranksNamesWhenItsStartIsTyped() {
+        let apps = [app("Safari"), app("Photoshop")]
+        let aliases = AliasIndex(aliases: ["test.Photoshop": "ps"])
+        #expect(Matcher().search("p", in: apps, aliases: aliases).first?.entry.name == "Photoshop")
+        // "s" sits inside the alias, so it must not take over a search for Safari.
+        #expect(Matcher().search("s", in: apps, aliases: aliases).first?.entry.name == "Safari")
     }
 
     @Test func blankAliasesAreIgnored() {

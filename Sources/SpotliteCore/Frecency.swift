@@ -31,6 +31,17 @@ public struct Frecency: Codable, Sendable {
         records[id] = record
     }
 
+    /// Forgets one app's launches.
+    /// - Returns: true if it had any, so the caller can skip a pointless write.
+    @discardableResult
+    public mutating func forget(_ id: String) -> Bool {
+        records.removeValue(forKey: id) != nil
+    }
+
+    public mutating func removeAll() {
+        records = [:]
+    }
+
     /// Multiplier in [1.0, 1.35] for a candidate's textual score.
     public func multiplier(for id: String, now: Date = Date()) -> Double {
         guard let record = records[id] else { return 1.0 }

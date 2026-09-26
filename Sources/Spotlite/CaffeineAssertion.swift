@@ -1,12 +1,15 @@
 import Foundation
 import IOKit.pwr_mgt
 
-enum CaffeineState: Equatable {
-    case inactive
-    case spotlite
-    case external
+/// Who is keeping the display awake. The two are independent: Spotlite's own switch
+/// works regardless of what other processes hold.
+struct CaffeineState: Equatable {
+    /// Spotlite holds its own assertion.
+    var spotlite = false
+    /// A `caffeinate` process is keeping the display awake.
+    var external = false
 
-    var isActive: Bool { self != .inactive }
+    var isActive: Bool { spotlite || external }
 }
 
 /// Keeps the display awake while active.
@@ -18,29 +21,20 @@ enum CaffeineState: Equatable {
 final class CaffeineAssertion {
 
     private var assertionID: IOPMAssertionID = IOPMAssertionID(0)
-    private var ownsAssertion = false
-    private var externalIsActive = false
-    private(set) var state: CaffeineState = .inactive
+    private(set) var state = CaffeineState()
     var onChange: ((CaffeineState) -> Void)?
 
-    /// - Returns: whether the assertion is active afterwards. A failed create leaves it
-    ///   off, so the row never shows a switch claiming the machine is being held awake
-    ///   when it isn't.
-    @discardableResult
-    func toggle() -> CaffeineState {
-        if ownsAssertion { release() }
-        else if state == .inactive { acquire() }
-        return state
+    /// Turns Spotlite's own assertion on or off. A failed create leaves it off, so the
+    /// row never shows a switch claiming the display is being held awake when it isn't.
+    func toggle() {
+        if state.spotlite { release() } else { acquire() }
     }
 
     /// Refreshes assertions owned by other processes. This is intentionally called only
     /// at lifecycle boundaries and by a coalescible status-item timer, never per keystroke.
     func refresh() {
-        guard let externalIsActive = CaffeineAssertion.relevantExternalAssertionState() else {
-            return
-        }
-        self.externalIsActive = externalIsActive
-        updateState(externalIsActive: externalIsActive)
+        guard let external = CaffeineAssertion.externalCaffeinateIsActive() else { return }
+        update { $0.external = external }
     }
 
     private func acquire() {
@@ -58,8 +52,7 @@ final class CaffeineAssertion {
             return
         }
         assertionID = id
-        ownsAssertion = true
-        updateState(externalIsActive: externalIsActive)
+        update { $0.spotlite = true }
         refresh()
     }
 
@@ -71,22 +64,24 @@ final class CaffeineAssertion {
             return
         }
         assertionID = IOPMAssertionID(0)
-        ownsAssertion = false
-        updateState(externalIsActive: externalIsActive)
+        update { $0.spotlite = false }
         refresh()
     }
 
-    private func updateState(externalIsActive: Bool) {
-        let updated: CaffeineState = ownsAssertion ? .spotlite : (externalIsActive ? .external : .inactive)
+    private func update(_ change: (inout CaffeineState) -> Void) {
+        var updated = state
+        change(&updated)
         guard updated != state else { return }
         state = updated
         onChange?(updated)
     }
 
-    /// Detects display-sleep assertions from any process and explicit `/usr/bin/caffeinate`
-    /// system-sleep assertions. The latter excludes automatic assertions such as powerd's
-    /// always-on "prevent sleep while display is on" entry.
-    private static func relevantExternalAssertionState() -> Bool? {
+    /// Whether another `caffeinate` process is keeping the display awake, as
+    /// `caffeinate -d` does. Deliberately narrow: tools that only hold off system sleep
+    /// (a bare `caffeinate`, or a build tool's `caffeinate -i`) leave the display free to
+    /// sleep, and video players hold display assertions incidentally rather than because
+    /// anyone asked for the Mac to stay awake.
+    private static func externalCaffeinateIsActive() -> Bool? {
         var unmanaged: Unmanaged<CFDictionary>?
         guard IOPMCopyAssertionsByProcess(&unmanaged) == kIOReturnSuccess,
               let assertions = unmanaged?.takeRetainedValue() as? [NSNumber: [[String: Any]]]
@@ -94,19 +89,13 @@ final class CaffeineAssertion {
 
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let displayType = kIOPMAssertionTypePreventUserIdleDisplaySleep as String
-        let idleSystemType = kIOPMAssertionTypePreventUserIdleSystemSleep as String
-        let systemType = kIOPMAssertionTypePreventSystemSleep as String
         let typeKey = kIOPMAssertionTypeKey as String
         let levelKey = kIOPMAssertionLevelKey as String
 
         for (pid, rows) in assertions where pid.int32Value != ownPID {
-            for row in rows {
-                guard (row[levelKey] as? NSNumber)?.intValue ?? 0 > 0,
-                      let type = row[typeKey] as? String else { continue }
-                if type == displayType { return true }
-
-                let processName = (row["Process Name"] as? String)?.lowercased()
-                if processName == "caffeinate", type == idleSystemType || type == systemType {
+            for row in rows where (row["Process Name"] as? String)?.lowercased() == "caffeinate" {
+                if (row[levelKey] as? NSNumber)?.intValue ?? 0 > 0,
+                   row[typeKey] as? String == displayType {
                     return true
                 }
             }

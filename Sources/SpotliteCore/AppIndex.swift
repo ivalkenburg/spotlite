@@ -14,16 +14,8 @@ public enum AppIndex {
         return dirs
     }
 
-    /// Loads the cached index if present, otherwise scans. The cache turns a ~90ms
-    /// cold scan of 88 bundles into a single small JSON read.
-    public static func loadCachedOrScan() -> [AppEntry] {
-        if let cached = loadCached() { return cached }
-        let scanned = scan()
-        Storage.saveIndex(scanned.map(\.cached))
-        return scanned
-    }
-
-    /// Returns an immediately usable cached snapshot. Callers that keep running must
+    /// Returns an immediately usable cached snapshot. The cache turns a ~90ms cold scan
+    /// of 88 bundles into a single small JSON read. Callers that keep running must
     /// revalidate it in the background: a cache cannot observe changes made while the
     /// process was not alive.
     public static func loadCached() -> [AppEntry]? {

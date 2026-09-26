@@ -64,13 +64,27 @@ public final class Matcher {
             // possible - unless an alias might supply it.
             if alias == nil, queryMask & ~entry.charMask != 0 { continue }
 
-            var best = score(q, entry.lowerChars, entry.bonus)
-
             // An alias match highlights nothing: the matched characters are in the alias,
             // not in the displayed name, so there is nothing honest to embolden.
-            if let alias, let hit = score(q, alias.chars, alias.bonus) {
-                let boosted = hit.score + Scoring.bonusAlias
-                if best == nil || boosted > best!.score { best = (score: boosted, positions: []) }
+            if let alias, alias.chars.starts(with: q), let hit = score(q, alias.chars, alias.bonus) {
+                out.append(MatchResult(entry: entry, score: hit.score, positions: [], tier: .aliasPrefix))
+                continue
+            }
+
+            // Highlights exactly the typed letters, which the completion then finishes.
+            if entry.lowerChars.starts(with: q), let hit = score(q, entry.lowerChars, entry.bonus) {
+                out.append(MatchResult(entry: entry, score: hit.score, positions: Array(0..<q.count),
+                                       tier: .namePrefix))
+                continue
+            }
+
+            var best = score(q, entry.lowerChars, entry.bonus)
+
+            // A letter from the middle of an alias is an ordinary partial match; only
+            // typing the alias's start makes it outrank other apps.
+            if let alias, let hit = score(q, alias.chars, alias.bonus),
+               best == nil || hit.score > best!.score {
+                best = (score: hit.score, positions: [])
             }
 
             // Acronym matching ("gc" -> Google Chrome) scores against the initials, then
@@ -88,14 +102,9 @@ public final class Matcher {
         }
 
         out.sort { a, b in
-            if a.score != b.score { return a.score > b.score }
-            // Deterministic tie-break: shorter name first, then alphabetical.
-            // lowerChars.count is O(1); String.count would walk the name on every comparison.
-            if a.entry.lowerChars.count != b.entry.lowerChars.count {
-                return a.entry.lowerChars.count < b.entry.lowerChars.count
-            }
-            if a.entry.name != b.entry.name { return a.entry.name < b.entry.name }
-            return a.entry.instanceID < b.entry.instanceID
+            // Raw values: comparing the enums directly more than doubled search time.
+            if a.tier.rawValue != b.tier.rawValue { return a.tier.rawValue > b.tier.rawValue }
+            return a.score != b.score ? a.score > b.score : a.entry.tieBreaksBefore(b.entry)
         }
         return Array(out.prefix(limit))
     }

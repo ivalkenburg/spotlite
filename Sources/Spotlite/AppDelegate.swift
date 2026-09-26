@@ -18,13 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let controller = SpotliteController(caffeine: caffeine, preferences: preferences)
         controller.onOpenSettings = { [weak self] in self?.openSettings() }
         controller.onPreferencesChanged = { [weak self] prefs in
-            guard let self else { return }
-            let enabledStatusItem = !self.preferences.showMenuBarIcon && prefs.showMenuBarIcon
-            self.preferences = prefs
-            self.applyTheme()
-            self.settings?.preferencesDidChange(prefs)
-            if enabledStatusItem { self.caffeine.refresh() }
-            self.refreshStatusItem()
+            self?.adoptPreferences(prefs) { self?.settings?.preferencesDidChange($0) }
         }
         controller.onIndexChanged = { [weak self] apps in
             self?.settings?.appsDidChange(apps)
@@ -161,18 +155,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The cup is a separate, transient status item. The normal Spotlite icon never
     /// changes identity, and no empty cup occupies menu-bar space while caffeine is off.
     private func refreshCaffeineStatusItem() {
-        guard caffeine.state.isActive else {
+        let state = caffeine.state
+        guard state.isActive else {
             if let caffeineStatusItem { NSStatusBar.system.removeStatusItem(caffeineStatusItem) }
             caffeineStatusItem = nil
             return
         }
 
-        let description: String
-        switch caffeine.state {
-        case .inactive: return
-        case .spotlite: description = "Caffeinate active in Spotlite"
-        case .external: description = "Caffeinate active in another app"
+        // One line per source, so turning Spotlite's off and seeing the cup stay makes sense.
+        var lines: [String] = []
+        if state.spotlite { lines.append("Caffeinate active in Spotlite") }
+        if state.external {
+            lines.append(state.spotlite ? "Also active in another app" : "Caffeinate active in another app")
         }
+        let description = lines.joined(separator: "\n")
 
         if caffeineStatusItem == nil {
             caffeineStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -189,10 +185,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let menu = NSMenu()
         menu.delegate = self
-        let state = NSMenuItem(title: description, action: nil, keyEquivalent: "")
-        state.isEnabled = false
-        menu.addItem(state)
-        if caffeine.state == .spotlite {
+        for line in lines {
+            let entry = NSMenuItem(title: line, action: nil, keyEquivalent: "")
+            entry.isEnabled = false
+            menu.addItem(entry)
+        }
+        if state.spotlite {
             menu.addItem(.separator())
             let turnOff = menu.addItem(withTitle: "Turn Off Caffeinate",
                                        action: #selector(turnOffCaffeine), keyEquivalent: "")
@@ -228,7 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showPanel() { controller.show() }
 
     @objc private func turnOffCaffeine() {
-        guard caffeine.state == .spotlite else { return }
+        guard caffeine.state.spotlite else { return }
         caffeine.toggle()
     }
 
@@ -238,15 +236,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func openSettings() {
         if settings == nil {
-            let controller = SettingsWindowController(preferences: preferences)
+            let controller = SettingsWindowController(preferences: preferences,
+                                                      library: self.controller.library)
             controller.onChange = { [weak self] prefs in
-                guard let self else { return }
-                let enabledStatusItem = !self.preferences.showMenuBarIcon && prefs.showMenuBarIcon
-                self.preferences = prefs
-                self.applyTheme()
-                self.controller.preferencesDidChange(prefs)
-                if enabledStatusItem { self.caffeine.refresh() }
-                self.refreshStatusItem()
+                self?.adoptPreferences(prefs) { self?.controller.preferencesDidChange($0) }
             }
             controller.onHotKeyChange = { [weak self] code, modifiers in
                 self?.rebindHotKey(code: code, modifiers: modifiers) ?? false
@@ -254,5 +247,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             settings = controller
         }
         settings?.show(apps: controller.indexedApps())
+    }
+
+    /// Applies preferences changed by the panel or by Settings. `forward` hands them to
+    /// the other side after the theme is applied, since the panel resolves its appearance
+    /// from the app's.
+    private func adoptPreferences(_ prefs: Preferences, forward: (Preferences) -> Void) {
+        let enabledStatusItem = !preferences.showMenuBarIcon && prefs.showMenuBarIcon
+        preferences = prefs
+        applyTheme()
+        forward(prefs)
+        if enabledStatusItem { caffeine.refresh() }
+        refreshStatusItem()
     }
 }

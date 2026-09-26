@@ -18,7 +18,7 @@ final class IconCache {
     private init() {
         // Sized to hold the whole index rather than a screenful. Scrolling the Settings
         // list past 64 apps would otherwise evict entries and re-rasterise them on the
-        // way back. At 44pt @2x an entry is 88x88x4 bytes, so 160 cost about 5MB.
+        // way back. At 45pt @2x an entry is 90x90x4 bytes, so 160 cost about 5MB.
         cache.countLimit = 160
     }
 
@@ -27,8 +27,8 @@ final class IconCache {
         cache.object(forKey: url.path as NSString)
     }
 
-    /// Loads off the main thread and calls back on it. The callback does not fire if the
-    /// icon was already cached — check `cached(for:)` first.
+    /// Loads off the main thread and calls back on it. It does not consult the cache, so
+    /// check `cached(for:)` first rather than paying for a second load.
     func load(for url: URL, completion: @escaping (NSImage) -> Void) {
         let key = url.path
 

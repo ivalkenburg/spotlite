@@ -68,6 +68,9 @@ final class SettingsRowView: NSView, NSTextFieldDelegate {
         label.stringValue = entry.name
         label.textColor = hidden ? .tertiaryLabelColor : .labelColor
         aliasField.stringValue = alias
+        // Hiding and aliases are keyed by bundle ID. Without one the checkbox would
+        // untick while the app stayed visible.
+        checkbox.isEnabled = entry.bundleID != nil
         aliasField.isEnabled = entry.bundleID != nil
 
         if let ready = IconCache.shared.cached(for: entry.url) {

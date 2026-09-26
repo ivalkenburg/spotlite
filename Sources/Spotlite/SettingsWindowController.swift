@@ -2,29 +2,37 @@ import AppKit
 import ServiceManagement
 import SpotliteCore
 
-/// Settings: theme, hotkey, launch-at-login, menu bar visibility, and the full app list with
-/// checkboxes. All changes apply live — macOS settings behave that way everywhere, and
+/// Settings: theme, hotkey, launch-at-login, menu bar visibility, launch history, and the
+/// full app list with checkboxes. All changes apply live — macOS settings behave that way everywhere, and
 /// an OK button would just add a state to get wrong.
 @MainActor
-final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate {
+final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate,
+                                      NSMenuDelegate {
 
     private var window: NSWindow?
     private let table = NSTableView()
     private let filterField = NSSearchField()
-    private var loginItemWarning = NSTextField(labelWithString: "")
-    private var hotKeyWarning = NSTextField(labelWithString: "")
+    private let loginItemWarning = NSTextField(labelWithString: "")
+    private let hotKeyWarning = NSTextField(labelWithString: "")
+    private let retentionValue = NSTextField(labelWithString: "")
     private var loginItemButton: NSButton?
+    private var resetHistoryButton: NSButton?
     private var hotKeyRecorder: HotKeyRecorder?
 
     private var preferences: Preferences
+    private let library: AppLibrary
     private var allApps: [AppEntry] = []
     private var visibleApps: [AppEntry] = []
+
+    /// Popup order of the Appearance menu.
+    private static let themeModes: [ThemeMode] = [.system, .light, .dark]
 
     var onChange: ((Preferences) -> Void)?
     var onHotKeyChange: ((UInt32, UInt32) -> Bool)?
 
-    init(preferences: Preferences) {
+    init(preferences: Preferences, library: AppLibrary) {
         self.preferences = preferences
+        self.library = library
         super.init()
     }
 
@@ -35,6 +43,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         if window == nil { buildWindow() }
         table.reloadData()
         updateLoginItemState()
+        updateHistoryState()
 
         // Stay .accessory and force activation: flipping to .regular would make a Dock
         // icon appear and disappear, which reads as a bug.
@@ -47,7 +56,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
 
     private func buildWindow() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 640),
             styleMask: [.titled, .closable],
             backing: .buffered, defer: false
         )
@@ -94,16 +103,44 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         let themeLabel = NSTextField(labelWithString: "Appearance")
         let themePicker = NSPopUpButton()
         themePicker.addItems(withTitles: ["System", "Light", "Dark"])
-        switch preferences.themeMode {
-        case .system: themePicker.selectItem(at: 0)
-        case .light: themePicker.selectItem(at: 1)
-        case .dark: themePicker.selectItem(at: 2)
-        }
+        themePicker.selectItem(at: Self.themeModes.firstIndex(of: preferences.themeMode) ?? 0)
         themePicker.target = self
         themePicker.action = #selector(themeChoiceChanged)
         let themeRow = NSStackView(views: [themeLabel, themePicker])
         themeRow.orientation = .horizontal
         themeRow.spacing = 12
+
+        let tintLabel = NSTextField(labelWithString: "Tint")
+        let tintSlider = NSSlider(value: preferences.glassTint, minValue: 0, maxValue: 1,
+                                  target: self, action: #selector(tintChanged))
+        // Saved once on release rather than on every step of the drag.
+        tintSlider.isContinuous = false
+        tintSlider.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        let clearLabel = NSTextField(labelWithString: "Clear")
+        let solidLabel = NSTextField(labelWithString: "Solid")
+        for end in [clearLabel, solidLabel] {
+            end.font = .systemFont(ofSize: 11)
+            end.textColor = .secondaryLabelColor
+        }
+        let tintRow = NSStackView(views: [tintLabel, clearLabel, tintSlider, solidLabel])
+        tintRow.orientation = .horizontal
+        tintRow.spacing = 8
+        tintRow.setCustomSpacing(12, after: tintLabel)
+
+        let retentionLabel = NSTextField(labelWithString: "Remember last search")
+        let retentionSlider = NSSlider(value: preferences.queryRetention, minValue: 0,
+                                       maxValue: QueryMemory.maxRetention,
+                                       target: self, action: #selector(retentionChanged))
+        // Continuous so the label follows the drag; the value is saved on release.
+        retentionSlider.isContinuous = true
+        retentionSlider.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        retentionValue.stringValue = Self.retentionText(preferences.queryRetention)
+        retentionValue.textColor = .secondaryLabelColor
+        retentionValue.widthAnchor.constraint(equalToConstant: 40).isActive = true
+        let retentionRow = NSStackView(views: [retentionLabel, retentionSlider, retentionValue])
+        retentionRow.orientation = .horizontal
+        retentionRow.spacing = 8
+        retentionRow.setCustomSpacing(12, after: retentionLabel)
 
         let screenLabel = NSTextField(labelWithString: "Open on")
         let screenPicker = NSPopUpButton()
@@ -125,6 +162,19 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
 
+        let historyLabel = NSTextField(labelWithString: "Launch history")
+        let resetHistory = NSButton(title: "Reset…", target: self, action: #selector(confirmResetHistory))
+        resetHistory.bezelStyle = .rounded
+        resetHistory.controlSize = .small
+        resetHistoryButton = resetHistory
+        let historyRow = NSStackView(views: [historyLabel, resetHistory])
+        historyRow.orientation = .horizontal
+        historyRow.spacing = 12
+        let historyHint = NSTextField(labelWithString:
+            "Apps you open often rank higher. Right-click an app below to forget just that one.")
+        historyHint.font = .systemFont(ofSize: 11)
+        historyHint.textColor = .secondaryLabelColor
+
         let listLabel = NSTextField(labelWithString: "Apps  (uncheck to hide, or give one a short alias)")
         listLabel.font = .systemFont(ofSize: 12, weight: .semibold)
 
@@ -139,6 +189,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         table.dataSource = self
         table.delegate = self
         table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("app")))
+        let rowMenu = NSMenu()
+        rowMenu.autoenablesItems = false
+        rowMenu.delegate = self
+        table.menu = rowMenu
 
         let scroll = NSScrollView()
         scroll.documentView = table
@@ -150,8 +204,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         hotKeyRow.spacing = 12
 
         let stack = NSStackView(views: [
-            hotKeyRow, hotKeyWarning, themeRow, screenRow, loginItem, loginItemWarning, menuBar, hint,
-            listLabel, filterField, scroll,
+            hotKeyRow, hotKeyWarning, themeRow, tintRow, retentionRow, screenRow, loginItem, loginItemWarning, menuBar, hint,
+            historyRow, historyHint, listLabel, filterField, scroll,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -172,7 +226,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         ])
         window.contentView = content
         self.window = window
-        updateLoginItemState()
     }
 
     // MARK: - Actions
@@ -189,9 +242,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
             : allApps.filter { $0.name.lowercased().contains(query) }
     }
 
+    /// SMAppService registers an absolute path. Registering from a build directory
+    /// produces a login item pointing at a path that `make clean` deletes.
+    private var isInstalled: Bool { Bundle.main.bundlePath.hasPrefix("/Applications/") }
+
     @objc private func toggleLoginItem(_ sender: NSButton) {
-        let installed = Bundle.main.bundlePath.hasPrefix("/Applications/")
-        guard sender.state == .off || installed else {
+        guard sender.state == .off || isInstalled else {
             sender.state = .off
             updateLoginItemState()
             return
@@ -208,11 +264,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         updateLoginItemState()
     }
 
-    /// SMAppService registers an absolute path. Registering from a build directory
-    /// produces a login item pointing at a path that `make clean` deletes.
     private func updateLoginItemState() {
-        let path = Bundle.main.bundlePath
-        let installed = path.hasPrefix("/Applications/")
+        let installed = isInstalled
         let status = SMAppService.mainApp.status
         loginItemButton?.state = (status == .enabled || status == .requiresApproval) ? .on : .off
         // A previously registered development copy must remain removable.
@@ -244,17 +297,75 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
     }
 
     @objc private func themeChoiceChanged(_ sender: NSPopUpButton) {
-        switch sender.indexOfSelectedItem {
-        case 1: preferences.themeMode = .light
-        case 2: preferences.themeMode = .dark
-        default: preferences.themeMode = .system
-        }
+        let index = sender.indexOfSelectedItem
+        preferences.themeMode = Self.themeModes.indices.contains(index) ? Self.themeModes[index] : .system
         persist()
+    }
+
+    @objc private func tintChanged(_ sender: NSSlider) {
+        preferences.glassTint = sender.doubleValue
+        persist()
+    }
+
+    @objc private func retentionChanged(_ sender: NSSlider) {
+        let seconds = sender.doubleValue.rounded()
+        retentionValue.stringValue = Self.retentionText(seconds)
+        guard NSApp.currentEvent?.type != .leftMouseDragged else { return }
+        preferences.queryRetention = seconds
+        persist()
+    }
+
+    private static func retentionText(_ seconds: TimeInterval) -> String {
+        seconds > 0 ? "\(Int(seconds)) s" : "Off"
     }
 
     @objc private func toggleMenuBarIcon(_ sender: NSButton) {
         preferences.showMenuBarIcon = (sender.state == .on)
         persist()
+    }
+
+    // MARK: - Launch history
+
+    /// Launches can happen while Settings is open, so this is refreshed whenever the
+    /// window comes forward rather than only when it is built.
+    private func updateHistoryState() {
+        resetHistoryButton?.isEnabled = library.hasHistory
+    }
+
+    /// Confirmed, unlike every other setting here: the history took months of use to
+    /// build and nothing can bring it back.
+    @objc private func confirmResetHistory() {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Reset launch history?"
+        alert.informativeText = "Results are ranked by name alone until Spotlite learns which apps you open again."
+        alert.addButton(withTitle: "Reset")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[0].hasDestructiveAction = true
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            self.library.resetHistory()
+            self.updateHistoryState()
+        }
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let row = table.clickedRow
+        guard visibleApps.indices.contains(row) else { return }
+        let app = visibleApps[row]
+        let item = NSMenuItem(title: "Forget Launch History", action: #selector(forgetHistory),
+                              keyEquivalent: "")
+        item.target = self
+        item.representedObject = app.id
+        item.isEnabled = library.hasHistory(for: app.id)
+        menu.addItem(item)
+    }
+
+    @objc private func forgetHistory(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        library.forgetHistory(for: id)
+        updateHistoryState()
     }
 
     private func persist() {
@@ -271,6 +382,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         allApps = apps
         applyFilter()
         table.reloadData()
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        updateHistoryState()
     }
 
     func windowDidResignKey(_ notification: Notification) {
