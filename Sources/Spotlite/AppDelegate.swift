@@ -89,10 +89,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Hotkey
 
+    private func makeHotKey(code: UInt32, modifiers: UInt32) -> HotKey? {
+        HotKey(keyCode: code, modifiers: modifiers) { [weak self] in self?.controller.toggle() }
+    }
+
     private func registerHotKey() {
-        hotKey = HotKey(keyCode: preferences.hotKeyCode, modifiers: preferences.hotKeyModifiers) { [weak self] in
-            self?.controller.toggle()
-        }
+        hotKey = makeHotKey(code: preferences.hotKeyCode, modifiers: preferences.hotKeyModifiers)
 
         if hotKey == nil {
             NSLog("Spotlite: hotkey registration failed — the chord is already claimed.")
@@ -105,9 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if code == preferences.hotKeyCode, modifiers == preferences.hotKeyModifiers { return true }
         // Register first. The currently working chord remains live if the replacement is
         // already claimed or event-handler installation fails.
-        guard let replacement = HotKey(keyCode: code, modifiers: modifiers, onFire: { [weak self] in
-            self?.controller.toggle()
-        }) else { return false }
+        guard let replacement = makeHotKey(code: code, modifiers: modifiers) else { return false }
         hotKey = replacement
         preferences.hotKeyCode = code
         preferences.hotKeyModifiers = modifiers

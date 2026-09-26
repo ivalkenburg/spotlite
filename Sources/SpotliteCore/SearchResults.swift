@@ -28,30 +28,39 @@ public enum SearchResults {
         previousResult: Double? = nil,
         now: Date = Date()
     ) -> [SearchResult] {
-        let trimmed = query.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return [] }
+        guard let trimmed = bounded(query) else { return [] }
 
         var result: [SearchResult] = []
         if let value = Calculator.evaluate(trimmed, previous: previousResult) {
             result.append(.calculation(expression: trimmed, value: value))
         }
 
-        let matches = matcher.search(trimmed, in: entries, aliases: aliases,
-                                     limit: max(1, entries.count))
+        // Unordered: ranking sorts them once, with launch history applied.
+        let matches = matcher.matches(trimmed, in: entries, aliases: aliases)
         let ranked = AppRanking.rank(matches, hiddenBundleIDs: hiddenBundleIDs,
                                      frecency: frecency, now: now)
         result.append(contentsOf: ranked.map(SearchResult.app))
 
         // The self-indexed escape hatch: reachable even with the menu bar icon hidden.
         if mentions(trimmed, keywords: settingsKeywords) { result.append(.settings) }
-        if offersCaffeinate(trimmed) { result.append(.caffeinate) }
+        if mentions(trimmed, keywords: caffeineKeywords) { result.append(.caffeinate) }
         return result
     }
 
     /// Whether `query` shows the Caffeinate row, so a caffeine change elsewhere only
     /// rebuilds the list when that row is on screen.
     public static func offersCaffeinate(_ query: String) -> Bool {
-        mentions(query.trimmingCharacters(in: .whitespaces), keywords: caffeineKeywords)
+        guard let trimmed = bounded(query) else { return false }
+        return mentions(trimmed, keywords: caffeineKeywords)
+    }
+
+    /// The trimmed query, or nil when it is empty or too long to produce any row: the
+    /// calculator and the matcher both reject longer input, and no keyword is that long.
+    /// Checked first so a large paste is never copied or lowercased on each keystroke.
+    private static func bounded(_ query: String) -> String? {
+        query.boundedTrimmedWhitespace(
+            maximumCount: max(Calculator.maxInputLength, Matcher.maxSupportedQuery)
+        ).map(String.init)
     }
 
     /// Three characters minimum, or a bare "s" or "p" would summon an entry on every search.

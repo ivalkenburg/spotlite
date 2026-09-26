@@ -29,6 +29,11 @@ struct SearchResultsTests {
         #expect(build("   ").isEmpty)
     }
 
+    @Test func oversizedQueryHasNoResults() {
+        #expect(build(" " + String(repeating: "1+", count: 200) + "1 ").isEmpty)
+        #expect(build(String(repeating: "s", count: 10_000)).isEmpty)
+    }
+
     @Test func calculationIsPinnedOnTop() {
         #expect(describe(build("2^3")) == ["= 8.0"])
     }

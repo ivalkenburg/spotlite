@@ -23,9 +23,13 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private var placement: PanelPlacement!
     private var items: [ResultItem] = []
     private var preferences: Preferences {
-        didSet { aliases = AliasIndex(aliases: preferences.aliases) }
+        // Not on every change: a drag writes the geometry here on every pointer move.
+        didSet {
+            guard preferences.aliases != oldValue.aliases else { return }
+            aliases = AliasIndex(aliases: preferences.aliases)
+        }
     }
-    /// Rebuilt only when preferences change, never per keystroke.
+    /// Rebuilt only when the aliases change, never per keystroke.
     private var aliases: AliasIndex
     private let caffeine: CaffeineAssertion
     private var cursor = 0
@@ -86,7 +90,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         library.onChange = { [weak self] apps in
             guard let self else { return }
             self.onIndexChanged?(apps)
-            if self.panel.isVisible { self.updateMatches(for: self.field.stringValue) }
+            if self.panel.isVisible { self.refreshMatches() }
         }
         NotificationCenter.default.addObserver(
             self, selector: #selector(resignedKey),
@@ -280,8 +284,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         caffeine.refresh()
         library.loadIfNeeded()
 
-        // Dev hook: prefill a query so the expanded state can be inspected.
-        let devQuery = ProcessInfo.processInfo.environment["SPOTLITE_DEV_QUERY"]
         let recalled = devQuery == nil ? queryMemory.recall(retention: preferences.queryRetention) : nil
         field.stringValue = devQuery ?? recalled ?? ""
         lastQuery = field.stringValue
@@ -393,6 +395,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     /// Dev captures steal key focus, which would dismiss the panel mid-measurement.
     private let pinnedOpen = ProcessInfo.processInfo.environment["SPOTLITE_DEV_PIN"] == "1"
+    /// Dev hook: prefill a query so the expanded state can be inspected. Read once:
+    /// `environment` builds a fresh dictionary on every access.
+    private let devQuery = ProcessInfo.processInfo.environment["SPOTLITE_DEV_QUERY"]
 
     @objc private func resignedKey() {
         guard !pinnedOpen else { return }
@@ -438,6 +443,18 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         table.reloadData()
         layoutList(animated: true)
         updateChrome()
+    }
+
+    /// Rebuilds the list for an unchanged query when something beneath it changes: the
+    /// index, or caffeine's state. A row the user arrowed to stays selected, so toggling
+    /// Caffeinate does not leave Return aimed at whatever now sits at the top.
+    private func refreshMatches() {
+        let navigatedTo = selection == .navigated && items.indices.contains(cursor)
+            ? items[cursor].identity : nil
+        updateMatches(for: field.stringValue)
+        guard let navigatedTo, let row = items.firstIndex(where: { $0.identity == navigatedTo })
+        else { return }
+        select(row, as: .navigated)
     }
 
     private func buildItems(for query: String) -> [ResultItem] {
@@ -711,7 +728,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     func caffeineStateDidChange() {
         guard panel.isVisible, SearchResults.offersCaffeinate(field.stringValue) else { return }
-        updateMatches(for: field.stringValue)
+        refreshMatches()
     }
 
     // MARK: - Table

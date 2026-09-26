@@ -73,6 +73,19 @@ struct AppIndexTests {
         #expect(Matcher().search("code", in: apps).first?.entry.name == "Visual Studio Code")
     }
 
+    @Test func rescanSeesInfoPlistChangedInPlace() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try makeApp(in: root, name: "Updated", bundleID: "test.before")
+        #expect(AppIndex.scan(directories: [root]).map(\.bundleID) == ["test.before"])
+
+        // An update rewrites the plist inside the same bundle path.
+        try makeApp(in: root, name: "Updated", bundleID: "test.after")
+        #expect(AppIndex.scan(directories: [root]).map(\.bundleID) == ["test.after"])
+        try makeApp(in: root, name: "Updated", bundleID: "test.after", background: true)
+        #expect(AppIndex.scan(directories: [root]).isEmpty)
+    }
+
     @Test func watcherCanStartAndStopForATemporaryDirectory() throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

@@ -57,10 +57,11 @@ public enum AppIndex {
                 }
             }
         }
-        return results.sorted {
-            let left = $0.name.lowercased(), right = $1.name.lowercased()
-            return left == right ? $0.instanceID < $1.instanceID : left < right
-        }
+        // Keys lowercased once, not twice per comparison.
+        let keyed: [(key: String, entry: AppEntry)] = results.map { ($0.name.lowercased(), $0) }
+        return keyed.sorted { a, b in
+            a.key == b.key ? a.entry.instanceID < b.entry.instanceID : a.key < b.key
+        }.map(\.entry)
     }
 
     /// Collects `.app` URLs, recursing into plain subfolders (vendor folders) but never into bundles.
@@ -88,8 +89,13 @@ public enum AppIndex {
     }
 
     /// Reads a bundle's Info.plist, rejecting background-only agents that have no UI to show.
+    ///
+    /// Read directly rather than through `Bundle(url:)`, which returns a process-wide
+    /// cached instance: every rescan would see each app's Info.plist as it was when first
+    /// indexed, and the cache would hold every bundle ever seen for the process's lifetime.
     private static func makeEntry(for url: URL) -> AppEntry? {
-        guard let bundle = Bundle(url: url), let info = bundle.infoDictionary else { return nil }
+        guard let info = CFBundleCopyInfoDictionaryInDirectory(url as CFURL) as? [String: Any]
+        else { return nil }
 
         if truthy(info["LSUIElement"]) || truthy(info["LSBackgroundOnly"]) { return nil }
 
@@ -103,7 +109,7 @@ public enum AppIndex {
         name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return nil }
 
-        return AppEntry(url: url, name: name, bundleID: bundle.bundleIdentifier)
+        return AppEntry(url: url, name: name, bundleID: info[kCFBundleIdentifierKey as String] as? String)
     }
 
     /// Info.plist booleans appear as Bool, String ("1"/"YES") or NSNumber depending on how they were written.

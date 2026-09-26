@@ -25,23 +25,18 @@ if CommandLine.arguments.contains("--bench") {
     let frecency = Storage.loadFrecency()
     let queries = ["s", "sa", "saf", "safa", "safar", "safari", "gc", "term", "a", "cal", "xyz"]
     var sink = 0
-    // Warm up, then time enough iterations to escape timer granularity.
-    for q in queries {
-        let matches = matcher.search(q, in: entries, aliases: aliases,
-                                     limit: max(1, entries.count))
-        sink &+= AppRanking.rank(matches, hiddenBundleIDs: preferences.hiddenBundleIDs,
-                                 frecency: frecency).count
+    // The same call each keystroke makes: calculator, matcher, ranking and built-ins.
+    func search(_ q: String) -> Int {
+        SearchResults.build(for: q, entries: entries, matcher: matcher, aliases: aliases,
+                            hiddenBundleIDs: preferences.hiddenBundleIDs, frecency: frecency).count
     }
+    // Warm up, then time enough iterations to escape timer granularity.
+    for q in queries { sink &+= search(q) }
 
     let iterations = 2000
     let start = DispatchTime.now().uptimeNanoseconds
     for _ in 0..<iterations {
-        for q in queries {
-            let matches = matcher.search(q, in: entries, aliases: aliases,
-                                         limit: max(1, entries.count))
-            sink &+= AppRanking.rank(matches, hiddenBundleIDs: preferences.hiddenBundleIDs,
-                                     frecency: frecency).count
-        }
+        for q in queries { sink &+= search(q) }
     }
     let elapsed = DispatchTime.now().uptimeNanoseconds - start
     let perSearch = Double(elapsed) / Double(iterations * queries.count) / 1000.0

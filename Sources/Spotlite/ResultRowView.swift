@@ -138,7 +138,13 @@ final class ResultRowView: NSTableCellView {
         configureIcon(for: item)
     }
 
+    /// What the hint stack shows now. Every keystroke re-renders the selected row, and
+    /// its hints rarely change, so identical ones keep their views.
+    private var shownHints: (hints: [ResultItem.Hint], mode: Vibrancy.Mode)?
+
     private func buildHints(_ hints: [ResultItem.Hint], mode: Vibrancy.Mode) {
+        if let shown = shownHints, shown.hints == hints, shown.mode == mode { return }
+        shownHints = (hints, mode)
         hintStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for hint in hints {
             let pair = NSStackView()

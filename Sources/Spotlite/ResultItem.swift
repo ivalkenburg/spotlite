@@ -20,6 +20,17 @@ enum ResultItem {
         }
     }
 
+    /// Unchanged when the list is rebuilt for the same query, so a selection can follow
+    /// its row. An app's is its path, which cannot collide with the fixed names.
+    var identity: String {
+        switch self {
+        case .app(let match): return match.entry.instanceID
+        case .calculation: return "calculation"
+        case .settings: return "settings"
+        case .caffeinate: return "caffeinate"
+        }
+    }
+
     var title: String {
         switch self {
         case .app(let match): return match.entry.name
@@ -112,9 +123,12 @@ enum ResultItem {
         return immediateIcon
     }
 
+    private static let home = FileManager.default.homeDirectoryForCurrentUser.path
+
+    /// Only a whole leading component: "/Users/ann" must not shorten "/Users/anna/…".
     private static func abbreviate(_ path: String) -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
+        guard path == home || path.hasPrefix(home + "/") else { return path }
+        return "~" + path.dropFirst(home.count)
     }
 
     // Built once rather than per row render: `icon` is read every time a row is configured.

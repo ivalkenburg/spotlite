@@ -36,8 +36,20 @@ public final class Matcher {
         aliases: AliasIndex = .empty,
         limit: Int = 50
     ) -> [MatchResult] {
-        guard limit > 0,
-              let trimmed = query.boundedTrimmedWhitespace(maximumCount: Matcher.maxSupportedQuery)
+        guard limit > 0 else { return [] }
+        var out = matches(query, in: entries, aliases: aliases)
+        out.sort { a, b in
+            // Raw values: comparing the enums directly more than doubled search time.
+            if a.tier.rawValue != b.tier.rawValue { return a.tier.rawValue > b.tier.rawValue }
+            return a.score != b.score ? a.score > b.score : a.entry.tieBreaksBefore(b.entry)
+        }
+        return Array(out.prefix(limit))
+    }
+
+    /// Every match, in index order. For callers that rank the matches themselves, so the
+    /// list is not sorted twice on every keystroke.
+    func matches(_ query: String, in entries: [AppEntry], aliases: AliasIndex = .empty) -> [MatchResult] {
+        guard let trimmed = query.boundedTrimmedWhitespace(maximumCount: Matcher.maxSupportedQuery)
         else { return [] }
         let q = Array(trimmed.lowercased())
         // Unicode case conversion can expand a character, so retain the post-conversion
@@ -48,7 +60,6 @@ public final class Matcher {
 
         let queryMask = Matcher.mask(of: q)
         var out: [MatchResult] = []
-        out.reserveCapacity(min(entries.count, limit * 2))
 
         for entry in entries {
             let alias = aliases.isEmpty ? nil : aliases[entry.id]
@@ -100,13 +111,7 @@ public final class Matcher {
                 out.append(MatchResult(entry: entry, score: best.score, positions: best.positions))
             }
         }
-
-        out.sort { a, b in
-            // Raw values: comparing the enums directly more than doubled search time.
-            if a.tier.rawValue != b.tier.rawValue { return a.tier.rawValue > b.tier.rawValue }
-            return a.score != b.score ? a.score > b.score : a.entry.tieBreaksBefore(b.entry)
-        }
-        return Array(out.prefix(limit))
+        return out
     }
 
     // MARK: - DP
