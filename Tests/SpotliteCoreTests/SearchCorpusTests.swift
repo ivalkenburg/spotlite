@@ -18,6 +18,12 @@ struct SearchCorpusTests {
                 == Array(apps.dropFirst()))
     }
 
+    @Test func dropsSwitchedOffCommandsButKeepsLinks() throws {
+        let link = try #require(Link(name: "Downloads", target: "/tmp").entry)
+        let all = apps + SystemCommand.entries + [link]
+        #expect(SearchCorpus(entries: all, includeCommands: false).entries == apps + [link])
+    }
+
     /// Aliases are resolved per entry after filtering, so a hidden entry before an
     /// aliased one must not shift the alias onto its neighbour.
     @Test func aliasesStayWithTheirEntryAfterFiltering() {

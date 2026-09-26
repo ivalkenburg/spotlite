@@ -2,14 +2,24 @@ import Foundation
 import SpotliteCore
 
 /// The indexed apps and their launch history: loading the cached index, keeping it
-/// current, and pruning history for apps that are gone.
+/// current, and pruning history for apps that are gone. Spotlite's own commands and the
+/// user's links are listed beside the index, never cached with it.
 @MainActor
 final class AppLibrary {
 
-    /// Already sorted by name.
+    /// The index plus `extras`, sorted by name.
     private(set) var entries: [AppEntry] = []
+    /// What the last scan found.
+    private var indexed: [AppEntry] = []
+    /// Commands and links. Setting them reports a change like a fresh scan does.
+    var extras: [AppEntry] = [] {
+        didSet {
+            combine()
+            onChange?(entries)
+        }
+    }
     private(set) var frecency = Storage.loadFrecency()
-    /// Called with every freshly scanned index.
+    /// Called with every freshly scanned index, and whenever `extras` change.
     var onChange: (([AppEntry]) -> Void)?
 
     /// Cached so pruning on every show doesn't rebuild it from the index each time.
@@ -27,8 +37,8 @@ final class AppLibrary {
     func loadIfNeeded() -> Bool {
         guard hasLoaded else {
             hasLoaded = true
-            entries = AppIndex.loadCached() ?? []
-            indexedIDs = Set(entries.map(\.id))
+            indexed = AppIndex.loadCached() ?? []
+            combine()
             pruneFrecency()
             fingerprint = AppIndex.directoriesFingerprint()
             startWatching()
@@ -58,11 +68,11 @@ final class AppLibrary {
                 AppIndex.refresh()
             }.value
             guard let self else { return }
-            self.entries = refreshed
-            self.indexedIDs = Set(refreshed.map(\.id))
+            self.indexed = refreshed
+            self.combine()
             self.pruneFrecency()
             self.fingerprint = AppIndex.directoriesFingerprint()
-            self.onChange?(refreshed)
+            self.onChange?(self.entries)
 
             self.refreshTask = nil
             if self.refreshPending {
@@ -90,10 +100,16 @@ final class AppLibrary {
         Storage.save(frecency)
     }
 
+    private func combine() {
+        entries = AppIndex.sortedByName(indexed + extras)
+        indexedIDs = Set(entries.map(\.id))
+    }
+
     /// Drops launch history for apps that are gone and caps what remains. Called when a
     /// cached or freshly scanned index is installed, never on the panel's hot path.
+    /// Not before an index exists: commands alone would erase every app's history.
     private func pruneFrecency() {
-        guard !indexedIDs.isEmpty else { return }
+        guard !indexed.isEmpty else { return }
         if frecency.prune(keeping: indexedIDs) { Storage.save(frecency) }
     }
 

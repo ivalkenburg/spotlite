@@ -27,7 +27,7 @@ bundle: build
 	@cp $(BIN) $(BUNDLE)/Contents/MacOS/$(APP)
 	@cp Resources/Info.plist $(BUNDLE)/Contents/Info.plist
 	@cp Resources/AppIcon.icns $(BUNDLE)/Contents/Resources/AppIcon.icns
-	@codesign --force --sign "$(IDENTITY)" $(SIGN_FLAGS) $(BUNDLE)
+	@codesign --force --sign "$(IDENTITY)" $(SIGN_FLAGS) --entitlements Resources/Spotlite.entitlements $(BUNDLE)
 	@echo "built $(BUNDLE)"
 
 run: bundle

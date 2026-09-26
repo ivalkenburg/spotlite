@@ -25,6 +25,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         case hiddenBundleIDs, aliases, panelScreen, panelGeometry, themeMode, glassTint
         case hotKeyCode, hotKeyModifiers, showMenuBarIcon, hasCompletedFirstRun
         case queryRetention, showSystemSettings
+        case showSystemCommands, showRecentApps, showRunningIndicator, showWebSearch, webSearchEngine, links
     }
 
     public var hiddenBundleIDs: Set<String>
@@ -46,6 +47,16 @@ public struct Preferences: Codable, Sendable, Equatable {
     public var queryRetention: TimeInterval
     /// Whether System Settings panes appear in results.
     public var showSystemSettings: Bool
+    /// Whether Lock Screen, Sleep, Restart and the other built-in commands appear.
+    public var showSystemCommands: Bool
+    /// Whether an empty query lists the most-launched apps rather than nothing.
+    public var showRecentApps: Bool
+    /// Whether a dot marks apps that are already running.
+    public var showRunningIndicator: Bool
+    /// Whether a last row offers the query to a web search engine.
+    public var showWebSearch: Bool
+    public var webSearchEngine: WebSearchEngine
+    public var links: [Link]
 
     /// Option-Space: free on a stock system, unlike Control-Space and Command-Space.
     ///
@@ -82,6 +93,14 @@ public struct Preferences: Codable, Sendable, Equatable {
         queryRetention = Preferences.clampedRetention(
             try c.decodeIfPresent(TimeInterval.self, forKey: .queryRetention) ?? 0)
         showSystemSettings = try c.decodeIfPresent(Bool.self, forKey: .showSystemSettings) ?? true
+        showSystemCommands = try c.decodeIfPresent(Bool.self, forKey: .showSystemCommands) ?? true
+        showRecentApps = try c.decodeIfPresent(Bool.self, forKey: .showRecentApps) ?? false
+        showRunningIndicator = try c.decodeIfPresent(Bool.self, forKey: .showRunningIndicator) ?? true
+        showWebSearch = try c.decodeIfPresent(Bool.self, forKey: .showWebSearch) ?? true
+        // An engine a later build removed falls back rather than resetting every setting.
+        webSearchEngine = (try? c.decodeIfPresent(WebSearchEngine.self, forKey: .webSearchEngine)) ?? .google
+        // Per element: one hand-edited link must not reset every other setting.
+        links = (try? c.decodeIfPresent([Lossy<Link>].self, forKey: .links))?.compactMap(\.value) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -99,6 +118,12 @@ public struct Preferences: Codable, Sendable, Equatable {
         try c.encode(hasCompletedFirstRun, forKey: .hasCompletedFirstRun)
         try c.encode(queryRetention, forKey: .queryRetention)
         try c.encode(showSystemSettings, forKey: .showSystemSettings)
+        try c.encode(showSystemCommands, forKey: .showSystemCommands)
+        try c.encode(showRecentApps, forKey: .showRecentApps)
+        try c.encode(showRunningIndicator, forKey: .showRunningIndicator)
+        try c.encode(showWebSearch, forKey: .showWebSearch)
+        try c.encode(webSearchEngine, forKey: .webSearchEngine)
+        try c.encode(links, forKey: .links)
     }
 
     public init(
@@ -113,7 +138,13 @@ public struct Preferences: Codable, Sendable, Equatable {
         showMenuBarIcon: Bool = true,
         hasCompletedFirstRun: Bool = false,
         queryRetention: TimeInterval = 0,
-        showSystemSettings: Bool = true
+        showSystemSettings: Bool = true,
+        showSystemCommands: Bool = true,
+        showRecentApps: Bool = false,
+        showRunningIndicator: Bool = true,
+        showWebSearch: Bool = true,
+        webSearchEngine: WebSearchEngine = .google,
+        links: [Link] = []
     ) {
         self.hiddenBundleIDs = hiddenBundleIDs
         self.aliases = aliases
@@ -127,6 +158,19 @@ public struct Preferences: Codable, Sendable, Equatable {
         self.hasCompletedFirstRun = hasCompletedFirstRun
         self.queryRetention = Preferences.clampedRetention(queryRetention)
         self.showSystemSettings = showSystemSettings
+        self.showSystemCommands = showSystemCommands
+        self.showRecentApps = showRecentApps
+        self.showRunningIndicator = showRunningIndicator
+        self.showWebSearch = showWebSearch
+        self.webSearchEngine = webSearchEngine
+        self.links = links
+    }
+
+    /// The entries Spotlite adds to the scanned index: its commands and the user's links.
+    /// Commands are always listed, so Settings can show them; the corpus drops them when
+    /// they are switched off, as it does panes.
+    public var extraEntries: [AppEntry] {
+        SystemCommand.entries + links.compactMap(\.entry)
     }
 
     /// A hand-edited file must not produce a tint the glass cannot represent.
@@ -137,6 +181,12 @@ public struct Preferences: Codable, Sendable, Equatable {
     private static func clampedRetention(_ value: TimeInterval) -> TimeInterval {
         value.isFinite ? min(max(value, 0), QueryMemory.maxRetention) : 0
     }
+}
+
+/// Decodes to nil instead of throwing, so one bad element doesn't fail its whole array.
+private struct Lossy<T: Decodable>: Decodable {
+    let value: T?
+    init(from decoder: Decoder) throws { value = try? T(from: decoder) }
 }
 
 /// Reads and writes the two on-disk files. Preferences and frecency live together in

@@ -25,17 +25,28 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private var preferences: Preferences {
         // Not on every change: a drag writes the geometry here on every pointer move.
         didSet {
+            // The library reports the change, which rebuilds the corpus.
+            if preferences.links != oldValue.links {
+                library.extras = preferences.extraEntries
+                return
+            }
             guard preferences.aliases != oldValue.aliases
                 || preferences.hiddenBundleIDs != oldValue.hiddenBundleIDs
                 || preferences.showSystemSettings != oldValue.showSystemSettings
+                || preferences.showSystemCommands != oldValue.showSystemCommands
             else { return }
             rebuildCorpus()
         }
     }
-    /// Rebuilt when the index, aliases, hidden apps or pane setting change, never per keystroke.
+    /// Rebuilt when the index, aliases, hidden apps, links or kind settings change, never
+    /// per keystroke.
     private var corpus = SearchCorpus.empty
     private let caffeine: CaffeineAssertion
     private var cursor = 0
+    /// Bundle paths of running apps, taken when the panel opens rather than per row
+    /// render. The panel lives for seconds, so launches while it is open don't matter.
+    /// Taken even with the dot off: the Quit hint needs it too.
+    private var runningPaths: Set<String> = []
 
     /// Spotlight's three selection states. The top hit is marked softly; arrowing turns
     /// the selection solid accent blue; the first Backspace after a completion removes
@@ -89,6 +100,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         moveHandle.receiver = placement
         leadingEdge.receiver = placement
         trailingEdge.receiver = placement
+        // Before `onChange` is set: nothing is listening yet.
+        library.extras = preferences.extraEntries
         library.onChange = { [weak self] apps in
             guard let self else { return }
             self.rebuildCorpus()
@@ -286,6 +299,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         applyResolvedAppearance()
         caffeine.refresh()
         loadLibrary()
+        runningPaths = Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL?.standardizedFileURL.path })
 
         let recalled = devQuery == nil ? queryMemory.recall(retention: preferences.queryRetention) : nil
         field.stringValue = devQuery ?? recalled ?? ""
@@ -364,7 +378,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         corpus = SearchCorpus(entries: library.entries,
                               aliases: AliasIndex(aliases: preferences.aliases),
                               hiddenBundleIDs: preferences.hiddenBundleIDs,
-                              includeSettingsPanes: preferences.showSystemSettings)
+                              includeSettingsPanes: preferences.showSystemSettings,
+                              includeCommands: preferences.showSystemCommands)
     }
 
     func hide() {
@@ -475,9 +490,14 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         let state = caffeine.state
         return SearchResults.build(for: query, corpus: corpus, matcher: matcher,
                                    frecency: library.frecency,
-                                   previousResult: previousResult)
+                                   previousResult: previousResult,
+                                   recents: preferences.showRecentApps ? Self.recentCount : 0,
+                                   webSearch: preferences.showWebSearch ? preferences.webSearchEngine : nil)
             .map { ResultItem($0, caffeine: state) }
     }
+
+    /// Enough to fill the panel without scrolling.
+    private static let recentCount = 6
 
     private var calculationFirst: Bool {
         if case .calculation = items.first { return true }
@@ -553,7 +573,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// The completion pill and the bar icon both follow the selected row, and both
     /// disappear when Backspace dismisses the completion.
     private func updateChrome() {
-        guard selection != .dismissed, items.indices.contains(cursor), !field.stringValue.isEmpty else {
+        // Blank, not just empty: recents answer a query of spaces too, and a completion
+        // pill after nothing would read as a stray " — Safari".
+        guard selection != .dismissed, items.indices.contains(cursor),
+              !field.stringValue.allSatisfy(\.isWhitespace) else {
             bar.clear()
             return
         }
@@ -645,10 +668,30 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             // that anything happened, and closing would hide it.
             caffeine.toggle()
 
+        case .webSearch(let query, let engine):
+            hide()
+            guard let url = engine.url(for: query) else { return }
+            NSWorkspace.shared.open(url)
+
         case .app(let match) where match.entry.kind == .settingsPane:
             library.recordLaunch(match.entry.id)
             hide()
             openSettingsPane(match.entry)
+
+        case .app(let match) where match.entry.kind == .command:
+            guard let command = SystemCommand(id: match.entry.id) else { return }
+            library.recordLaunch(match.entry.id)
+            hide()
+            SystemCommandRunner.run(command)
+
+        case .app(let match) where match.entry.kind == .link:
+            library.recordLaunch(match.entry.id)
+            hide()
+            // A folder that has since gone, or an address no app handles.
+            NSWorkspace.shared.open(match.entry.url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                guard error != nil else { return }
+                Task { @MainActor in NSSound.beep() }
+            }
 
         case .app(let match):
             let entry = match.entry
@@ -691,9 +734,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     /// The app under the cursor, or a beep when the cursor is on something that isn't
     /// an app — the alternate actions have no meaning for a calculation, Settings or a pane.
-    private func appUnderCursor() -> MatchResult? {
+    /// Links answer too where asked: they have a path or an address to reveal or copy.
+    private func appUnderCursor(allowingLinks: Bool = false) -> MatchResult? {
         guard items.indices.contains(cursor), case .app(let match) = items[cursor],
-              match.entry.kind == .app else {
+              match.entry.kind == .app || (allowingLinks && match.entry.kind == .link) else {
             NSSound.beep()
             return nil
         }
@@ -701,15 +745,20 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     private func revealInFinder() {
-        guard let match = appUnderCursor() else { return }
+        guard let match = appUnderCursor(allowingLinks: true) else { return }
+        guard match.entry.url.isFileURL else {
+            NSSound.beep()
+            return
+        }
         hide()
         NSWorkspace.shared.activateFileViewerSelecting([match.entry.url])
     }
 
     private func copyPath() {
-        guard let match = appUnderCursor() else { return }
+        guard let match = appUnderCursor(allowingLinks: true) else { return }
+        let url = match.entry.url
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(match.entry.url.path, forType: .string)
+        NSPasteboard.general.setString(url.isFileURL ? url.path : url.absoluteString, forType: .string)
         hide()
     }
 
@@ -791,7 +840,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                 v.identifier = ResultRowView.reuseID
                 return v
             }()
-        view.configure(with: items[row], selection: rowSelection(row), modifiers: modifiers)
+        view.configure(with: items[row], selection: rowSelection(row), modifiers: modifiers,
+                       running: items[row].isRunning(in: runningPaths),
+                       marksRunning: preferences.showRunningIndicator)
         return view
     }
 

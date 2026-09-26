@@ -22,12 +22,13 @@ public enum AppRanking {
         return ranked.prefix(limit).map(\.0)
     }
 
-    /// Tiers, with a settings pane just below an app of the same tier. A launcher is for
-    /// apps first, but "home" should reach the Home pane before Google cHrOMe's scattered
-    /// letters. An alias is the top tier, and a pane's counts as much as an app's: the
-    /// user asked for it by name.
+    /// Tiers, with a settings pane or command just below an app of the same tier. A
+    /// launcher is for apps first, but "home" should reach the Home pane before Google
+    /// cHrOMe's scattered letters. An alias is the top tier, and a pane's counts as much
+    /// as an app's: the user asked for it by name. So does a link, which the user made.
     private static func precedence(_ match: MatchResult) -> Int {
-        let appFirst = match.entry.kind == .app || match.tier == .aliasPrefix
+        let kind = match.entry.kind
+        let appFirst = kind == .app || kind == .link || match.tier == .aliasPrefix
         return match.tier.rawValue * 2 + (appFirst ? 1 : 0)
     }
 }

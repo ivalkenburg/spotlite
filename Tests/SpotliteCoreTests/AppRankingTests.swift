@@ -23,6 +23,17 @@ struct AppRankingTests {
         #expect(ranked.map(\.entry.bundleID) == ["app", "pane"])
     }
 
+    /// A command waits behind an app like a pane; a link the user made does not.
+    @Test func commandsYieldToAppsButLinksDoNot() {
+        let matches = [
+            match("Sleep", id: "command", score: 200, tier: .namePrefix, kind: .command),
+            match("Slack", id: "app", score: 10, tier: .namePrefix),
+            match("Slides", id: "link", score: 100, tier: .namePrefix, kind: .link),
+        ]
+        let ranked = AppRanking.rank(matches, frecency: Frecency())
+        #expect(ranked.map(\.entry.bundleID) == ["link", "app", "command"])
+    }
+
     /// "home" must not put Google cHrOMe's scattered letters above the Home pane.
     @Test func paneNameStartBeatsAScatteredAppMatch() {
         let matches = [

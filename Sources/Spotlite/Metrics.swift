@@ -29,6 +29,10 @@ enum Metrics {
     /// App icon artwork sits slightly above its canvas's centre; this re-centres it.
     static let rowIconDrop: CGFloat = 0.75
     static let highlightInset: CGFloat = 10
+    /// The running-app dot, centred this far below the icon frame's bottom edge. The
+    /// artwork stops short of the frame, so the dot sits just under the squircle.
+    static let runningDotSize: CGFloat = 4
+    static let runningDotDrop: CGFloat = -1
     /// Concentric with the panel's corners: the panel radius less the highlight's inset.
     static let highlightRadius: CGFloat = cornerRadius - highlightInset
     static let titleFontSize: CGFloat = 17

@@ -70,7 +70,7 @@ public enum AppIndex {
         return results
     }
 
-    static func sortedByName(_ entries: [AppEntry]) -> [AppEntry] {
+    public static func sortedByName(_ entries: [AppEntry]) -> [AppEntry] {
         // Keys lowercased once, not twice per comparison.
         let keyed: [(key: String, entry: AppEntry)] = entries.map { ($0.name.lowercased(), $0) }
         return keyed.sorted { a, b in

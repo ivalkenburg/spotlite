@@ -17,6 +17,8 @@ final class ResultRowView: NSTableCellView {
     private let hintStack = NSStackView()
     private let highlight = NSView()
     private let stateSwitch = NSSwitch()
+    /// Under the icon, as the Dock marks a running app.
+    private let runningDot = NSView()
     /// Hints end at the row's edge, or just before the switch on rows that carry one.
     private var hintsBeforeEdge: NSLayoutConstraint!
     private var hintsBeforeSwitch: NSLayoutConstraint!
@@ -48,7 +50,11 @@ final class ResultRowView: NSTableCellView {
         // The row owns the click; the switch only reports state.
         stateSwitch.isEnabled = false
 
-        for v in [highlight, icon, label, hintStack, stateSwitch] {
+        runningDot.wantsLayer = true
+        runningDot.layer?.cornerRadius = Metrics.runningDotSize / 2
+        runningDot.isHidden = true
+
+        for v in [highlight, icon, label, hintStack, stateSwitch, runningDot] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -75,6 +81,11 @@ final class ResultRowView: NSTableCellView {
             stateSwitch.trailingAnchor.constraint(equalTo: trailingAnchor,
                                                   constant: -Metrics.horizontalInset),
             stateSwitch.centerYAnchor.constraint(equalTo: highlight.centerYAnchor),
+
+            runningDot.centerXAnchor.constraint(equalTo: icon.centerXAnchor),
+            runningDot.centerYAnchor.constraint(equalTo: icon.bottomAnchor, constant: Metrics.runningDotDrop),
+            runningDot.widthAnchor.constraint(equalToConstant: Metrics.runningDotSize),
+            runningDot.heightAnchor.constraint(equalToConstant: Metrics.runningDotSize),
         ])
         hintsBeforeEdge = hintStack.trailingAnchor.constraint(equalTo: trailingAnchor,
                                                               constant: -Metrics.horizontalInset)
@@ -86,13 +97,14 @@ final class ResultRowView: NSTableCellView {
     required init?(coder: NSCoder) { fatalError() }
 
     private var lastConfiguration: (item: ResultItem, selection: RowSelection,
-                                    modifiers: NSEvent.ModifierFlags)?
+                                    modifiers: NSEvent.ModifierFlags, running: Bool, marksRunning: Bool)?
 
     /// Colours depend on the appearance, so a theme change re-applies them.
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         guard let last = lastConfiguration else { return }
-        configure(with: last.item, selection: last.selection, modifiers: last.modifiers)
+        configure(with: last.item, selection: last.selection, modifiers: last.modifiers,
+                  running: last.running, marksRunning: last.marksRunning)
     }
 
     /// Identifies which icon this reused row is currently waiting for, so a slow load
@@ -100,8 +112,11 @@ final class ResultRowView: NSTableCellView {
     /// wrong app's icon.
     private var pendingIconURL: URL?
 
-    func configure(with item: ResultItem, selection: RowSelection, modifiers: NSEvent.ModifierFlags) {
-        lastConfiguration = (item, selection, modifiers)
+    /// `running` drives the Quit hint; `marksRunning` is the setting that also shows it
+    /// as a dot.
+    func configure(with item: ResultItem, selection: RowSelection, modifiers: NSEvent.ModifierFlags,
+                   running: Bool, marksRunning: Bool) {
+        lastConfiguration = (item, selection, modifiers, running, marksRunning)
         let mode = Vibrancy.mode(for: effectiveAppearance)
 
         label.stringValue = item.title
@@ -120,7 +135,18 @@ final class ResultRowView: NSTableCellView {
             highlight.layer?.backgroundColor = Vibrancy.selectionColor.cgColor
         }
 
-        let hints = selection == .none ? [] : item.hints(modifiers: modifiers)
+        runningDot.isHidden = !(running && marksRunning)
+        if !runningDot.isHidden {
+            // Solid white over the blue; elsewhere it shifts the glass like secondary text.
+            if selection == .navigated {
+                runningDot.layer?.compositingFilter = nil
+                runningDot.layer?.backgroundColor = NSColor.white.cgColor
+            } else {
+                Vibrancy.fill(runningDot, Vibrancy.secondary, mode)
+            }
+        }
+
+        let hints = selection == .none ? [] : item.hints(modifiers: modifiers, running: running)
         // Over the blue, hints lighten in both themes: darkening would muddy the accent.
         buildHints(hints, mode: selection == .navigated ? .lighten : mode)
 

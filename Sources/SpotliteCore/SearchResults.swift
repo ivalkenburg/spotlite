@@ -7,12 +7,13 @@ public enum SearchResult {
     case app(MatchResult)
     case settings
     case caffeinate
+    case webSearch(query: String, engine: WebSearchEngine)
 }
 
 /// Assembles the result list for a query: a calculation pinned on top when the query is
 /// arithmetic, then apps ranked by textual score plus frecency, then the built-in
-/// entries the query asks for. Apps still appear below a calculation, since `x^2`
-/// shouldn't hide an app named X.
+/// entries the query asks for, then the web search. Apps still appear below a
+/// calculation, since `x^2` shouldn't hide an app named X.
 public enum SearchResults {
     /// Queries that offer the Settings and Caffeinate entries alongside any app matches.
     static let settingsKeywords = ["settings", "preferences", "spotlite"]
@@ -24,9 +25,20 @@ public enum SearchResults {
         matcher: Matcher,
         frecency: Frecency,
         previousResult: Double? = nil,
+        recents: Int = 0,
+        webSearch: WebSearchEngine? = nil,
         now: Date = Date()
     ) -> [SearchResult] {
-        guard let trimmed = bounded(query) else { return [] }
+        if query.allSatisfy(\.isWhitespace) {
+            return recentEntries(in: corpus, frecency: frecency, limit: recents, now: now).map(SearchResult.app)
+        }
+        guard let trimmed = bounded(query) else {
+            // Too long for the calculator and the matcher, but a pasted error message is
+            // just what a web search is for.
+            guard let webSearch,
+                  let long = query.boundedTrimmedWhitespace(maximumCount: maxWebQuery) else { return [] }
+            return [.webSearch(query: String(long), engine: webSearch)]
+        }
 
         var result: [SearchResult] = []
         if let value = Calculator.evaluate(trimmed, previous: previousResult) {
@@ -41,7 +53,39 @@ public enum SearchResults {
         // The self-indexed escape hatch: reachable even with the menu bar icon hidden.
         if mentions(trimmed, keywords: settingsKeywords) { result.append(.settings) }
         if mentions(trimmed, keywords: caffeineKeywords) { result.append(.caffeinate) }
+        // Last, so it only becomes the top hit when nothing on this Mac matches. Not
+        // under a calculation: arithmetic is already answered, and the card would lose
+        // its standalone shape to a row nobody wants.
+        if let webSearch, !isCalculation(result) {
+            result.append(.webSearch(query: trimmed, engine: webSearch))
+        }
         return result
+    }
+
+    /// Longer than any typed query, short enough to stay a sane URL.
+    static let maxWebQuery = 2_000
+
+    private static func isCalculation(_ results: [SearchResult]) -> Bool {
+        if case .calculation = results.first { return true }
+        return false
+    }
+
+    /// The most-launched apps still in the corpus, strongest first. Built only for an
+    /// empty query, so the id lookup is not paid per keystroke.
+    ///
+    /// Apps only: with commands here, the shortcut and Return could lock or restart
+    /// the Mac, and panes or links are not what "recent apps" promises.
+    static func recentEntries(in corpus: SearchCorpus, frecency: Frecency, limit: Int,
+                              now: Date = Date()) -> [MatchResult] {
+        guard limit > 0, !frecency.records.isEmpty else { return [] }
+        // The first copy of an app stands for its id, as launch history is shared.
+        var byID: [String: AppEntry] = [:]
+        for entry in corpus.entries where entry.kind == .app && byID[entry.id] == nil { byID[entry.id] = entry }
+        return frecency.records.keys
+            .compactMap { id in byID[id].map { ($0, frecency.multiplier(for: id, now: now)) } }
+            .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.tieBreaksBefore($1.0) }
+            .prefix(limit)
+            .map { MatchResult(entry: $0.0, score: 0, positions: []) }
     }
 
     /// Whether `query` shows the Caffeinate row, so a caffeine change elsewhere only

@@ -35,6 +35,22 @@ keystroke.
   hardware or setup, like Mouse or Headphones, are listed whether or not they apply.
 - **Hide apps you never launch.** Command-Delete on a result hides it; the full
   list with checkboxes lives in Settings.
+- **Recent apps.** With "Show recent apps before you type" on (off by default), the
+  empty panel lists the six apps you launch most, so the shortcut then Return
+  reopens your usual app.
+- **Running apps are marked** with a small dot under the icon, as in the Dock. A
+  checkbox in Settings turns it off.
+- **System commands.** Lock Screen, Sleep, Sleep Displays, Start Screen Saver,
+  Restart, Shut Down, Log Out, Empty Trash and Toggle Dark Mode search like apps,
+  ranked just below an app matched as strongly. Each can be hidden or given an alias
+  like an app, and a checkbox turns them all off. Restart, Shut Down and Log Out show
+  macOS's own confirmation; Empty Trash asks first.
+- **Links.** "Add Link…" in Settings gives a folder, file or web address a name and
+  an optional alias, so `dl` can open `~/Downloads` and `gh` a GitHub page. A bare
+  host like `github.com` gets `https://`. Right-click a link in the list to edit or
+  remove it.
+- **Web search.** The last row offers the query to Google, DuckDuckGo, Bing or Kagi,
+  so when nothing on the Mac matches, Return searches the web. It can be turned off.
 - **Aliases.** Teach it that `ps` means Photoshop. Typing the start of an alias
   outranks every name match, and works even when the name shares no letters with it.
 - **Caffeinate.** Search for it to get a row with a switch that keeps the display
@@ -93,8 +109,8 @@ It does not add itself as a login item unless you ask it to.
 | `Return` | Launch the selected app, or copy a calculator result |
 | `Backspace` | First removes the completion, then deletes as usual |
 | `Command-1` to `Command-9` | Launch the nth result directly |
-| `Command-Return` | Reveal the selected app in Finder |
-| `Option-Return` | Copy the selected app's path |
+| `Command-Return` | Reveal the selected app or file link in Finder |
+| `Option-Return` | Copy the selected app's path, or a link's path or address |
 | `Command-Q` | Quit the selected app, if it is running |
 | `Command-Delete` | Hide the selected app from results |
 | `Escape` | Close |
@@ -126,10 +142,15 @@ the menu bar icon turned off.
 
 ## Permissions
 
-None. The global shortcut uses Carbon's `RegisterEventHotKey`, which needs no
-Accessibility access and is dispatched by the window server rather than waking the
-process on every keystroke. Spotlite is not sandboxed, because a sandboxed app
-cannot launch arbitrary applications.
+None to search and launch. The global shortcut uses Carbon's `RegisterEventHotKey`,
+which needs no Accessibility access and is dispatched by the window server rather than
+waking the process on every keystroke. Spotlite is not sandboxed, because a sandboxed
+app cannot launch arbitrary applications.
+
+Some commands send an Apple event, which macOS asks you to allow once per target
+under Privacy & Security › Automation: Restart, Shut Down and Log Out (loginwindow),
+Empty Trash (Finder) and Toggle Dark Mode (System Events). Lock Screen, Sleep and the
+screen saver need nothing.
 
 ## How it works
 

@@ -65,7 +65,12 @@ final class SettingsRowView: NSView, NSTextFieldDelegate {
     func configure(with entry: AppEntry, hidden: Bool, alias: String) {
         self.entry = entry
         checkbox.state = hidden ? .off : .on
-        label.stringValue = entry.kind == .settingsPane ? "\(entry.name) (System Settings)" : entry.name
+        switch entry.kind {
+        case .app: label.stringValue = entry.name
+        case .settingsPane: label.stringValue = "\(entry.name) (System Settings)"
+        case .command: label.stringValue = "\(entry.name) (Command)"
+        case .link: label.stringValue = "\(entry.name) (Link)"
+        }
         label.textColor = hidden ? .tertiaryLabelColor : .labelColor
         aliasField.stringValue = alias
         // Hiding and aliases are keyed by bundle ID. Without one the checkbox would
@@ -73,15 +78,27 @@ final class SettingsRowView: NSView, NSTextFieldDelegate {
         checkbox.isEnabled = entry.bundleID != nil
         aliasField.isEnabled = entry.bundleID != nil
 
-        if let ready = IconCache.shared.cached(for: entry.url) {
+        // The same icons as the panel: a command's symbol, and for a web link the
+        // browser it opens in.
+        if entry.kind == .command {
+            pendingIconURL = nil
+            iconView.image = ResultItem.commandIcon(entry)
+            return
+        }
+        guard let iconURL = entry.url.isFileURL ? entry.url : ResultItem.browserURL else {
+            pendingIconURL = nil
+            iconView.image = IconCache.placeholder
+            return
+        }
+        if let ready = IconCache.shared.cached(for: iconURL) {
             pendingIconURL = nil
             iconView.image = ready
             return
         }
-        pendingIconURL = entry.url
+        pendingIconURL = iconURL
         iconView.image = IconCache.placeholder
-        IconCache.shared.load(for: entry.url) { [weak self] loaded in
-            guard let self, self.pendingIconURL == entry.url else { return }
+        IconCache.shared.load(for: iconURL) { [weak self] loaded in
+            guard let self, self.pendingIconURL == iconURL else { return }
             self.pendingIconURL = nil
             self.iconView.image = loaded
         }

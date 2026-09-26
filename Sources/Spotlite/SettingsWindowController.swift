@@ -2,8 +2,8 @@ import AppKit
 import ServiceManagement
 import SpotliteCore
 
-/// Settings: theme, hotkey, launch-at-login, menu bar visibility, launch history, and the
-/// full app list with checkboxes. All changes apply live — macOS settings behave that way everywhere, and
+/// Settings: theme, hotkey, launch-at-login, menu bar visibility, what results include,
+/// launch history, and the full list of apps, commands and links with checkboxes. All changes apply live — macOS settings behave that way everywhere, and
 /// an OK button would just add a state to get wrong.
 @MainActor
 final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate,
@@ -26,6 +26,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
 
     /// Popup order of the Appearance menu.
     private static let themeModes: [ThemeMode] = [.system, .light, .dark]
+    private static let engines = WebSearchEngine.allCases
 
     var onChange: ((Preferences) -> Void)?
     var onHotKeyChange: ((UInt32, UInt32) -> Bool)?
@@ -56,7 +57,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
 
     private func buildWindow() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 640),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 760),
             styleMask: [.titled, .closable],
             backing: .buffered, defer: false
         )
@@ -103,6 +104,30 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         let systemSettings = NSButton(checkboxWithTitle: "Show System Settings in results", target: self,
                                       action: #selector(toggleSystemSettings))
         systemSettings.state = preferences.showSystemSettings ? .on : .off
+
+        let systemCommands = NSButton(checkboxWithTitle: "Show commands in results (Lock Screen, Sleep, Restart…)",
+                                      target: self, action: #selector(toggleSystemCommands))
+        systemCommands.state = preferences.showSystemCommands ? .on : .off
+
+        let recentApps = NSButton(checkboxWithTitle: "Show recent apps before you type", target: self,
+                                  action: #selector(toggleRecentApps))
+        recentApps.state = preferences.showRecentApps ? .on : .off
+
+        let runningIndicator = NSButton(checkboxWithTitle: "Mark running apps with a dot", target: self,
+                                        action: #selector(toggleRunningIndicator))
+        runningIndicator.state = preferences.showRunningIndicator ? .on : .off
+
+        let webSearch = NSButton(checkboxWithTitle: "Offer web search with", target: self,
+                                 action: #selector(toggleWebSearch))
+        webSearch.state = preferences.showWebSearch ? .on : .off
+        let enginePicker = NSPopUpButton()
+        enginePicker.addItems(withTitles: Self.engines.map(\.name))
+        enginePicker.selectItem(at: Self.engines.firstIndex(of: preferences.webSearchEngine) ?? 0)
+        enginePicker.target = self
+        enginePicker.action = #selector(engineChoiceChanged)
+        let webSearchRow = NSStackView(views: [webSearch, enginePicker])
+        webSearchRow.orientation = .horizontal
+        webSearchRow.spacing = 6
 
         let themeLabel = NSTextField(labelWithString: "Appearance")
         let themePicker = NSPopUpButton()
@@ -175,11 +200,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         historyRow.orientation = .horizontal
         historyRow.spacing = 12
         let historyHint = NSTextField(labelWithString:
-            "Apps you open often rank higher. Right-click an app below to forget just that one.")
+            "Apps you open often rank higher. Right-click one below to forget it, or a link to edit it.")
         historyHint.font = .systemFont(ofSize: 11)
         historyHint.textColor = .secondaryLabelColor
 
-        let listLabel = NSTextField(labelWithString: "Apps  (uncheck to hide, or give one a short alias)")
+        let listLabel = NSTextField(labelWithString: "Apps, commands and links  (uncheck to hide, or give one a short alias)")
         listLabel.font = .systemFont(ofSize: 12, weight: .semibold)
 
         filterField.placeholderString = "Filter"
@@ -187,6 +212,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         filterField.action = #selector(filterChanged)
         filterField.sendsWholeSearchString = false
         filterField.sendsSearchStringImmediately = true
+        let addLink = NSButton(title: "Add Link…", target: self, action: #selector(addLinkClicked))
+        addLink.bezelStyle = .rounded
+        addLink.toolTip = "A folder, file or web address to find by name, like an app"
+        addLink.setContentHuggingPriority(.required, for: .horizontal)
+        let filterRow = NSStackView(views: [filterField, addLink])
+        filterRow.orientation = .horizontal
+        filterRow.spacing = 8
 
         table.headerView = nil
         table.rowHeight = 28
@@ -214,8 +246,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
 
         let stack = NSStackView(views: [
             hotKeyRow, hotKeyWarning, themeRow, tintRow, retentionRow, screenRow, loginItem, loginItemWarning, menuBar, hint,
-            systemSettings,
-            historyRow, historyHint, listLabel, filterField, scroll, quitButton,
+            systemSettings, systemCommands, recentApps, runningIndicator, webSearchRow,
+            historyRow, historyHint, listLabel, filterRow, scroll, quitButton,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -232,7 +264,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
             stack.topAnchor.constraint(equalTo: content.topAnchor),
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
-            filterField.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
+            filterRow.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
         ])
         window.contentView = content
         self.window = window
@@ -339,6 +371,124 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         persist()
     }
 
+    @objc private func toggleSystemCommands(_ sender: NSButton) {
+        preferences.showSystemCommands = (sender.state == .on)
+        persist()
+    }
+
+    @objc private func toggleRecentApps(_ sender: NSButton) {
+        preferences.showRecentApps = (sender.state == .on)
+        persist()
+    }
+
+    @objc private func toggleRunningIndicator(_ sender: NSButton) {
+        preferences.showRunningIndicator = (sender.state == .on)
+        persist()
+    }
+
+    @objc private func toggleWebSearch(_ sender: NSButton) {
+        preferences.showWebSearch = (sender.state == .on)
+        persist()
+    }
+
+    @objc private func engineChoiceChanged(_ sender: NSPopUpButton) {
+        let index = sender.indexOfSelectedItem
+        preferences.webSearchEngine = Self.engines.indices.contains(index) ? Self.engines[index] : .google
+        persist()
+    }
+
+    // MARK: - Links
+
+    @objc private func addLinkClicked() {
+        editLink(nil)
+    }
+
+    @objc private func editLinkClicked(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let link = preferences.links.first(where: { $0.entryID == id }) else { return }
+        editLink(link)
+    }
+
+    @objc private func removeLinkClicked(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        preferences.links.removeAll { $0.entryID == id }
+        // Nothing else will ever use these keys again.
+        preferences.aliases.removeValue(forKey: id)
+        preferences.hiddenBundleIDs.remove(id)
+        library.forgetHistory(for: id)
+        updateHistoryState()
+        persist()
+    }
+
+    /// A sheet with the link's name, target and alias. An invalid entry reopens the sheet
+    /// with what was typed and a line saying what is wrong, rather than losing the input.
+    private func editLink(_ existing: Link?, draft: (name: String, target: String, alias: String)? = nil,
+                          problem: String? = nil) {
+        guard let window else { return }
+        let alias = existing.flatMap { preferences.aliases[$0.entryID] } ?? ""
+        let fields = (name: NSTextField(string: draft?.name ?? existing?.name ?? ""),
+                      target: NSTextField(string: draft?.target ?? existing?.target ?? ""),
+                      alias: NSTextField(string: draft?.alias ?? alias))
+        fields.name.placeholderString = "Downloads"
+        fields.target.placeholderString = "~/Downloads or github.com"
+        fields.alias.placeholderString = "Optional, e.g. dl"
+        let grid = NSGridView(views: [
+            [NSTextField(labelWithString: "Name"), fields.name],
+            [NSTextField(labelWithString: "Opens"), fields.target],
+            [NSTextField(labelWithString: "Alias"), fields.alias],
+        ])
+        grid.rowSpacing = 8
+        grid.column(at: 0).xPlacement = .trailing
+        grid.column(at: 1).width = 240
+        grid.frame.size = grid.fittingSize
+
+        let alert = NSAlert()
+        alert.messageText = existing == nil ? "Add Link" : "Edit Link"
+        alert.informativeText = problem
+            ?? "A folder, file or web address, found by its name or alias like an app."
+        alert.accessoryView = grid
+        alert.addButton(withTitle: existing == nil ? "Add" : "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = fields.name
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            let draft = (name: fields.name.stringValue.trimmingCharacters(in: .whitespaces),
+                         target: fields.target.stringValue.trimmingCharacters(in: .whitespaces),
+                         alias: fields.alias.stringValue.trimmingCharacters(in: .whitespaces))
+            if let problem = Self.problem(name: draft.name, target: draft.target) {
+                // After this sheet has gone: a window shows one sheet at a time.
+                DispatchQueue.main.async { self.editLink(existing, draft: draft, problem: problem) }
+                return
+            }
+            self.saveLink(existing, name: draft.name, target: draft.target, alias: draft.alias)
+        }
+    }
+
+    private static func problem(name: String, target: String) -> String? {
+        if name.isEmpty { return "Give the link a name." }
+        guard let url = Link.resolve(target) else {
+            return "“Opens” needs a path starting with / or ~, or a web address."
+        }
+        if url.isFileURL, !FileManager.default.fileExists(atPath: url.path) {
+            return "Nothing exists at \(url.path)."
+        }
+        return nil
+    }
+
+    private func saveLink(_ existing: Link?, name: String, target: String, alias: String) {
+        var link = existing ?? Link(name: name, target: target)
+        link.name = name
+        link.target = target
+        if let index = preferences.links.firstIndex(where: { $0.id == link.id }) {
+            preferences.links[index] = link
+        } else {
+            preferences.links.append(link)
+        }
+        if alias.isEmpty { preferences.aliases.removeValue(forKey: link.entryID) }
+        else { preferences.aliases[link.entryID] = alias }
+        persist()
+    }
+
     // MARK: - Launch history
 
     /// Launches can happen while Settings is open, so this is refreshed whenever the
@@ -369,6 +519,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         let row = table.clickedRow
         guard visibleApps.indices.contains(row) else { return }
         let app = visibleApps[row]
+        if app.kind == .link {
+            for (title, action) in [("Edit Link…", #selector(editLinkClicked)),
+                                    ("Remove Link", #selector(removeLinkClicked))] {
+                let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+                item.target = self
+                item.representedObject = app.id
+                menu.addItem(item)
+            }
+            menu.addItem(.separator())
+        }
         let item = NSMenuItem(title: "Forget Launch History", action: #selector(forgetHistory),
                               keyEquivalent: "")
         item.target = self

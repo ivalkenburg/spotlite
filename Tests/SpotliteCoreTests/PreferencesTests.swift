@@ -23,6 +23,12 @@ struct PreferencesTests {
         prefs.showMenuBarIcon = false
         prefs.hasCompletedFirstRun = true
         prefs.queryRetention = 12
+        prefs.showSystemCommands = false
+        prefs.showRecentApps = true
+        prefs.showRunningIndicator = false
+        prefs.showWebSearch = false
+        prefs.webSearchEngine = .kagi
+        prefs.links = [Link(name: "Downloads", target: "~/Downloads")]
 
         let data = try JSONEncoder().encode(prefs)
         #expect(try JSONDecoder().decode(Preferences.self, from: data) == prefs)
@@ -44,6 +50,28 @@ struct PreferencesTests {
         #expect(decoded.glassTint == 0)
         #expect(decoded.queryRetention == 0)
         #expect(decoded.showSystemSettings)
+        #expect(decoded.showSystemCommands)
+        #expect(!decoded.showRecentApps)
+        #expect(decoded.showRunningIndicator)
+        #expect(decoded.showWebSearch)
+        #expect(decoded.webSearchEngine == .google)
+        #expect(decoded.links.isEmpty)
+    }
+
+    /// One hand-edited link must not reset every other setting, or lose the good links.
+    @Test func malformedLinkIsDroppedAlone() throws {
+        let data = Data(#"{"links":[{"name":"No id","target":"/tmp"},{"id":"L","name":"Tmp","target":"/tmp"}],"showMenuBarIcon":false}"#.utf8)
+        let decoded = try JSONDecoder().decode(Preferences.self, from: data)
+        #expect(decoded.links.map(\.id) == ["L"])
+        #expect(!decoded.showMenuBarIcon)
+    }
+
+    /// An engine a later build dropped must not reset every other setting.
+    @Test func unknownSearchEngineFallsBack() throws {
+        let data = Data(#"{"webSearchEngine":"altavista","showMenuBarIcon":false}"#.utf8)
+        let decoded = try JSONDecoder().decode(Preferences.self, from: data)
+        #expect(decoded.webSearchEngine == .google)
+        #expect(!decoded.showMenuBarIcon)
     }
 
     @Test func movesAnUntouchedPanelToTheNewDefault() throws {

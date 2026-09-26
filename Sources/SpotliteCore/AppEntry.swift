@@ -1,10 +1,16 @@
 import Foundation
 
-/// What an entry opens. System Settings panes share the index, the matcher and every
-/// per-app preference with apps, but open through a URL and rank below every app.
+/// What an entry opens. Everything else shares the matcher and every per-app preference
+/// with apps: hiding, aliases and launch history.
 public enum EntryKind: UInt8, Codable, Sendable {
     case app
+    /// A System Settings pane. Opens through a URL and ranks below an app.
     case settingsPane
+    /// A built-in action such as Lock Screen, run by Spotlite itself. Ranks like a pane.
+    case command
+    /// A folder, file or web address the user added in Settings. Ranks like an app: the
+    /// user created it to be found.
+    case link
 }
 
 /// The persisted shape of an indexed app. Only these fields are cached; every derived
@@ -73,7 +79,12 @@ public struct AppEntry: Sendable, Hashable {
         self.name = name
         self.bundleID = bundleID
         self.kind = kind
-        instanceID = url.standardizedFileURL.path
+        // A command or link is identified by its own id, not its target: a link to
+        // Safari.app is not the Safari app, and two links may open the same folder.
+        switch kind {
+        case .command, .link: instanceID = bundleID ?? url.absoluteString
+        case .app, .settingsPane: instanceID = url.standardizedFileURL.path
+        }
         id = bundleID ?? instanceID
 
         let chars = Array(name)
