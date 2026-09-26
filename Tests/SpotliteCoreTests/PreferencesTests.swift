@@ -43,6 +43,7 @@ struct PreferencesTests {
         #expect(decoded.themeMode == .system)
         #expect(decoded.glassTint == 0)
         #expect(decoded.queryRetention == 0)
+        #expect(decoded.showSystemSettings)
     }
 
     @Test func movesAnUntouchedPanelToTheNewDefault() throws {

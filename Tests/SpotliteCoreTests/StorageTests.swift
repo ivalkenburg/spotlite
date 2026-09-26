@@ -50,7 +50,17 @@ struct StorageTests {
 
         let indexURL = directory.appendingPathComponent("index.json")
         let cached = CachedApp(path: "/Applications/Test.app", name: "Test", bundleID: "test.app")
-        Storage.saveIndex([cached], to: indexURL)
-        #expect(Storage.loadIndex(from: indexURL) == [cached])
+        let pane = CachedApp(path: "/System/Library/ExtensionKit/Extensions/Test.appex",
+                             name: "Test Pane", bundleID: "test.pane", kind: .settingsPane)
+        Storage.saveIndex([cached, pane], to: indexURL)
+        #expect(Storage.loadIndex(from: indexURL) == [cached, pane])
+    }
+
+    /// An index cached before panes existed has no `kind`; it must load, as apps, rather
+    /// than fail and cost a cold scan.
+    @Test func indexWithoutKindsLoadsAsApps() throws {
+        let old = Data(#"[{"path":"/Applications/Test.app","name":"Test","bundleID":"test.app"}]"#.utf8)
+        let decoded = try JSONDecoder().decode([CachedApp].self, from: old)
+        #expect(decoded.map(\.kind) == [.app])
     }
 }

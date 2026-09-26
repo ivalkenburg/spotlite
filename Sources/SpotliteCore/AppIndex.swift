@@ -24,11 +24,17 @@ public enum AppIndex {
     }
 
     /// Rescans and rewrites the cache. Called from the FSEvents watcher and from the
-    /// staleness check when the panel opens.
+    /// staleness check when the panel opens. Settings panes are rescanned with the apps
+    /// but not watched: they only change with an OS update.
     public static func refresh() -> [AppEntry] {
-        let scanned = scan()
+        let scanned = scanAll()
         Storage.saveIndex(scanned.map(\.cached))
         return scanned
+    }
+
+    /// Apps and settings panes, sorted by name: what the index holds.
+    public static func scanAll() -> [AppEntry] {
+        sortedByName(collect(searchDirectories) + SettingsPaneIndex.installed)
     }
 
     /// Newest modification time across the indexed directories. Comparing this on show
@@ -46,6 +52,10 @@ public enum AppIndex {
     /// Walks the search directories and returns every user-launchable app. Concrete paths
     /// are de-duplicated, but two installed copies with the same bundle ID remain visible.
     public static func scan(directories: [URL] = searchDirectories) -> [AppEntry] {
+        sortedByName(collect(directories))
+    }
+
+    private static func collect(_ directories: [URL]) -> [AppEntry] {
         var seen = Set<String>()
         var results: [AppEntry] = []
 
@@ -57,8 +67,12 @@ public enum AppIndex {
                 }
             }
         }
+        return results
+    }
+
+    static func sortedByName(_ entries: [AppEntry]) -> [AppEntry] {
         // Keys lowercased once, not twice per comparison.
-        let keyed: [(key: String, entry: AppEntry)] = results.map { ($0.name.lowercased(), $0) }
+        let keyed: [(key: String, entry: AppEntry)] = entries.map { ($0.name.lowercased(), $0) }
         return keyed.sorted { a, b in
             a.key == b.key ? a.entry.instanceID < b.entry.instanceID : a.key < b.key
         }.map(\.entry)

@@ -1,17 +1,35 @@
 import Foundation
 
-/// The persisted shape of an indexed app. Only these three fields are cached; every
-/// derived field is recomputed on load, so the cache format can't go stale in a way
-/// that silently corrupts matching.
+/// What an entry opens. System Settings panes share the index, the matcher and every
+/// per-app preference with apps, but open through a URL and rank below every app.
+public enum EntryKind: UInt8, Codable, Sendable {
+    case app
+    case settingsPane
+}
+
+/// The persisted shape of an indexed app. Only these fields are cached; every derived
+/// field is recomputed on load, so the cache format can't go stale in a way that
+/// silently corrupts matching.
 public struct CachedApp: Codable, Sendable, Hashable {
     public let path: String
     public let name: String
     public let bundleID: String?
+    public let kind: EntryKind
 
-    public init(path: String, name: String, bundleID: String?) {
+    public init(path: String, name: String, bundleID: String?, kind: EntryKind = .app) {
         self.path = path
         self.name = name
         self.bundleID = bundleID
+        self.kind = kind
+    }
+
+    /// A cache written before panes were indexed has no `kind`: everything in it is an app.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        name = try c.decode(String.self, forKey: .name)
+        bundleID = try c.decodeIfPresent(String.self, forKey: .bundleID)
+        kind = try c.decodeIfPresent(EntryKind.self, forKey: .kind) ?? .app
     }
 }
 
@@ -21,6 +39,7 @@ public struct AppEntry: Sendable, Hashable {
     public let url: URL
     public let name: String
     public let bundleID: String?
+    public let kind: EntryKind
 
     /// Lowercased characters of `name`, as an array for O(1) indexing.
     public let lowerChars: [Character]
@@ -42,16 +61,18 @@ public struct AppEntry: Sendable, Hashable {
     /// Identity of this concrete installation. Unlike `id`, this never merges two copies
     /// of an app that happen to advertise the same bundle identifier.
     public let instanceID: String
-    public var cached: CachedApp { CachedApp(path: url.path, name: name, bundleID: bundleID) }
+    public var cached: CachedApp { CachedApp(path: url.path, name: name, bundleID: bundleID, kind: kind) }
 
     public init(cached: CachedApp) {
-        self.init(url: URL(fileURLWithPath: cached.path), name: cached.name, bundleID: cached.bundleID)
+        self.init(url: URL(fileURLWithPath: cached.path), name: cached.name, bundleID: cached.bundleID,
+                  kind: cached.kind)
     }
 
-    public init(url: URL, name: String, bundleID: String?) {
+    public init(url: URL, name: String, bundleID: String?, kind: EntryKind = .app) {
         self.url = url
         self.name = name
         self.bundleID = bundleID
+        self.kind = kind
         instanceID = url.standardizedFileURL.path
         id = bundleID ?? instanceID
 
@@ -70,7 +91,7 @@ public struct AppEntry: Sendable, Hashable {
         for (i, ch) in chars.enumerated() {
             // `Character(ch.lowercased())` traps when a scalar lowercases to more than
             // one grapheme; taking the first keeps a hostile app name from killing the index.
-            let lowerCh = ch.lowercased().first ?? ch
+            let lowerCh = AppEntry.typeable(ch.lowercased().first ?? ch)
             lower.append(lowerCh)
 
             if let ascii = lowerCh.asciiValue, ascii >= 97, ascii <= 122 {
@@ -118,8 +139,18 @@ public struct AppEntry: Sendable, Hashable {
         return instanceID < other.instanceID
     }
 
+    /// U+2011 is the non-breaking hyphen System Settings writes in "Wi‑Fi".
     static func isSeparator(_ ch: Character) -> Bool {
-        ch == " " || ch == "-" || ch == "_" || ch == "." || ch == "/" || ch == "("
+        ch == " " || ch == "-" || ch == "_" || ch == "." || ch == "/" || ch == "(" || ch == "\u{2011}"
+    }
+
+    /// The Unicode hyphens (U+2010-2012) match the "-" a keyboard types, so "wi-fi" finds
+    /// "Wi‑Fi". One character for one, so highlight positions still index the name.
+    static func typeable(_ ch: Character) -> Character {
+        switch ch {
+        case "\u{2010}", "\u{2011}", "\u{2012}": return "-"
+        default: return ch
+        }
     }
 
     public static func == (a: AppEntry, b: AppEntry) -> Bool { a.instanceID == b.instanceID }

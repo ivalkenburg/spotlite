@@ -10,8 +10,8 @@ struct SearchResultsTests {
     }
 
     private func build(_ query: String, hidden: Set<String> = []) -> [SearchResult] {
-        SearchResults.build(for: query, entries: entries, matcher: Matcher(), aliases: .empty,
-                            hiddenBundleIDs: hidden, frecency: Frecency())
+        SearchResults.build(for: query, corpus: SearchCorpus(entries: entries, hiddenBundleIDs: hidden),
+                            matcher: Matcher(), frecency: Frecency())
     }
 
     private func describe(_ results: [SearchResult]) -> [String] {

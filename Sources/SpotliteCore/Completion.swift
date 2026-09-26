@@ -9,7 +9,8 @@ public enum Completion {
         guard !query.isEmpty else { return "" }
         let queryChars = Array(query), titleChars = Array(title)
         let isPrefix = queryChars.count <= titleChars.count
-            && String(titleChars[0..<queryChars.count]).lowercased() == query.lowercased()
+            && String(titleChars[0..<queryChars.count].map(AppEntry.typeable)).lowercased()
+                == query.lowercased()
         guard isPrefix else { return " — " + title }
         // The remainder keeps the title's own case, the typed part keeps the user's.
         return String(titleChars[queryChars.count...]) + " — " + action

@@ -100,6 +100,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
                                action: #selector(toggleMenuBarIcon))
         menuBar.state = preferences.showMenuBarIcon ? .on : .off
 
+        let systemSettings = NSButton(checkboxWithTitle: "Show System Settings in results", target: self,
+                                      action: #selector(toggleSystemSettings))
+        systemSettings.state = preferences.showSystemSettings ? .on : .off
+
         let themeLabel = NSTextField(labelWithString: "Appearance")
         let themePicker = NSPopUpButton()
         themePicker.addItems(withTitles: ["System", "Light", "Dark"])
@@ -210,6 +214,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
 
         let stack = NSStackView(views: [
             hotKeyRow, hotKeyWarning, themeRow, tintRow, retentionRow, screenRow, loginItem, loginItemWarning, menuBar, hint,
+            systemSettings,
             historyRow, historyHint, listLabel, filterField, scroll, quitButton,
         ])
         stack.orientation = .vertical
@@ -326,6 +331,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
 
     @objc private func toggleMenuBarIcon(_ sender: NSButton) {
         preferences.showMenuBarIcon = (sender.state == .on)
+        persist()
+    }
+
+    @objc private func toggleSystemSettings(_ sender: NSButton) {
+        preferences.showSystemSettings = (sender.state == .on)
         persist()
     }
 

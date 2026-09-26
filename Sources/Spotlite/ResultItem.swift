@@ -78,6 +78,12 @@ enum ResultItem {
             return [Hint(text: "Also active in another app", key: nil)]
         }
         guard case .app(let match) = self else { return [] }
+        // A pane has no file worth revealing or copying and nothing to quit.
+        if match.entry.kind == .settingsPane {
+            if modifiers.contains(.command) { return [Hint(text: "Hide", key: "⌘⌫")] }
+            if modifiers.contains(.option) { return [] }
+            return [Hint(text: "System Settings", key: nil)]
+        }
         if modifiers.contains(.command) {
             var hints = [Hint(text: "Reveal in Finder", key: "⌘↩")]
             if !runningApplications.isEmpty { hints.append(Hint(text: "Quit", key: "⌘Q")) }
@@ -117,10 +123,14 @@ enum ResultItem {
     }
 
     /// The icon at the bar's right end. Spotlight shows the app a result belongs to,
-    /// so Settings shows Spotlite itself rather than the row's gear.
+    /// so Settings shows Spotlite itself rather than the row's gear, and a pane shows
+    /// System Settings.
     var barIcon: NSImage? {
-        if case .settings = self { return NSApp.applicationIconImage }
-        return immediateIcon
+        switch self {
+        case .settings: return NSApp.applicationIconImage
+        case .app(let match) where match.entry.kind == .settingsPane: return ResultItem.systemSettingsIcon
+        default: return immediateIcon
+        }
     }
 
     private static let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -134,6 +144,7 @@ enum ResultItem {
     // Built once rather than per row render: `icon` is read every time a row is configured.
     private static let calculatorIcon = NSWorkspace.shared.icon(forFile: "/System/Applications/Calculator.app")
     private static let settingsIcon = symbol("gearshape")
+    private static let systemSettingsIcon = NSWorkspace.shared.icon(forFile: SettingsPaneIndex.systemSettingsApp.path)
     private static let caffeineOffIcon = symbol("cup.and.saucer")
     private static let caffeineOnIcon = symbol("cup.and.saucer.fill")
 

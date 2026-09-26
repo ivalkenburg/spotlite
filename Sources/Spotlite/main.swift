@@ -18,17 +18,18 @@ if let i = CommandLine.arguments.firstIndex(of: "--search"), i + 1 < CommandLine
 }
 
 if CommandLine.arguments.contains("--bench") {
-    let entries = AppIndex.scan()
+    let entries = AppIndex.scanAll()
     let matcher = Matcher()
     let preferences = Storage.loadPreferences()
-    let aliases = AliasIndex(aliases: preferences.aliases)
+    let corpus = SearchCorpus(entries: entries, aliases: AliasIndex(aliases: preferences.aliases),
+                              hiddenBundleIDs: preferences.hiddenBundleIDs,
+                              includeSettingsPanes: preferences.showSystemSettings)
     let frecency = Storage.loadFrecency()
     let queries = ["s", "sa", "saf", "safa", "safar", "safari", "gc", "term", "a", "cal", "xyz"]
     var sink = 0
     // The same call each keystroke makes: calculator, matcher, ranking and built-ins.
     func search(_ q: String) -> Int {
-        SearchResults.build(for: q, entries: entries, matcher: matcher, aliases: aliases,
-                            hiddenBundleIDs: preferences.hiddenBundleIDs, frecency: frecency).count
+        SearchResults.build(for: q, corpus: corpus, matcher: matcher, frecency: frecency).count
     }
     // Warm up, then time enough iterations to escape timer granularity.
     for q in queries { sink &+= search(q) }

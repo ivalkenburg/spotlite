@@ -37,7 +37,7 @@ public final class Matcher {
         limit: Int = 50
     ) -> [MatchResult] {
         guard limit > 0 else { return [] }
-        var out = matches(query, in: entries, aliases: aliases)
+        var out = matches(query, in: SearchCorpus(entries: entries, aliases: aliases))
         out.sort { a, b in
             // Raw values: comparing the enums directly more than doubled search time.
             if a.tier.rawValue != b.tier.rawValue { return a.tier.rawValue > b.tier.rawValue }
@@ -48,7 +48,7 @@ public final class Matcher {
 
     /// Every match, in index order. For callers that rank the matches themselves, so the
     /// list is not sorted twice on every keystroke.
-    func matches(_ query: String, in entries: [AppEntry], aliases: AliasIndex = .empty) -> [MatchResult] {
+    func matches(_ query: String, in corpus: SearchCorpus) -> [MatchResult] {
         guard let trimmed = query.boundedTrimmedWhitespace(maximumCount: Matcher.maxSupportedQuery)
         else { return [] }
         let q = Array(trimmed.lowercased())
@@ -56,13 +56,16 @@ public final class Matcher {
         // check even though the source substring was already bounded without copying.
         guard !q.isEmpty, q.count <= Matcher.maxSupportedQuery else { return [] }
 
-        ensureCapacity(query: q.count, text: max(capacity.text, aliases.maxLength))
+        ensureCapacity(query: q.count, text: max(capacity.text, corpus.maxAliasLength))
 
         let queryMask = Matcher.mask(of: q)
         var out: [MatchResult] = []
 
-        for entry in entries {
-            let alias = aliases.isEmpty ? nil : aliases[entry.id]
+        let entries = corpus.entries
+        let aliases = corpus.hasAliases ? corpus.aliases : nil
+        for index in entries.indices {
+            let entry = entries[index]
+            let alias = aliases?[index]
             // The common path is one integer comparison. A longer name grows the shared
             // buffer once, when first encountered, and subsequent searches reuse it.
             let neededText = max(entry.lowerChars.count, entry.initials.count,

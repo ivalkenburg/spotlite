@@ -27,6 +27,12 @@ keystroke.
   `log2`, and `sin`, `cos`, `tan` and their inverses in radians, all written with
   parentheses; `√` as a prefix; `pi`, `π` and `e`; `0x`, `0b` and `0o` literals; and
   `ans`, the result that was on screen when the panel last closed.
+- **System Settings panes.** Type `blue` to open Bluetooth, `dt` for Date & Time.
+  Panes are read from macOS itself, so names follow your language and OS version.
+  A pane ranks just below an app matched as strongly, so `home` reaches the Home
+  pane before Google Chrome's scattered letters, and it can be hidden or given an
+  alias like an app. A checkbox in Settings turns them off. Panes that depend on
+  hardware or setup, like Mouse or Headphones, are listed whether or not they apply.
 - **Hide apps you never launch.** Command-Delete on a result hides it; the full
   list with checkboxes lives in Settings.
 - **Aliases.** Teach it that `ps` means Photoshop. Typing the start of an alias

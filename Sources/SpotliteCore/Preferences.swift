@@ -24,7 +24,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         case formatVersion
         case hiddenBundleIDs, aliases, panelScreen, panelGeometry, themeMode, glassTint
         case hotKeyCode, hotKeyModifiers, showMenuBarIcon, hasCompletedFirstRun
-        case queryRetention
+        case queryRetention, showSystemSettings
     }
 
     public var hiddenBundleIDs: Set<String>
@@ -44,6 +44,8 @@ public struct Preferences: Codable, Sendable, Equatable {
     /// Seconds after closing during which reopening brings the last query back. Zero,
     /// the default, always opens empty.
     public var queryRetention: TimeInterval
+    /// Whether System Settings panes appear in results.
+    public var showSystemSettings: Bool
 
     /// Option-Space: free on a stock system, unlike Control-Space and Command-Space.
     ///
@@ -79,6 +81,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         hasCompletedFirstRun = try c.decodeIfPresent(Bool.self, forKey: .hasCompletedFirstRun) ?? false
         queryRetention = Preferences.clampedRetention(
             try c.decodeIfPresent(TimeInterval.self, forKey: .queryRetention) ?? 0)
+        showSystemSettings = try c.decodeIfPresent(Bool.self, forKey: .showSystemSettings) ?? true
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -95,6 +98,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         try c.encode(showMenuBarIcon, forKey: .showMenuBarIcon)
         try c.encode(hasCompletedFirstRun, forKey: .hasCompletedFirstRun)
         try c.encode(queryRetention, forKey: .queryRetention)
+        try c.encode(showSystemSettings, forKey: .showSystemSettings)
     }
 
     public init(
@@ -108,7 +112,8 @@ public struct Preferences: Codable, Sendable, Equatable {
         hotKeyModifiers: UInt32 = Preferences.defaultModifiers,
         showMenuBarIcon: Bool = true,
         hasCompletedFirstRun: Bool = false,
-        queryRetention: TimeInterval = 0
+        queryRetention: TimeInterval = 0,
+        showSystemSettings: Bool = true
     ) {
         self.hiddenBundleIDs = hiddenBundleIDs
         self.aliases = aliases
@@ -121,6 +126,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         self.showMenuBarIcon = showMenuBarIcon
         self.hasCompletedFirstRun = hasCompletedFirstRun
         self.queryRetention = Preferences.clampedRetention(queryRetention)
+        self.showSystemSettings = showSystemSettings
     }
 
     /// A hand-edited file must not produce a tint the glass cannot represent.

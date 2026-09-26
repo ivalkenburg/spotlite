@@ -20,10 +20,8 @@ public enum SearchResults {
 
     public static func build(
         for query: String,
-        entries: [AppEntry],
+        corpus: SearchCorpus,
         matcher: Matcher,
-        aliases: AliasIndex,
-        hiddenBundleIDs: Set<String>,
         frecency: Frecency,
         previousResult: Double? = nil,
         now: Date = Date()
@@ -36,9 +34,8 @@ public enum SearchResults {
         }
 
         // Unordered: ranking sorts them once, with launch history applied.
-        let matches = matcher.matches(trimmed, in: entries, aliases: aliases)
-        let ranked = AppRanking.rank(matches, hiddenBundleIDs: hiddenBundleIDs,
-                                     frecency: frecency, now: now)
+        let matches = matcher.matches(trimmed, in: corpus)
+        let ranked = AppRanking.rank(matches, frecency: frecency, now: now)
         result.append(contentsOf: ranked.map(SearchResult.app))
 
         // The self-indexed escape hatch: reachable even with the menu bar icon hidden.

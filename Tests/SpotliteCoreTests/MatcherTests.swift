@@ -32,6 +32,10 @@ struct FuzzyScoringTests {
     }
 
     @Test func acronymMatchesWordInitials() {
+        // System Settings writes "Wi‑Fi" with a non-breaking hyphen.
+        #expect(Matcher().search("wf", in: [app("Wi\u{2011}Fi")]).first?.positions == [0, 3])
+        // Typed with a keyboard hyphen, it is still the start of the name.
+        #expect(Matcher().search("wi-fi", in: [app("Wi\u{2011}Fi")]).first?.tier == .namePrefix)
         #expect(top("gc") == "Google Chrome")
         #expect(top("qtp") == "QuickTime Player")
         #expect(top("am") == "Activity Monitor")

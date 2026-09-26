@@ -18,6 +18,11 @@ struct CompletionTests {
         #expect(Completion.suffix(query: "store", title: "App Store", action: "Open") == " — App Store")
     }
 
+    /// "Wi‑Fi" is written with a non-breaking hyphen; the keyboard's "-" still starts it.
+    @Test func aKeyboardHyphenCompletesAUnicodeOne() {
+        #expect(Completion.suffix(query: "wi-", title: "Wi\u{2011}Fi", action: "Open") == "Fi — Open")
+    }
+
     @Test func aFullyTypedTitleOnlyNamesTheAction() {
         #expect(Completion.suffix(query: "safari", title: "Safari", action: "Open") == " — Open")
     }

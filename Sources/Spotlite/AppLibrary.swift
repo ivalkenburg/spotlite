@@ -22,7 +22,9 @@ final class AppLibrary {
 
     /// Loads the index on first use and starts watching; on later calls does the cheap
     /// staleness check that catches changes FSEvents missed while the machine was asleep.
-    func loadIfNeeded() {
+    /// True when this call installed the cached index, which `onChange` does not report.
+    @discardableResult
+    func loadIfNeeded() -> Bool {
         guard hasLoaded else {
             hasLoaded = true
             entries = AppIndex.loadCached() ?? []
@@ -33,13 +35,14 @@ final class AppLibrary {
             // Cached results make the first frame immediate; this scan guarantees that
             // changes made while Spotlite was not running are still discovered.
             refresh()
-            return
+            return true
         }
 
         let current = AppIndex.directoriesFingerprint()
-        guard current != fingerprint else { return }
+        guard current != fingerprint else { return false }
         fingerprint = current
         refresh()
+        return false
     }
 
     /// Coalesces refresh requests and keeps bundle traversal plus cache writes off the

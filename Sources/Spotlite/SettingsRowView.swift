@@ -65,7 +65,7 @@ final class SettingsRowView: NSView, NSTextFieldDelegate {
     func configure(with entry: AppEntry, hidden: Bool, alias: String) {
         self.entry = entry
         checkbox.state = hidden ? .off : .on
-        label.stringValue = entry.name
+        label.stringValue = entry.kind == .settingsPane ? "\(entry.name) (System Settings)" : entry.name
         label.textColor = hidden ? .tertiaryLabelColor : .labelColor
         aliasField.stringValue = alias
         // Hiding and aliases are keyed by bundle ID. Without one the checkbox would

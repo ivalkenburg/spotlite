@@ -25,12 +25,15 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private var preferences: Preferences {
         // Not on every change: a drag writes the geometry here on every pointer move.
         didSet {
-            guard preferences.aliases != oldValue.aliases else { return }
-            aliases = AliasIndex(aliases: preferences.aliases)
+            guard preferences.aliases != oldValue.aliases
+                || preferences.hiddenBundleIDs != oldValue.hiddenBundleIDs
+                || preferences.showSystemSettings != oldValue.showSystemSettings
+            else { return }
+            rebuildCorpus()
         }
     }
-    /// Rebuilt only when the aliases change, never per keystroke.
-    private var aliases: AliasIndex
+    /// Rebuilt when the index, aliases, hidden apps or pane setting change, never per keystroke.
+    private var corpus = SearchCorpus.empty
     private let caffeine: CaffeineAssertion
     private var cursor = 0
 
@@ -73,7 +76,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     init(caffeine: CaffeineAssertion, preferences: Preferences) {
         self.caffeine = caffeine
         self.preferences = preferences
-        aliases = AliasIndex(aliases: preferences.aliases)
         super.init()
         placement = PanelPlacement(panel: panel) { [unowned self] in self.preferences }
         buildUI()
@@ -89,6 +91,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         trailingEdge.receiver = placement
         library.onChange = { [weak self] apps in
             guard let self else { return }
+            self.rebuildCorpus()
             self.onIndexChanged?(apps)
             if self.panel.isVisible { self.refreshMatches() }
         }
@@ -282,7 +285,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         modifiers = NSEvent.modifierFlags
         applyResolvedAppearance()
         caffeine.refresh()
-        library.loadIfNeeded()
+        loadLibrary()
 
         let recalled = devQuery == nil ? queryMemory.recall(retention: preferences.queryRetention) : nil
         field.stringValue = devQuery ?? recalled ?? ""
@@ -349,8 +352,19 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     /// The current index, for the Settings app list. Already sorted by name.
     func indexedApps() -> [AppEntry] {
-        library.loadIfNeeded()
+        loadLibrary()
         return library.entries
+    }
+
+    private func loadLibrary() {
+        if library.loadIfNeeded() { rebuildCorpus() }
+    }
+
+    private func rebuildCorpus() {
+        corpus = SearchCorpus(entries: library.entries,
+                              aliases: AliasIndex(aliases: preferences.aliases),
+                              hiddenBundleIDs: preferences.hiddenBundleIDs,
+                              includeSettingsPanes: preferences.showSystemSettings)
     }
 
     func hide() {
@@ -459,9 +473,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     private func buildItems(for query: String) -> [ResultItem] {
         let state = caffeine.state
-        return SearchResults.build(for: query, entries: library.entries, matcher: matcher,
-                                   aliases: aliases,
-                                   hiddenBundleIDs: preferences.hiddenBundleIDs,
+        return SearchResults.build(for: query, corpus: corpus, matcher: matcher,
                                    frecency: library.frecency,
                                    previousResult: previousResult)
             .map { ResultItem($0, caffeine: state) }
@@ -633,6 +645,11 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             // that anything happened, and closing would hide it.
             caffeine.toggle()
 
+        case .app(let match) where match.entry.kind == .settingsPane:
+            library.recordLaunch(match.entry.id)
+            hide()
+            openSettingsPane(match.entry)
+
         case .app(let match):
             let entry = match.entry
             let query = field.stringValue
@@ -659,10 +676,24 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         }
     }
 
+    /// Opens a pane, or System Settings itself when the pane's link is refused: that is
+    /// still closer to what was asked for than nothing, and a rescan would not fix it.
+    private func openSettingsPane(_ entry: AppEntry) {
+        guard let bundleID = entry.bundleID, let url = SettingsPaneIndex.url(for: bundleID) else { return }
+        NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            guard error != nil else { return }
+            Task { @MainActor in
+                NSWorkspace.shared.openApplication(at: SettingsPaneIndex.systemSettingsApp,
+                                                   configuration: NSWorkspace.OpenConfiguration())
+            }
+        }
+    }
+
     /// The app under the cursor, or a beep when the cursor is on something that isn't
-    /// an app — the alternate actions have no meaning for a calculation or Settings.
+    /// an app — the alternate actions have no meaning for a calculation, Settings or a pane.
     private func appUnderCursor() -> MatchResult? {
-        guard items.indices.contains(cursor), case .app(let match) = items[cursor] else {
+        guard items.indices.contains(cursor), case .app(let match) = items[cursor],
+              match.entry.kind == .app else {
             NSSound.beep()
             return nil
         }

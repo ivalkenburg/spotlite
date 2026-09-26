@@ -18,8 +18,9 @@ final class IconCache {
     private init() {
         // Sized to hold the whole index rather than a screenful. Scrolling the Settings
         // list past 64 apps would otherwise evict entries and re-rasterise them on the
-        // way back. At 45pt @2x an entry is 90x90x4 bytes, so 160 cost about 5MB.
-        cache.countLimit = 160
+        // way back. At 45pt @2x an entry is 90x90x4 bytes, so 256, room for about 200
+        // apps beside the settings panes, cost about 8MB.
+        cache.countLimit = 256
     }
 
     /// The icon if it is already in memory. Never touches the disk.
