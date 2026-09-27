@@ -62,15 +62,17 @@ final class SettingsRowView: NSView, NSTextFieldDelegate {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(with entry: AppEntry, hidden: Bool, alias: String) {
+    /// `showsKind` suffixes non-apps with their kind, for a list that mixes kinds.
+    func configure(with entry: AppEntry, hidden: Bool, alias: String, showsKind: Bool) {
         self.entry = entry
         checkbox.state = hidden ? .off : .on
-        switch entry.kind {
-        case .app: label.stringValue = entry.name
-        case .settingsPane: label.stringValue = "\(entry.name) (System Settings)"
-        case .command: label.stringValue = "\(entry.name) (Command)"
-        case .link: label.stringValue = "\(entry.name) (Link)"
+        let suffix = switch entry.kind {
+        case .app: ""
+        case .settingsPane: " (System Settings)"
+        case .command: " (Command)"
+        case .link: " (Link)"
         }
+        label.stringValue = showsKind ? entry.name + suffix : entry.name
         label.textColor = hidden ? .tertiaryLabelColor : .labelColor
         aliasField.stringValue = alias
         // Hiding and aliases are keyed by bundle ID. Without one the checkbox would
