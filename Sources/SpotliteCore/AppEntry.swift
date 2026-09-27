@@ -46,6 +46,8 @@ public struct AppEntry: Sendable, Hashable {
     public let name: String
     public let bundleID: String?
     public let kind: EntryKind
+    /// A link's target when it contains `{query}`, filled from what is typed after Tab.
+    public let template: String?
 
     /// Lowercased characters of `name`, as an array for O(1) indexing.
     public let lowerChars: [Character]
@@ -74,11 +76,12 @@ public struct AppEntry: Sendable, Hashable {
                   kind: cached.kind)
     }
 
-    public init(url: URL, name: String, bundleID: String?, kind: EntryKind = .app) {
+    public init(url: URL, name: String, bundleID: String?, kind: EntryKind = .app, template: String? = nil) {
         self.url = url
         self.name = name
         self.bundleID = bundleID
         self.kind = kind
+        self.template = template
         // A command or link is identified by its own id, not its target: a link to
         // Safari.app is not the Safari app, and two links may open the same folder.
         switch kind {

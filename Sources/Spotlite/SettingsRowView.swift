@@ -80,16 +80,16 @@ final class SettingsRowView: NSView, NSTextFieldDelegate {
         checkbox.isEnabled = entry.bundleID != nil
         aliasField.isEnabled = entry.bundleID != nil
 
-        // The same icons as the panel: a command's symbol, and for a web link the
-        // browser it opens in.
+        // The same icons as the panel: a command's symbol, and for a web link the app
+        // it opens in.
         if entry.kind == .command {
             pendingIconURL = nil
             iconView.image = ResultItem.commandIcon(entry)
             return
         }
-        guard let iconURL = entry.url.isFileURL ? entry.url : ResultItem.browserURL else {
+        guard let iconURL = ResultItem.iconURL(for: entry) else {
             pendingIconURL = nil
-            iconView.image = IconCache.placeholder
+            iconView.image = ResultItem.linkIcon
             return
         }
         if let ready = IconCache.shared.cached(for: iconURL) {

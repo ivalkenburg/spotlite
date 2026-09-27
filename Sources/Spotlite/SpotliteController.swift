@@ -54,6 +54,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// top result.
     private enum Selection { case topHit, navigated, dismissed }
     private var selection = Selection.topHit
+    /// The template link Tab entered, and the query that found it for Backspace to bring
+    /// back. While set, the field holds the link's argument and the list stays empty.
+    private var argument: (link: AppEntry, query: String)?
     /// The query before the latest edit, to tell typing from deleting.
     private var lastQuery = ""
     /// The query at the last close, offered back on a quick reopen.
@@ -142,6 +145,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         table.delegate = self
         table.target = self
         table.action = #selector(tableClicked)
+        // A click must not take focus from the field: Caffeinate and a template link keep
+        // the panel open, and typing has to keep reaching the query.
+        table.refusesFirstResponder = true
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("main"))
         column.resizingMask = .autoresizingMask
         table.addTableColumn(column)
@@ -300,6 +306,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         caffeine.refresh()
         loadLibrary()
         runningPaths = Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL?.standardizedFileURL.path })
+        // A show during the close fade finds argument mode still on.
+        dropArgument()
+        ResultItem.forgetHandlers()
 
         let recalled = devQuery == nil ? queryMemory.recall(retention: preferences.queryRetention) : nil
         field.stringValue = devQuery ?? recalled ?? ""
@@ -387,7 +396,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         isDismissing = true
         // Taken now rather than when the fade ends: a show() during the fade must
         // already see this query.
-        queryMemory.remember(field.stringValue)
+        queryMemory.remember(argument?.query ?? field.stringValue)
         if case .calculation(_, let value) = items.first { previousResult = value }
         // Holds the shrunk transform until the window is ordered out; removed on show.
         let shrink = scaleAnimation(from: 1, to: Metrics.hideEndScale, duration: Metrics.hideDuration)
@@ -411,6 +420,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private func finishHide() {
         panel.orderOut(nil)
         glass.layer?.removeAnimation(forKey: "hide")
+        dropArgument()
         field.stringValue = ""
         lastQuery = ""
         selection = .topHit
@@ -487,6 +497,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     private func buildItems(for query: String) -> [ResultItem] {
+        // The chip already says where Return goes; there is nothing to list.
+        guard argument == nil else { return [] }
         let state = caffeine.state
         return SearchResults.build(for: query, corpus: corpus, matcher: matcher,
                                    frecency: library.frecency,
@@ -591,13 +603,24 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             moveCursor(by: 1); return true
         case #selector(NSResponder.moveUp(_:)):
             moveCursor(by: -1); return true
+        case #selector(NSResponder.insertTab(_:)):
+            if argument != nil { return true }
+            // Anything but a template link keeps the field's own Tab.
+            guard items.indices.contains(cursor), case .app(let match) = items[cursor],
+                  match.entry.template != nil else { return false }
+            enterArgument(for: cursor); return true
         case #selector(NSResponder.insertNewline(_:)):
-            launch(at: cursor); return true
+            if argument != nil { openArgument() } else { launch(at: cursor) }
+            return true
         case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
             // Option-Return arrives as this, not as insertNewline.
             copyPath(); return true
         case #selector(NSResponder.cancelOperation(_:)):
             hide(); return true
+        case #selector(NSResponder.deleteBackward(_:)) where argument != nil:
+            // Backspace past the start of the argument takes the chip away.
+            guard field.stringValue.isEmpty else { return false }
+            leaveArgument(); return true
         case #selector(NSResponder.deleteBackward(_:)):
             // Spotlight's first Backspace removes only the completion; the typed text
             // stays. A selection is being deleted on purpose, so that goes through.
@@ -605,7 +628,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             dismissCompletion(); return true
         case #selector(NSResponder.deleteToBeginningOfLine(_:)):
             // Command-Delete inside a text field arrives as deleteToBeginningOfLine.
-            hideAppUnderCursor(); return true
+            if argument == nil { hideAppUnderCursor() }
+            return true
         default:
             return false
         }
@@ -684,14 +708,14 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             hide()
             SystemCommandRunner.run(command)
 
+        case .app(let match) where match.entry.template != nil:
+            // Nothing to open until the argument is typed.
+            enterArgument(for: index)
+
         case .app(let match) where match.entry.kind == .link:
             library.recordLaunch(match.entry.id)
             hide()
-            // A folder that has since gone, or an address no app handles.
-            NSWorkspace.shared.open(match.entry.url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
-                guard error != nil else { return }
-                Task { @MainActor in NSSound.beep() }
-            }
+            openLink(match.entry.url)
 
         case .app(let match):
             let entry = match.entry
@@ -717,6 +741,63 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                 }
             }
         }
+    }
+
+    /// A folder that has since gone, or an address no app handles, beeps.
+    private func openLink(_ url: URL) {
+        NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            guard error != nil else { return }
+            Task { @MainActor in NSSound.beep() }
+        }
+    }
+
+    // MARK: - Argument
+
+    /// Swaps the query for the chip of the template link at `row`; what is typed next
+    /// fills its `{query}`.
+    private func enterArgument(for row: Int) {
+        guard case .app(let match) = items[row] else { return }
+        argument = (match.entry, field.stringValue)
+        bar.showChip(for: items[row])
+        field.stringValue = ""
+        lastQuery = ""
+        updateMatches(for: "")
+    }
+
+    /// Backspace on an empty argument: the query comes back with the link selected, so
+    /// a mistaken Tab costs one key.
+    private func leaveArgument() {
+        guard let argument else { return }
+        dropArgument()
+        field.stringValue = argument.query
+        lastQuery = argument.query
+        selection = .topHit
+        field.currentEditor()?.selectedRange = NSRange(location: (argument.query as NSString).length, length: 0)
+        updateMatches(for: argument.query)
+        if let row = items.firstIndex(where: { $0.identity == argument.link.instanceID }), row != cursor {
+            select(row, as: .navigated)
+        }
+    }
+
+    private func dropArgument() {
+        argument = nil
+        bar.hideChip()
+    }
+
+    /// The template filled with what is typed, or nil outside argument mode.
+    private var argumentURL: URL? {
+        guard let argument, let template = argument.link.template else { return nil }
+        return Link.resolve(template, argument: field.stringValue)
+    }
+
+    private func openArgument() {
+        guard let argument, let url = argumentURL else {
+            NSSound.beep()
+            return
+        }
+        library.recordLaunch(argument.link.id)
+        hide()
+        openLink(url)
     }
 
     /// Opens a pane, or System Settings itself when the pane's link is refused: that is
@@ -755,8 +836,17 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     private func copyPath() {
-        guard let match = appUnderCursor(allowingLinks: true) else { return }
-        let url = match.entry.url
+        let url: URL
+        if argument != nil {
+            guard let filled = argumentURL else {
+                NSSound.beep()
+                return
+            }
+            url = filled
+        } else {
+            guard let match = appUnderCursor(allowingLinks: true) else { return }
+            url = match.entry.url
+        }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(url.isFileURL ? url.path : url.absoluteString, forType: .string)
         hide()

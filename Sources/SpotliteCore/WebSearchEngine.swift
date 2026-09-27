@@ -25,14 +25,16 @@ public enum WebSearchEngine: String, Codable, Sendable, CaseIterable {
         }
     }
 
-    /// `urlQueryAllowed` keeps `&`, `+`, `=` and `#`, which would end or alter the query.
-    private static let queryValueAllowed = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&+=#?"))
-
     public func url(for query: String) -> URL? {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty,
-              let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: Self.queryValueAllowed)
+              let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .queryValueAllowed)
         else { return nil }
         return URL(string: base + encoded)
     }
+}
+
+extension CharacterSet {
+    /// `urlQueryAllowed` keeps `&`, `+`, `=` and `#`, which would end or alter the query.
+    static let queryValueAllowed = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&+=#?"))
 }

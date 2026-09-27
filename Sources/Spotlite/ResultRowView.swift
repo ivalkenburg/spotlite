@@ -178,12 +178,15 @@ final class ResultRowView: NSTableCellView {
             pair.alignment = .centerY
             pair.spacing = Metrics.hintBadgeGap
 
-            let text = ResultRowView.vibrantLabel(hint.text, size: Metrics.hintFontSize, mode: mode)
-            // The tail of a path ("/Utilities") is what distinguishes it, so it truncates
-            // from the head.
-            text.lineBreakMode = .byTruncatingHead
-            text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            pair.addArrangedSubview(text)
+            // A bare key, such as a template link's Tab, has no text to space from.
+            if !hint.text.isEmpty {
+                let text = ResultRowView.vibrantLabel(hint.text, size: Metrics.hintFontSize, mode: mode)
+                // The tail of a path ("/Utilities") is what distinguishes it, so it truncates
+                // from the head.
+                text.lineBreakMode = .byTruncatingHead
+                text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+                pair.addArrangedSubview(text)
+            }
             if let key = hint.key { pair.addArrangedSubview(KeyBadge(key, textMode: mode)) }
             hintStack.addArrangedSubview(pair)
         }
@@ -199,9 +202,10 @@ final class ResultRowView: NSTableCellView {
     }
 
     private func configureIcon(for item: ResultItem) {
+        let url = item.iconURL
         // App icons fill the frame; symbols keep their own size, or they would scale up
         // to the app icon's padded canvas and read far larger than the artwork beside them.
-        icon.imageScaling = item.iconURL == nil ? .scaleProportionallyDown : .scaleProportionallyUpOrDown
+        icon.imageScaling = url == nil ? .scaleProportionallyDown : .scaleProportionallyUpOrDown
         icon.layer?.removeAllAnimations()
         icon.alphaValue = 1
 
@@ -211,7 +215,7 @@ final class ResultRowView: NSTableCellView {
             return
         }
 
-        guard let url = item.iconURL else {
+        guard let url else {
             pendingIconURL = nil
             icon.image = nil
             return

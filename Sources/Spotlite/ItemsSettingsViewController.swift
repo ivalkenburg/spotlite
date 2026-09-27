@@ -150,7 +150,8 @@ final class ItemsSettingsViewController: SettingsPaneController, NSTableViewData
         let alert = NSAlert()
         alert.messageText = existing == nil ? "Add Link" : "Edit Link"
         alert.informativeText = problem
-            ?? "A folder, file or web address, found by its name or alias like an app."
+            ?? "A folder, file or web address, found by its name or alias like an app. "
+            + "Put \(Link.placeholder) in it to type a search after pressing Tab."
         alert.accessoryView = grid
         alert.addButton(withTitle: existing == nil ? "Add" : "Save")
         alert.addButton(withTitle: "Cancel")
@@ -174,7 +175,8 @@ final class ItemsSettingsViewController: SettingsPaneController, NSTableViewData
         guard let url = Link.resolve(target) else {
             return "“Opens” needs a path starting with / or ~, or a web address."
         }
-        if url.isFileURL, !FileManager.default.fileExists(atPath: url.path) {
+        // A template's path depends on what is typed after Tab.
+        if url.isFileURL, !target.contains(Link.placeholder), !FileManager.default.fileExists(atPath: url.path) {
             return "Nothing exists at \(url.path)."
         }
         return nil

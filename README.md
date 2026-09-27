@@ -48,7 +48,12 @@ keystroke.
 - **Links.** "Add Link…" in Settings gives a folder, file or web address a name and
   an optional alias, so `dl` can open `~/Downloads` and `gh` a GitHub page. A bare
   host like `github.com` gets `https://`. Right-click a link in the list to edit or
-  remove it.
+  remove it. A link shows the icon of the app that opens it.
+- **Links that take input.** Put `{query}` in a link's address, then press Tab on it:
+  a chip names the link and what you type fills the placeholder, as when Spotlight
+  searches inside an app. `github.com/search?q={query}` searches GitHub, and
+  `shortcuts://run-shortcut?name=New%20Note&input=text&text={query}` hands the text
+  to a Shortcut, which can run anything, including a shell script.
 - **Web search.** The last row offers the query to Google, DuckDuckGo, Bing or Kagi,
   so when nothing on the Mac matches, Return searches the web. It can be turned off.
 - **Aliases.** Teach it that `ps` means Photoshop. Typing the start of an alias
@@ -107,10 +112,11 @@ It does not add itself as a login item unless you ask it to.
 | `Option-Space` | Show or hide the launcher (configurable) |
 | `Up` / `Down` | Move the cursor, wrapping at both ends |
 | `Return` | Launch the selected app, or copy a calculator result |
-| `Backspace` | First removes the completion, then deletes as usual |
+| `Tab` | Type input for the selected `{query}` link |
+| `Backspace` | First removes the completion, then deletes as usual; on an empty link input, removes the chip |
 | `Command-1` to `Command-9` | Launch the nth result directly |
 | `Command-Return` | Reveal the selected app or file link in Finder |
-| `Option-Return` | Copy the selected app's path, or a link's path or address |
+| `Option-Return` | Copy the selected app's path, or a link's path or address (with the input filled in) |
 | `Command-Q` | Quit the selected app, if it is running |
 | `Command-Delete` | Hide the selected app from results |
 | `Escape` | Close |

@@ -109,7 +109,9 @@ enum ResultItem {
             if modifiers.contains(.option) {
                 return [Hint(text: entry.url.isFileURL ? "Copy Path" : "Copy Link", key: "⌥↩")]
             }
-            return [Hint(text: ResultItem.linkTarget(entry.url), key: nil)]
+            // The user named the link, so its target goes unsaid; a template shows only the
+            // key that takes its argument.
+            return entry.template == nil ? [] : [Hint(text: "", key: "⇥")]
         }
         if modifiers.contains(.command) {
             var hints = [Hint(text: "Reveal in Finder", key: "⌘↩")]
@@ -132,11 +134,6 @@ enum ResultItem {
         }
     }
 
-    /// The text a link's row shows: a path shortened like an app's, or the address.
-    static func linkTarget(_ url: URL) -> String {
-        url.isFileURL ? abbreviate(url.path) : url.absoluteString
-    }
-
     /// Whether this row is an app with a running instance, located the same way as
     /// `runningApplications`, against paths gathered once when the panel opened.
     /// `runningApplications` itself is left for the moment of quitting.
@@ -146,17 +143,23 @@ enum ResultItem {
     }
 
     /// The file URL whose icon this row shows, or nil when the icon is a fixed symbol.
-    /// A web link or search shows the default browser, where it will open.
+    /// A web link or search shows the app that will open it: the default browser, or
+    /// Shortcuts for a `shortcuts:` link.
     var iconURL: URL? {
         switch self {
-        case .app(let match):
-            switch match.entry.kind {
-            case .command: return nil
-            case .link where !match.entry.url.isFileURL: return ResultItem.browserURL
-            default: return match.entry.url
-            }
-        case .webSearch: return ResultItem.browserURL
+        case .app(let match): return ResultItem.iconURL(for: match.entry)
+        case .webSearch: return ResultItem.handler(for: ResultItem.webURL)
         default: return nil
+        }
+    }
+
+    /// Shared with the Settings list, so an entry looks the same in both: its own file,
+    /// the app that opens a web link, or nil for a command's symbol or a link no app opens.
+    static func iconURL(for entry: AppEntry) -> URL? {
+        switch entry.kind {
+        case .command: return nil
+        case .link where !entry.url.isFileURL: return handler(for: entry.url)
+        default: return entry.url
         }
     }
 
@@ -166,7 +169,9 @@ enum ResultItem {
         case .app(let match) where match.entry.kind == .command:
             return ResultItem.commandIcon(match.entry)
         case .app:
-            return iconURL.flatMap { IconCache.shared.cached(for: $0) }
+            // Only a link whose scheme no app handles has no file to take an icon from.
+            guard let url = iconURL else { return ResultItem.linkIcon }
+            return IconCache.shared.cached(for: url)
         case .webSearch: return iconURL.flatMap { IconCache.shared.cached(for: $0) }
         case .calculation: return ResultItem.calculatorIcon
         case .settings: return ResultItem.settingsIcon
@@ -200,10 +205,23 @@ enum ResultItem {
     private static let systemSettingsIcon = NSWorkspace.shared.icon(forFile: SettingsPaneIndex.systemSettingsApp.path)
     private static let caffeineOffIcon = symbol("cup.and.saucer")
     private static let caffeineOnIcon = symbol("cup.and.saucer.fill")
-    /// Looked up once: the default browser rarely changes while Spotlite runs, and a
-    /// stale icon is the only cost when it does.
-    /// Shared with the Settings list, so a web link looks the same in both.
-    static let browserURL = NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https:")!)
+    /// Shared with the Settings list, for a link no app opens.
+    static let linkIcon = symbol("link")
+    private static let webURL = URL(string: "https:")!
+    /// The app that opens each URL scheme, looked up when a row first needs it rather
+    /// than per render. Emptied on each panel open, so an app installed or a default
+    /// changed shows by the next one; a nil value remembers that no app answers.
+    private static var handlers: [String: URL?] = [:]
+
+    private static func handler(for url: URL) -> URL? {
+        let scheme = url.scheme?.lowercased() ?? ""
+        if let known = handlers[scheme] { return known }
+        let found = NSWorkspace.shared.urlForApplication(toOpen: url)
+        handlers[scheme] = found
+        return found
+    }
+
+    static func forgetHandlers() { handlers.removeAll() }
     private static let commandIcons: [SystemCommand: NSImage] = SystemCommand.allCases
         .reduce(into: [:]) { icons, command in icons[command] = symbol(symbolName(command)) }
 

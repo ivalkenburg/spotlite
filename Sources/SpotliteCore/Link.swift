@@ -1,6 +1,8 @@
 import Foundation
 
 /// A folder, file or web address the user added in Settings, found by name like an app.
+/// A target containing `{query}` is a template: Tab on it takes an argument that fills
+/// the placeholder.
 public struct Link: Codable, Sendable, Equatable, Identifiable {
     /// Stable across edits, so a renamed or retargeted link keeps its alias and history.
     public let id: String
@@ -15,10 +17,14 @@ public struct Link: Codable, Sendable, Equatable, Identifiable {
     }
 
     static let idPrefix = "com.igorv.spotlite.link."
+    public static let placeholder = "{query}"
+
+    public var isTemplate: Bool { target.contains(Link.placeholder) }
 
     /// Stands in for a bundle identifier, so hiding, aliases and history key on it.
     public var entryID: String { Link.idPrefix + id }
 
+    /// A template resolves with its placeholder empty, as Return with nothing typed opens it.
     public var url: URL? { Link.resolve(target) }
 
     /// Nil when the target can't be understood; Settings refuses those, so only a
@@ -26,31 +32,41 @@ public struct Link: Codable, Sendable, Equatable, Identifiable {
     public var entry: AppEntry? {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, let url else { return nil }
-        return AppEntry(url: url, name: trimmed, bundleID: entryID, kind: .link)
+        return AppEntry(url: url, name: trimmed, bundleID: entryID, kind: .link,
+                        template: isTemplate ? target : nil)
     }
 
     /// Paths start with `/` or `~`. Anything with a scheme is taken as written. A bare
     /// host such as `github.com/ivalkenburg` becomes an https address, as a browser's
     /// address bar would treat it.
-    public static func resolve(_ target: String, home: String = NSHomeDirectory()) -> URL? {
+    ///
+    /// `argument` replaces every `{query}`: as typed in a path, percent-encoded as a query
+    /// value in an address so `&`, `#` or a space can't break it. The target's shape is
+    /// judged before filling, so `tel:{query}` stays a scheme when the argument is digits.
+    public static func resolve(_ target: String, argument: String = "",
+                               home: String = NSHomeDirectory()) -> URL? {
         let t = target.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return nil }
+        let value = argument.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if t == "~" || t.hasPrefix("~/") {
-            return URL(fileURLWithPath: home + t.dropFirst())
+        if t == "~" || t.hasPrefix("~/") || t.hasPrefix("/") {
+            let path = t.replacingOccurrences(of: placeholder, with: value)
+            return URL(fileURLWithPath: path.hasPrefix("~") ? home + path.dropFirst() : path)
         }
-        if t.hasPrefix("/") { return URL(fileURLWithPath: t) }
         // `./Downloads` is a relative path, which has nothing to be relative to here.
         guard !t.hasPrefix("."), !t.contains(where: \.isWhitespace) else { return nil }
+        let encoded = value.addingPercentEncoding(withAllowedCharacters: .queryValueAllowed) ?? ""
+        let address = t.replacingOccurrences(of: placeholder, with: encoded)
 
+        // Local servers rarely speak https. Checked before the scheme: in `localhost:{query}`
+        // the colon starts a port, though a non-digit follows it.
+        if t.hasPrefix("localhost") || isIPv4Host(t) { return URL(string: "http://" + address) }
         // A scheme followed by a non-digit: `mailto:a@b`, `x-apple.systempreferences:…`,
-        // but not `localhost:3000`, whose colon starts a port.
+        // but not `github.com:443`, whose colon starts a port.
         if t.range(of: "^[A-Za-z][A-Za-z0-9+.-]*:[^0-9]", options: .regularExpression) != nil {
-            return URL(string: t)
+            return URL(string: address)
         }
-        // Local servers rarely speak https.
-        if t.hasPrefix("localhost") || isIPv4Host(t) { return URL(string: "http://" + t) }
-        if t.contains(".") { return URL(string: "https://" + t) }
+        if t.contains(".") { return URL(string: "https://" + address) }
         return nil
     }
 

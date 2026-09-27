@@ -1,8 +1,8 @@
 import AppKit
 import SpotliteCore
 
-/// The query bar: magnifier, field, the inline completion after the typed text, and the
-/// selected result's icon at the bar's right end.
+/// The query bar: magnifier, field, the inline completion after the typed text, the
+/// selected result's icon at the bar's right end, and the chip of a template link.
 ///
 /// Not a view. Its views go straight into the glass's content view, because the
 /// secondary elements blend additively with the glass (see `Vibrancy`) and a container
@@ -21,6 +21,19 @@ final class SearchBar {
     private let completionPill = NSView()
     private let completionLabel = NSTextField(labelWithString: "")
     private var completionLeading: NSLayoutConstraint!
+    /// The template link Tab entered, before its argument. Pill, icon and name are
+    /// siblings like the completion's, so the icon is not blended with the pill.
+    private let chip = PassthroughView()
+    private let chipPill = NSView()
+    private let chipIcon = NSImageView()
+    private let chipLabel = NSTextField(labelWithString: "")
+    /// The field starts after the magnifier, or after the chip while it shows.
+    private var fieldAfterMagnifier: NSLayoutConstraint!
+    private var fieldAfterChip: NSLayoutConstraint!
+    /// The icon being loaded for the chip; see `pendingIconURL`.
+    private var pendingChipIconURL: URL?
+    /// Hidden while the chip shows, which names what the field is for.
+    private var placeholder: NSAttributedString?
     /// The icon being loaded for the bar, so a load that finishes after the selection
     /// moved on is dropped.
     private var pendingIconURL: URL?
@@ -50,7 +63,21 @@ final class SearchBar {
             completion.addSubview(v)
         }
 
-        for v in [magnifier, field, barIcon, completion] {
+        chipPill.wantsLayer = true
+        chipPill.layer?.cornerRadius = Metrics.chipRadius
+        chipPill.layer?.cornerCurve = .continuous
+        chipIcon.imageScaling = .scaleProportionallyUpOrDown
+        chipLabel.wantsLayer = true
+        chipLabel.font = .systemFont(ofSize: Metrics.queryFontSize, weight: .regular)
+        chipLabel.lineBreakMode = .byTruncatingTail
+        chipLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        chip.isHidden = true
+        for v in [chipPill, chipIcon, chipLabel] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            chip.addSubview(v)
+        }
+
+        for v in [magnifier, field, barIcon, completion, chip] {
             v.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(v)
         }
@@ -62,7 +89,6 @@ final class SearchBar {
             magnifier.heightAnchor.constraint(equalToConstant: Metrics.magnifierWidth),
             magnifier.widthAnchor.constraint(equalToConstant: Metrics.magnifierWidth),
 
-            field.leadingAnchor.constraint(equalTo: magnifier.trailingAnchor, constant: Metrics.magnifierGap),
             field.trailingAnchor.constraint(equalTo: barIcon.leadingAnchor, constant: -8),
             // Centered against the magnifier, not stretched to the input height:
             // a text field taller than its line draws the text at the top, not the middle.
@@ -86,7 +112,29 @@ final class SearchBar {
             completionLabel.trailingAnchor.constraint(equalTo: completionPill.trailingAnchor,
                                                       constant: -Metrics.pillTrailingPadding),
             completionLabel.firstBaselineAnchor.constraint(equalTo: field.firstBaselineAnchor),
+
+            chip.leadingAnchor.constraint(equalTo: magnifier.trailingAnchor, constant: Metrics.magnifierGap),
+            chip.topAnchor.constraint(equalTo: content.topAnchor),
+            chip.heightAnchor.constraint(equalToConstant: Metrics.inputHeight),
+            // A long name truncates rather than leaving no room to type.
+            chip.widthAnchor.constraint(lessThanOrEqualTo: content.widthAnchor, multiplier: 0.5),
+            chipPill.leadingAnchor.constraint(equalTo: chip.leadingAnchor),
+            chipPill.trailingAnchor.constraint(equalTo: chip.trailingAnchor),
+            chipPill.centerYAnchor.constraint(equalTo: content.topAnchor, constant: Metrics.barCenterY),
+            chipPill.heightAnchor.constraint(equalToConstant: Metrics.pillHeight),
+            chipIcon.leadingAnchor.constraint(equalTo: chipPill.leadingAnchor, constant: Metrics.chipLeadingPadding),
+            chipIcon.centerYAnchor.constraint(equalTo: chipPill.centerYAnchor),
+            chipIcon.widthAnchor.constraint(equalToConstant: Metrics.chipIconSize),
+            chipIcon.heightAnchor.constraint(equalToConstant: Metrics.chipIconSize),
+            chipLabel.leadingAnchor.constraint(equalTo: chipIcon.trailingAnchor, constant: Metrics.chipIconGap),
+            chipLabel.trailingAnchor.constraint(equalTo: chipPill.trailingAnchor,
+                                                constant: -Metrics.chipTrailingPadding),
+            chipLabel.firstBaselineAnchor.constraint(equalTo: field.firstBaselineAnchor),
         ])
+        fieldAfterMagnifier = field.leadingAnchor.constraint(equalTo: magnifier.trailingAnchor,
+                                                             constant: Metrics.magnifierGap)
+        fieldAfterChip = field.leadingAnchor.constraint(equalTo: chip.trailingAnchor, constant: Metrics.chipFieldGap)
+        fieldAfterMagnifier.isActive = true
         completionLeading = completion.leadingAnchor.constraint(equalTo: content.leadingAnchor)
         completionLeading.isActive = true
     }
@@ -103,11 +151,16 @@ final class SearchBar {
         Vibrancy.apply(mode, to: magnifier.layer)
 
         field.textColor = mode == .lighten ? .white : .black
-        field.placeholderAttributedString = NSAttributedString(string: "Spotlite Search", attributes: [
+        placeholder = NSAttributedString(string: "Spotlite Search", attributes: [
             .font: NSFont.systemFont(ofSize: Metrics.queryFontSize, weight: .regular),
             .foregroundColor: secondary,
         ])
+        setPlaceholder(chip.isHidden ? placeholder : nil)
         Vibrancy.apply(mode, to: field.layer)
+
+        Vibrancy.fill(chipPill, Vibrancy.pill, mode)
+        chipLabel.textColor = field.textColor
+        Vibrancy.apply(mode, to: chipLabel.layer)
 
         Vibrancy.fill(completionPill, Vibrancy.pill, mode)
         completionLabel.textColor = Vibrancy.color(Vibrancy.completion, mode)
@@ -131,6 +184,47 @@ final class SearchBar {
         barIcon.image = nil
         pendingIconURL = nil
         setCaretVisible(true)
+    }
+
+    /// Puts the template link's chip before the field, which now takes its argument.
+    func showChip(for item: ResultItem) {
+        chipLabel.stringValue = item.title
+        pendingChipIconURL = nil
+        chipIcon.image = item.immediateIcon
+        if chipIcon.image == nil, let url = item.iconURL {
+            pendingChipIconURL = url
+            IconCache.shared.load(for: url) { [weak self] loaded in
+                guard let self, self.pendingChipIconURL == url else { return }
+                self.pendingChipIconURL = nil
+                self.chipIcon.image = loaded
+            }
+        }
+        chip.isHidden = false
+        setPlaceholder(nil)
+        fieldAfterMagnifier.isActive = false
+        fieldAfterChip.isActive = true
+        // The completion is placed from the field's frame straight after either swap.
+        content?.layoutSubtreeIfNeeded()
+    }
+
+    func hideChip() {
+        guard !chip.isHidden else { return }
+        chip.isHidden = true
+        chipIcon.image = nil
+        pendingChipIconURL = nil
+        setPlaceholder(placeholder)
+        fieldAfterChip.isActive = false
+        fieldAfterMagnifier.isActive = true
+        content?.layoutSubtreeIfNeeded()
+    }
+
+    /// The field editor copies the placeholder when editing starts, so a change made
+    /// mid-edit is handed to it too.
+    private func setPlaceholder(_ text: NSAttributedString?) {
+        field.placeholderAttributedString = text
+        guard let editor = field.currentEditor() else { return }
+        field.cell?.setUpFieldEditorAttributes(editor)
+        editor.needsDisplay = true
     }
 
     private func setCaretVisible(_ visible: Bool) {

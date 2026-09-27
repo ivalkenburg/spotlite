@@ -63,6 +63,16 @@ enum Metrics {
     /// where Spotlight starts its pill.
     static let pillOverlap: CGFloat = 2.5
 
+    /// The token before the argument of a template link, as Spotlight draws an app it
+    /// searches inside: the pill's height, the link's icon, then its name.
+    static let chipRadius: CGFloat = 8
+    static let chipIconSize: CGFloat = 22
+    static let chipLeadingPadding: CGFloat = 5
+    static let chipIconGap: CGFloat = 4
+    static let chipTrailingPadding: CGFloat = 8
+    /// Between the chip and the caret.
+    static let chipFieldGap: CGFloat = 6
+
     /// Hints on the selected row: small text, then a key badge.
     static let hintFontSize: CGFloat = 10
     static let badgeFontSize: CGFloat = 11
