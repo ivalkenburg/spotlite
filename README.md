@@ -1,80 +1,31 @@
 # Spotlite
 
 A lightweight application launcher for macOS 26. Press a shortcut, type a few
-letters, hit return.
+letters, hit Return.
 
-It exists because a launcher should be invisible until you need it: Spotlite sits
-at 0% CPU while idle and does its matching and ranking in about 28 microseconds per
+Spotlight searches everything on your Mac, which makes it slow to settle and
+noisy when all you want is to open an app. Spotlite looks like Spotlight but
+only does the launcher part, and stays out of the way until you call it. It
+sits at 0% CPU while idle and ranks results in about 28 microseconds per
 keystroke.
 
-![Spotlite](docs/screenshot.png)
+![Spotlite](screenshot.png)
 
 ## Features
 
-- **Fuzzy app search.** Bonus-weighted subsequence matching, so `saf` finds Safari
-  and `gc` finds Google Chrome. Typing the start of a name always beats an acronym,
-  as in Spotlight: `gh` finds Ghostty before GitHub Desktop.
-- **Frecency ranking.** Apps you launch often rank higher, but the boost is capped
-  so a familiar app can never hijack a query it doesn't match well, and it never
-  lifts an acronym match above an app whose name starts with the query. Settings can
-  reset the whole history, or forget one app's from the right-click menu in its list.
-- **Remembers the last search, if you want.** With "Remember last search" set in
-  Settings (up to 30 seconds; off by default), reopening the panel within that time
-  brings the query back, selected, so typing replaces it and Return repeats it.
-- **Built-in calculator.** Type an expression and the result appears on a card at
-  the top. Return copies it to the clipboard. Beyond `+ - * / ^ %` it knows
-  `sqrt`, `cbrt`, `abs`, `round`, `floor`, `ceil`, `exp`, `ln`, `log` (base 10),
-  `log2`, and `sin`, `cos`, `tan` and their inverses in radians, all written with
-  parentheses; `√` as a prefix; `pi`, `π` and `e`; `0x`, `0b` and `0o` literals; and
-  `ans`, the result that was on screen when the panel last closed.
-- **System Settings panes.** Type `blue` to open Bluetooth, `dt` for Date & Time.
-  Panes are read from macOS itself, so names follow your language and OS version.
-  A pane ranks just below an app matched as strongly, so `home` reaches the Home
-  pane before Google Chrome's scattered letters, and it can be hidden or given an
-  alias like an app. A checkbox in Settings turns them off. Panes that depend on
-  hardware or setup, like Mouse or Headphones, are listed whether or not they apply.
-- **Hide apps you never launch.** Command-Delete on a result hides it; the full
-  list with checkboxes lives in Settings.
-- **Recent apps.** With "Show recent apps before you type" on (off by default), the
-  empty panel lists the six apps you launch most, so the shortcut then Return
-  reopens your usual app.
-- **Running apps are marked** with a small dot under the icon, as in the Dock. A
-  checkbox in Settings turns it off.
-- **System commands.** Lock Screen, Sleep, Sleep Displays, Start Screen Saver,
-  Restart, Shut Down, Log Out, Empty Trash and Toggle Dark Mode search like apps,
-  ranked just below an app matched as strongly. Each can be hidden or given an alias
-  like an app, and a checkbox turns them all off. Restart, Shut Down and Log Out show
-  macOS's own confirmation; Empty Trash asks first.
-- **Links.** "Add Link…" in Settings gives a folder, file or web address a name and
-  an optional alias, so `dl` can open `~/Downloads` and `gh` a GitHub page. A bare
-  host like `github.com` gets `https://`. Right-click a link in the list to edit or
-  remove it. A link shows the icon of the app that opens it.
-- **Links that take input.** Put `{query}` in a link's address, then press Tab on it:
-  a chip names the link and what you type fills the placeholder, as when Spotlight
-  searches inside an app. `github.com/search?q={query}` searches GitHub, and
-  `shortcuts://run-shortcut?name=New%20Note&input=text&text={query}` hands the text
-  to a Shortcut, which can run anything, including a shell script.
-- **Web search.** The last row offers the query to Google, DuckDuckGo, Bing or Kagi,
-  so when nothing on the Mac matches, Return searches the web. It can be turned off.
-- **Aliases.** Teach it that `ps` means Photoshop. Typing the start of an alias
-  outranks every name match, and works even when the name shares no letters with it.
-- **Caffeinate.** Search for it to get a row with a switch that keeps the display
-  awake. The switch controls Spotlite's own assertion and always works; when a
-  `caffeinate -d` elsewhere is also keeping the display awake, the row says so. A
-  separate filled-cup menu-bar item appears only while either is active, leaving
-  Spotlite's normal search icon unchanged and remaining visible when that icon is
-  disabled.
-- **Looks like Spotlight.** The panel matches macOS 26 Spotlight's layout, colours
-  and animations, measured from side-by-side captures in both themes: untinted
-  Liquid Glass (`NSGlassEffectView`), an inline completion after the query
-  (`saf` + `ari — Open`), the selected result's icon at the bar's end, a soft
-  highlight on the top hit that turns accent blue once you use the arrow keys.
-  A Tint slider in Settings blends the glass toward solid grey if you prefer less
-  of the backdrop showing through.
-
-## Requirements
-
-macOS 26.0 or later. Xcode 26 to build.
+- Fuzzy app search: `saf` finds Safari, `gc` finds Google Chrome.
+- Apps you launch often rank higher, without taking over queries they match poorly.
+- A calculator that shows the result as you type; Return copies it.
+- System Settings panes by name: `blue` opens Bluetooth.
+- System commands such as Lock Screen, Sleep, Restart and Empty Trash.
+- Links to folders, files or web pages, each with its own name and alias.
+- Links with a `{query}` placeholder: press Tab and type to search GitHub or pass text to a Shortcut.
+- A web search row (Google, DuckDuckGo, Bing or Kagi) for when nothing on the Mac matches.
+- Aliases, so `ps` opens Photoshop.
+- Hide apps you never launch with Command-Delete.
+- Optional recent apps list before you type, and a dot under apps that are running.
+- A Caffeinate switch that keeps the display awake.
+- The look of macOS 26 Spotlight, Liquid Glass included, in light and dark mode.
 
 ## Install
 
@@ -85,11 +36,13 @@ brew install ivalkenburg/tap/spotlite
 xattr -dr com.apple.quarantine /Applications/Spotlite.app
 ```
 
-Spotlite is not notarized by Apple, so macOS blocks its first launch. The `xattr`
-line allows it; alternatively, open it once and click "Open Anyway" in System
-Settings › Privacy & Security.
+Spotlite is not notarized by Apple, so macOS blocks its first launch. The
+`xattr` line allows it. You can also open it once and click "Open Anyway" in
+System Settings › Privacy & Security.
 
-Or build it yourself:
+### Build from source
+
+You need macOS 26 and Xcode 26.
 
 ```sh
 git clone https://github.com/ivalkenburg/spotlite.git
@@ -97,156 +50,35 @@ cd spotlite
 make install
 ```
 
-`make` builds a signed `Spotlite.app` into `./build`. `make install` copies it to
-`/Applications`, which is where it needs to live before you enable "Start at
-login". Spotlite disables that option when it is running elsewhere so a login
-item cannot point into a build directory that may later be cleaned.
-
-On first launch Spotlite opens its Settings window once to show you the shortcut.
-It does not add itself as a login item unless you ask it to.
+This builds the app and copies it to `/Applications`. "Start at login" only
+works from there.
 
 ## Usage
 
 | Key | Action |
 | --- | --- |
 | `Option-Space` | Show or hide the launcher (configurable) |
-| `Up` / `Down` | Move the cursor, wrapping at both ends |
-| `Return` | Launch the selected app, or copy a calculator result |
+| `Up` / `Down` | Move the selection |
+| `Return` | Open the selected result, or copy a calculator result |
 | `Tab` | Type input for the selected `{query}` link |
-| `Backspace` | First removes the completion, then deletes as usual; on an empty link input, removes the chip |
-| `Command-1` to `Command-9` | Launch the nth result directly |
-| `Command-Return` | Reveal the selected app or file link in Finder |
-| `Option-Return` | Copy the selected app's path, or a link's path or address (with the input filled in) |
-| `Command-Q` | Quit the selected app, if it is running |
+| `Command-1` to `Command-9` | Open the nth result |
+| `Command-Return` | Reveal the selected app or file in Finder |
+| `Option-Return` | Copy the selected app's path or link's address |
+| `Command-Q` | Quit the selected app if it is running |
 | `Command-Delete` | Hide the selected app from results |
 | `Escape` | Close |
 
-Clicking outside the window closes it. Hovering does not move the cursor, so an
-incidental mouse position can never change what Return does. The selected row
-shows where the app lives, which tells two copies of the same app apart. Holding
-Command or Option swaps that path for what those modifiers do.
-
-By default the panel opens on whichever display holds the pointer. Settings can
-pin it to the main display instead. Appearance can follow the system or stay in
-light or dark mode.
-
-The panel can be resized by dragging either edge, and moved up or down by
-dragging an empty part of the search bar. It stays locked to the horizontal
-centre of the screen, so it only ever travels vertically. Because it stays
-centred, the width changes by twice the pointer movement — the edge you are
-holding stays under the pointer. There is no visible handle: the cursor changes
-when you are over an edge. "Reset Size & Position" in Settings puts it back.
-
-Width is stored in points and vertical position as a fraction of screen height,
-so the panel lands in the same visual place on any display. Geometry that does
-not fit the current screen is clamped when the panel is placed, never written
-back — unplugging a monitor will not destroy the setting.
-
-To reach Settings, use the menu bar icon, or search for `settings` in Spotlite
-itself. Spotlite indexes its own Settings entry, so it stays reachable even with
-the menu bar icon turned off.
+Open Settings from the menu bar icon, or search for `settings` in Spotlite.
+Drag the panel's edges to resize it, or drag an empty part of the search bar to
+move it up or down.
 
 ## Permissions
 
-None to search and launch. The global shortcut uses Carbon's `RegisterEventHotKey`,
-which needs no Accessibility access and is dispatched by the window server rather than
-waking the process on every keystroke. Spotlite is not sandboxed, because a sandboxed
-app cannot launch arbitrary applications.
+Searching and launching need no permissions, not even Accessibility. Restart,
+Shut Down, Log Out, Empty Trash and Toggle Dark Mode send Apple events to
+loginwindow, Finder or System Events, and macOS asks you once per app to allow
+it under Privacy & Security › Automation.
 
-Some commands send an Apple event, which macOS asks you to allow once per target
-under Privacy & Security › Automation: Restart, Shut Down and Log Out (loginwindow),
-Empty Trash (Finder) and Toggle Dark Mode (System Events). Lock Screen, Sleep and the
-screen saver need nothing.
+## License
 
-## How it works
-
-The app index is a depth-2 scan of `/Applications`, `/System/Applications`,
-`/System/Applications/Utilities`, `/System/Library/CoreServices/Applications` and
-`~/Applications`, skipping background-only agents. Apps are indexed under the
-localized name Finder shows, rather than potentially abbreviated internal bundle
-metadata. It is cached to
-`~/Library/Caches/Spotlite` and refreshed in the background on first use, by an
-`FSEventStream` with a 2 second coalescing latency, and by a modification-time
-check when the panel opens. Cached results remain immediately available while a
-refresh is running.
-
-Preferences and launch history live in `~/Library/Application Support/Spotlite`,
-separate from the cache: the index is regenerable, your hidden-app list is not.
-
-Matching runs synchronously on the main thread. Scoring and ranking the whole index
-takes about 28 microseconds, so a background queue would add dispatch overhead and
-cancellation bugs to save nothing.
-
-Icons are the opposite case, and are loaded on a background queue: only rows that
-are actually on screen request one, but a fetch plus its first rasterise costs
-roughly 670 microseconds, which is enough to stall a keystroke. Rows show the
-generic bundle icon and fade the real one in.
-
-External caffeine state is refreshed when Spotlite launches, when the panel or menu
-opens, and after Spotlite toggles its own assertion. A coalescible five-second timer
-keeps the independent caffeine indicator current even when the normal Spotlite menu-bar
-icon is hidden.
-
-## Development
-
-```sh
-make          # build and sign into ./build
-make test     # run the test suite
-make install  # copy to /Applications
-make dmg      # package ./build/Spotlite-<version>.dmg for local testing
-```
-
-The package splits into `SpotliteCore`, which is pure Swift with no AppKit
-dependency and holds the matcher, calculator, result assembly, index and preferences, and
-`Spotlite`, which is the AppKit layer. The split keeps the tests headless.
-
-There are a few dev hooks, all off by default:
-
-| Flag | Effect |
-| --- | --- |
-| `--bench` | Time the matcher against the real index |
-| `--search <query>` | Print ranked results with scores |
-| `--dump` | Print the index |
-| `SPOTLITE_DEV_FRAMES=1` | Dump runtime view frames and exit |
-| `SPOTLITE_DEV_PIN=1` | Stop the panel hiding when it loses focus |
-
-`SPOTLITE_DEV_FRAMES` earned its place: several layout bugs were only findable by
-comparing real frames against what the layout code claimed, rather than by
-reading screenshots.
-
-### Releasing
-
-A download that opens without a Gatekeeper warning needs a Developer ID
-Application certificate (Apple Developer Program) and notarization. Once per machine,
-store the notarization credentials in the keychain:
-
-```sh
-xcrun notarytool store-credentials spotlite --apple-id <id> --team-id <team>
-```
-
-Then, for each release:
-
-1. Bump `CFBundleShortVersionString` and `CFBundleVersion` in `Resources/Info.plist`.
-2. `make release` signs with the hardened runtime, notarizes, and staples the ticket
-   to `build/Spotlite-<version>.dmg`. Without a Developer ID certificate, use
-   `make dmg IDENTITY="Apple Development: …"` instead; the download then needs the
-   quarantine step described under Install.
-3. `gh release create v<version> build/Spotlite-<version>.dmg`
-4. `make cask` writes `build/spotlite.rb` from `packaging/spotlite.rb` with the new
-   version and checksum. Copy it to `Casks/` in a tap repository such as
-   `ivalkenburg/homebrew-tap`; `brew install ivalkenburg/tap/spotlite` then works.
-
-## Measurements
-
-From the author's machine, indexing 88 applications:
-
-| | |
-| --- | --- |
-| Match and ranking cost | 28 µs per keystroke across the full index |
-| Idle CPU | 0.0% |
-| Idle memory | 32 MB, or 45 MB with the menu bar icon enabled |
-| After use | ~88 MB, stable across repeated open and close |
-
-Memory after use is higher than the "lightweight" goal really implies. The bulk of
-it arrives when the glass panel is first constructed and is most likely the
-GPU-backed surfaces behind `NSGlassEffectView`, though that has not been proven.
+MIT. See [LICENSE](LICENSE).
