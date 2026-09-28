@@ -8,6 +8,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// lazily-created controller lets the status items reflect caffeine without paying
     /// the cost of constructing the panel and its views at launch.
     private let caffeine = CaffeineAssertion()
+    private var libraryInstance: AppLibrary?
+    /// Opening Settings needs the index, but an idle agent need not load launch history
+    /// or start the directory watcher before either Settings or search is used.
+    private var library: AppLibrary {
+        if let libraryInstance { return libraryInstance }
+        let created = AppLibrary()
+        created.extras = preferences.extraEntries
+        created.onChange = { [weak self] apps, scanned in
+            guard let self else { return }
+            if scanned { IconCache.shared.invalidateAll() }
+            self.controllerInstance?.libraryDidChange()
+            self.settings?.appsDidChange(apps)
+        }
+        libraryInstance = created
+        return created
+    }
     private var controllerInstance: SpotliteController?
 
     /// Built on first invocation and kept forever after — an idle agent should not
@@ -15,13 +31,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var controller: SpotliteController {
         if let controllerInstance { return controllerInstance }
 
-        let controller = SpotliteController(caffeine: caffeine, preferences: preferences)
+        let controller = SpotliteController(library: library, caffeine: caffeine, preferences: preferences)
         controller.onOpenSettings = { [weak self] in self?.openSettings() }
         controller.onPreferencesChanged = { [weak self] prefs in
             self?.adoptPreferences(prefs) { self?.settings?.preferencesDidChange($0) }
-        }
-        controller.onIndexChanged = { [weak self] apps in
-            self?.settings?.appsDidChange(apps)
         }
         controllerInstance = controller
         return controller
@@ -235,18 +248,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Settings
 
     private func openSettings() {
+        library.loadIfNeeded()
         if settings == nil {
             let controller = SettingsWindowController(preferences: preferences,
-                                                      library: self.controller.library)
+                                                      library: library)
             controller.onChange = { [weak self] prefs in
-                self?.adoptPreferences(prefs) { self?.controller.preferencesDidChange($0) }
+                self?.adoptPreferences(prefs) { self?.controllerInstance?.preferencesDidChange($0) }
             }
             controller.onHotKeyChange = { [weak self] code, modifiers in
                 self?.rebindHotKey(code: code, modifiers: modifiers) ?? false
             }
             settings = controller
         }
-        settings?.show(apps: controller.indexedApps())
+        settings?.show(apps: library.entries)
     }
 
     /// Applies preferences changed by the panel or by Settings. `forward` hands them to
@@ -254,7 +268,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// from the app's.
     private func adoptPreferences(_ prefs: Preferences, forward: (Preferences) -> Void) {
         let enabledStatusItem = !preferences.showMenuBarIcon && prefs.showMenuBarIcon
+        let linksChanged = preferences.links != prefs.links
         preferences = prefs
+        if linksChanged { library.extras = prefs.extraEntries }
         applyTheme()
         forward(prefs)
         if enabledStatusItem { caffeine.refresh() }

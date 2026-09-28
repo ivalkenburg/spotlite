@@ -19,6 +19,8 @@ struct LinkTests {
         #expect(resolve("https://example.com/a?b=c") == "https://example.com/a?b=c")
         #expect(resolve("github.com/ivalkenburg") == "https://github.com/ivalkenburg")
         #expect(resolve("mailto:ann@example.com") == "mailto:ann@example.com")
+        #expect(resolve("tel:0612345678") == "tel:0612345678")
+        #expect(resolve("sms:12345") == "sms:12345")
         #expect(resolve("x-apple.systempreferences:com.apple.Bluetooth")
                 == "x-apple.systempreferences:com.apple.Bluetooth")
     }
@@ -28,6 +30,9 @@ struct LinkTests {
         #expect(resolve("localhost:3000") == "http://localhost:3000")
         #expect(resolve("192.168.1.1:8080/admin") == "http://192.168.1.1:8080/admin")
         #expect(resolve("127.0.0.1") == "http://127.0.0.1")
+        #expect(resolve("localhostish.com") == "https://localhostish.com")
+        #expect(resolve("localhost.example.com") == "https://localhost.example.com")
+        #expect(resolve("github.com:443") == "https://github.com:443")
     }
 
     @Test func rejectsWhatIsNeitherPathNorAddress() {

@@ -18,19 +18,15 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private let scroll = NSScrollView()
     private let matcher = Matcher()
 
-    /// Shared with Settings, which can clear launch history.
-    let library = AppLibrary()
+    /// Owned by the app delegate and shared with Settings.
+    let library: AppLibrary
     private var placement: PanelPlacement!
     private var items: [ResultItem] = []
     private var preferences: Preferences {
         // Not on every change: a drag writes the geometry here on every pointer move.
         didSet {
-            // The library reports the change, which rebuilds the corpus.
-            if preferences.links != oldValue.links {
-                library.extras = preferences.extraEntries
-                return
-            }
-            guard preferences.aliases != oldValue.aliases
+            guard preferences.links != oldValue.links
+                || preferences.aliases != oldValue.aliases
                 || preferences.hiddenBundleIDs != oldValue.hiddenBundleIDs
                 || preferences.showSystemSettings != oldValue.showSystemSettings
                 || preferences.showSystemCommands != oldValue.showSystemCommands
@@ -85,9 +81,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// Called when the user picks the Settings entry, or hides an app.
     var onOpenSettings: (() -> Void)?
     var onPreferencesChanged: ((Preferences) -> Void)?
-    var onIndexChanged: (([AppEntry]) -> Void)?
-
-    init(caffeine: CaffeineAssertion, preferences: Preferences) {
+    init(library: AppLibrary, caffeine: CaffeineAssertion, preferences: Preferences) {
+        self.library = library
         self.caffeine = caffeine
         self.preferences = preferences
         super.init()
@@ -103,14 +98,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         moveHandle.receiver = placement
         leadingEdge.receiver = placement
         trailingEdge.receiver = placement
-        // Before `onChange` is set: nothing is listening yet.
-        library.extras = preferences.extraEntries
-        library.onChange = { [weak self] apps in
-            guard let self else { return }
-            self.rebuildCorpus()
-            self.onIndexChanged?(apps)
-            if self.panel.isVisible { self.refreshMatches() }
-        }
+        rebuildCorpus()
         NotificationCenter.default.addObserver(
             self, selector: #selector(resignedKey),
             name: NSWindow.didResignKeyNotification, object: panel
@@ -373,14 +361,13 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         return animation
     }
 
-    /// The current index, for the Settings app list. Already sorted by name.
-    func indexedApps() -> [AppEntry] {
-        loadLibrary()
-        return library.entries
-    }
-
     private func loadLibrary() {
         if library.loadIfNeeded() { rebuildCorpus() }
+    }
+
+    func libraryDidChange() {
+        rebuildCorpus()
+        if panel.isVisible { refreshMatches() }
     }
 
     private func rebuildCorpus() {
@@ -496,6 +483,14 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         select(row, as: .navigated)
     }
 
+    private func recordSuccessfulLaunch(_ id: String) {
+        library.recordLaunch(id)
+        // A quick reopen can precede an asynchronous launch completion. Keep the
+        // optional recent-app list current if that completion arrives while it shows.
+        if panel.isVisible, preferences.showRecentApps,
+           field.stringValue.allSatisfy(\.isWhitespace) { refreshMatches() }
+    }
+
     private func buildItems(for query: String) -> [ResultItem] {
         // The chip already says where Return goes; there is nothing to list.
         guard argument == nil else { return [] }
@@ -567,13 +562,13 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
         let collapsing = target == Metrics.inputHeight
         guard animated, !collapsing, panel.isVisible, !isDismissing, !placement.isDragging else {
-            animator.cancel("height")
+            animator.cancel()
             glassHeight.constant = target
             return
         }
 
         let from = glassHeight.constant
-        animator.run("height", duration: Metrics.growDuration, curve: .easeOut) { [weak self] p in
+        animator.run(duration: Metrics.growDuration) { [weak self] p in
             guard let self else { return }
             self.glassHeight.constant = from + (target - from) * p
             self.panel.contentView?.layoutSubtreeIfNeeded()
@@ -698,38 +693,39 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             NSWorkspace.shared.open(url)
 
         case .app(let match) where match.entry.kind == .settingsPane:
-            library.recordLaunch(match.entry.id)
             hide()
             openSettingsPane(match.entry)
 
         case .app(let match) where match.entry.kind == .command:
             guard let command = SystemCommand(id: match.entry.id) else { return }
-            library.recordLaunch(match.entry.id)
             hide()
-            SystemCommandRunner.run(command)
+            let id = match.entry.id
+            SystemCommandRunner.run(command) { [weak self] in self?.recordSuccessfulLaunch(id) }
 
         case .app(let match) where match.entry.template != nil:
             // Nothing to open until the argument is typed.
             enterArgument(for: index)
 
         case .app(let match) where match.entry.kind == .link:
-            library.recordLaunch(match.entry.id)
             hide()
-            openLink(match.entry.url)
+            openLink(match.entry.url, id: match.entry.id)
 
         case .app(let match):
             let entry = match.entry
             let query = field.stringValue
-            library.recordLaunch(entry.id)
             hide()
 
             let config = NSWorkspace.OpenConfiguration()
             config.activates = true
             // Fire and forget: waiting on a slow-launching app would freeze the panel.
             NSWorkspace.shared.openApplication(at: entry.url, configuration: config) { [weak self] _, error in
-                guard error != nil else { return }
+                let succeeded = error == nil
                 Task { @MainActor in
                     guard let self else { return }
+                    if succeeded {
+                        self.recordSuccessfulLaunch(entry.id)
+                        return
+                    }
                     // The app is gone, so the whole index is suspect: rescan rather than
                     // just dropping this entry, or the stale one returns from the cache.
                     self.show()
@@ -744,10 +740,13 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     /// A folder that has since gone, or an address no app handles, beeps.
-    private func openLink(_ url: URL) {
-        NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
-            guard error != nil else { return }
-            Task { @MainActor in NSSound.beep() }
+    private func openLink(_ url: URL, id: String) {
+        NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in
+            let succeeded = error == nil
+            Task { @MainActor in
+                if succeeded { self?.recordSuccessfulLaunch(id) }
+                else { NSSound.beep() }
+            }
         }
     }
 
@@ -795,20 +794,27 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             NSSound.beep()
             return
         }
-        library.recordLaunch(argument.link.id)
         hide()
-        openLink(url)
+        openLink(url, id: argument.link.id)
     }
 
     /// Opens a pane, or System Settings itself when the pane's link is refused: that is
     /// still closer to what was asked for than nothing, and a rescan would not fix it.
     private func openSettingsPane(_ entry: AppEntry) {
         guard let bundleID = entry.bundleID, let url = SettingsPaneIndex.url(for: bundleID) else { return }
-        NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
-            guard error != nil else { return }
+        NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in
+            let succeeded = error == nil
             Task { @MainActor in
+                guard let self else { return }
+                if succeeded {
+                    self.recordSuccessfulLaunch(entry.id)
+                    return
+                }
                 NSWorkspace.shared.openApplication(at: SettingsPaneIndex.systemSettingsApp,
-                                                   configuration: NSWorkspace.OpenConfiguration())
+                                                   configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, fallbackError in
+                    guard fallbackError == nil else { return }
+                    Task { @MainActor in self?.recordSuccessfulLaunch(entry.id) }
+                }
             }
         }
     }

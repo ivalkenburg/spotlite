@@ -14,6 +14,9 @@ final class IconCache {
     /// the row and asks again; dropping those later requests left rows stuck on the
     /// placeholder, because the load that did finish had nobody left to notify.
     private var waiting: [String: [(NSImage) -> Void]] = [:]
+    /// An index scan can replace an app at the same path while a load is in flight.
+    /// Results from an older generation must not refill the cleared cache.
+    private var generation = 0
 
     private init() {
         // Sized to hold the whole index rather than a screenful. Scrolling the Settings
@@ -28,6 +31,12 @@ final class IconCache {
         cache.object(forKey: url.path as NSString)
     }
 
+    func invalidateAll() {
+        generation &+= 1
+        cache.removeAllObjects()
+        waiting.removeAll()
+    }
+
     /// Loads off the main thread and calls back on it. It does not consult the cache, so
     /// check `cached(for:)` first rather than paying for a second load.
     func load(for url: URL, completion: @escaping (NSImage) -> Void) {
@@ -38,6 +47,7 @@ final class IconCache {
             return
         }
         waiting[key] = [completion]
+        let requestedGeneration = generation
 
         queue.async {
             // Resolved first: an app in /Applications that is a symlink (Safari, into its
@@ -45,6 +55,7 @@ final class IconCache {
             let icon = NSWorkspace.shared.icon(forFile: (key as NSString).resolvingSymlinksInPath)
             let flattened = IconCache.rasterize(icon, to: Metrics.iconSize)
             Task { @MainActor in
+                guard self.generation == requestedGeneration else { return }
                 self.cache.setObject(flattened, forKey: key as NSString)
                 let waiters = self.waiting.removeValue(forKey: key) ?? []
                 for waiter in waiters { waiter(flattened) }

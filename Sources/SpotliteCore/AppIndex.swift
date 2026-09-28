@@ -7,7 +7,6 @@ public enum AppIndex {
         var dirs = [
             "/Applications",
             "/System/Applications",
-            "/System/Applications/Utilities",
             "/System/Library/CoreServices/Applications",
         ].map { URL(fileURLWithPath: $0) }
         dirs.append(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications"))
@@ -61,10 +60,10 @@ public enum AppIndex {
 
         for dir in directories {
             for url in bundles(in: dir, depth: 2) {
-                guard let entry = makeEntry(for: url) else { continue }
-                if seen.insert(entry.instanceID).inserted {
-                    results.append(entry)
-                }
+                let path = url.standardizedFileURL.path
+                guard !seen.contains(path), let entry = makeEntry(for: url) else { continue }
+                seen.insert(path)
+                results.append(entry)
             }
         }
         return results

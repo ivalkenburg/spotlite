@@ -58,12 +58,16 @@ public struct Link: Codable, Sendable, Equatable, Identifiable {
         let encoded = value.addingPercentEncoding(withAllowedCharacters: .queryValueAllowed) ?? ""
         let address = t.replacingOccurrences(of: placeholder, with: encoded)
 
-        // Local servers rarely speak https. Checked before the scheme: in `localhost:{query}`
-        // the colon starts a port, though a non-digit follows it.
-        if t.hasPrefix("localhost") || isIPv4Host(t) { return URL(string: "http://" + address) }
-        // A scheme followed by a non-digit: `mailto:a@b`, `x-apple.systempreferences:…`,
-        // but not `github.com:443`, whose colon starts a port.
-        if t.range(of: "^[A-Za-z][A-Za-z0-9+.-]*:[^0-9]", options: .regularExpression) != nil {
+        // Local servers rarely speak https. Match the whole host, not names such as
+        // `localhostish.com`, and check it before interpreting a port as a URL scheme.
+        if t == "localhost" || t.hasPrefix("localhost:") || t.hasPrefix("localhost/")
+            || isIPv4Host(t) { return URL(string: "http://" + address) }
+        // A dotted prefix with digits after the colon is a host with a port. A
+        // syntactically valid prefix otherwise names a scheme, including numeric
+        // values such as `tel:0612345678` and `sms:12345`.
+        if t.range(of: "^[A-Za-z][A-Za-z0-9+.-]*:", options: .regularExpression) != nil,
+           let colon = t.firstIndex(of: ":"),
+           !t[..<colon].contains(".") || t[t.index(after: colon)...].first?.isNumber == false {
             return URL(string: address)
         }
         if t.contains(".") { return URL(string: "https://" + address) }

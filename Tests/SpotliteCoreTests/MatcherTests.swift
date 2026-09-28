@@ -69,6 +69,13 @@ struct FuzzyScoringTests {
         }
     }
 
+    @Test func adjacentPathCanWinAfterItsBonus() {
+        // The first A wins before the bonus, but the final AB wins with it.
+        let result = Matcher().search("ab", in: [app("A-AB")]).first
+        #expect(result?.score == 100)
+        #expect(result?.positions == [2, 3])
+    }
+
     @Test func nonMatchesAreExcluded() {
         #expect(search("zzzz").isEmpty)
         #expect(search("").isEmpty)

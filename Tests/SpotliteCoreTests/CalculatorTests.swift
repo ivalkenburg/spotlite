@@ -16,6 +16,9 @@ struct CalculatorTests {
 
     @Test func exponentIsRightAssociative() {
         #expect(Calculator.evaluate("2^3^2") == 512)
+        #expect(Calculator.evaluate("-2^2") == -4)
+        #expect(Calculator.evaluate("(-2)^2") == 4)
+        #expect(Calculator.evaluate("2^-2") == 0.25)
     }
 
     @Test func handlesUnaryMinus() {

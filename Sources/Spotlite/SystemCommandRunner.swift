@@ -7,33 +7,41 @@ import SpotliteCore
 @MainActor
 enum SystemCommandRunner {
 
-    static func run(_ command: SystemCommand) {
+    static func run(_ command: SystemCommand, onSuccess: @escaping @MainActor @Sendable () -> Void) {
         switch command {
         case .lockScreen:
-            lockScreen()
+            lockScreen(onSuccess: onSuccess)
         case .sleep:
-            pmset("sleepnow")
+            pmset("sleepnow", onSuccess: onSuccess)
         case .sleepDisplays:
-            pmset("displaysleepnow")
+            pmset("displaysleepnow", onSuccess: onSuccess)
         case .screenSaver:
-            NSWorkspace.shared.openApplication(at: screenSaverApp, configuration: NSWorkspace.OpenConfiguration())
+            NSWorkspace.shared.openApplication(at: screenSaverApp,
+                                               configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                guard error == nil else { return }
+                Task { @MainActor in onSuccess() }
+            }
         // loginwindow's own confirmation dialogs, with their countdown and a Cancel
         // button: the same thing the Apple menu shows, so no second prompt of ours.
         case .restart:
-            appleEvent(#"tell application "loginwindow" to «event aevtrrst»"#, target: "loginwindow")
+            appleEvent(#"tell application "loginwindow" to «event aevtrrst»"#,
+                       target: "loginwindow", onSuccess: onSuccess)
         case .shutDown:
-            appleEvent(#"tell application "loginwindow" to «event aevtrsdn»"#, target: "loginwindow")
+            appleEvent(#"tell application "loginwindow" to «event aevtrsdn»"#,
+                       target: "loginwindow", onSuccess: onSuccess)
         case .logOut:
-            appleEvent(#"tell application "loginwindow" to «event aevtlogo»"#, target: "loginwindow")
+            appleEvent(#"tell application "loginwindow" to «event aevtlogo»"#,
+                       target: "loginwindow", onSuccess: onSuccess)
         case .emptyTrash:
             // Finder's scripted empty doesn't ask, and nothing brings the files back.
             guard confirm("Empty the Trash?",
                           detail: "The items in the Trash will be deleted immediately. You can’t undo this.",
                           button: "Empty Trash") else { return }
-            appleEvent(#"tell application "Finder" to empty trash"#, target: "Finder")
+            appleEvent(#"tell application "Finder" to empty trash"#,
+                       target: "Finder", onSuccess: onSuccess)
         case .toggleDarkMode:
             appleEvent(#"tell application "System Events" to tell appearance preferences to set dark mode to not dark mode"#,
-                       target: "System Events")
+                       target: "System Events", onSuccess: onSuccess)
         }
     }
 
@@ -41,26 +49,36 @@ enum SystemCommandRunner {
 
     /// What the Control-Command-Q shortcut calls. Private, so looked up at run time; if it
     /// ever disappears, sleeping the displays still locks when a password is required.
-    private static func lockScreen() {
+    private static func lockScreen(onSuccess: @escaping @MainActor @Sendable () -> Void) {
         typealias Lock = @convention(c) () -> Int32
-        if let handle = dlopen("/System/Library/PrivateFrameworks/login.framework/Versions/Current/login", RTLD_LAZY),
-           let symbol = dlsym(handle, "SACLockScreenImmediate") {
-            _ = unsafeBitCast(symbol, to: Lock.self)()
-            return
+        if let handle = dlopen("/System/Library/PrivateFrameworks/login.framework/Versions/Current/login", RTLD_LAZY) {
+            defer { dlclose(handle) }
+            if let symbol = dlsym(handle, "SACLockScreenImmediate"),
+               unsafeBitCast(symbol, to: Lock.self)() == 0 {
+                onSuccess()
+                return
+            }
         }
-        pmset("displaysleepnow")
+        pmset("displaysleepnow", onSuccess: onSuccess)
     }
 
-    private static func pmset(_ argument: String) {
+    private static func pmset(_ argument: String,
+                              onSuccess: @escaping @MainActor @Sendable () -> Void) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
         process.arguments = [argument]
-        try? process.run()
+        process.terminationHandler = { finished in
+            guard finished.terminationStatus == 0 else { return }
+            Task { @MainActor in onSuccess() }
+        }
+        do { try process.run() }
+        catch { NSLog("Spotlite: could not run pmset: \(error)") }
     }
 
     /// Through osascript, not NSAppleScript: the first run waits on the Automation prompt,
     /// which would freeze the main thread for as long as the prompt is up.
-    private static func appleEvent(_ source: String, target: String) {
+    private static func appleEvent(_ source: String, target: String,
+                                   onSuccess: @escaping @MainActor @Sendable () -> Void) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         process.arguments = ["-e", source]
@@ -68,7 +86,10 @@ enum SystemCommandRunner {
         process.standardError = errors
         process.standardOutput = FileHandle.nullDevice
         process.terminationHandler = { finished in
-            guard finished.terminationStatus != 0 else { return }
+            guard finished.terminationStatus != 0 else {
+                Task { @MainActor in onSuccess() }
+                return
+            }
             let message = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             // The alert's modal loop must not run inside a main-queue job, where it would
             // hold back every other job (icon loads, the panel's hide) until dismissed.

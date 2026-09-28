@@ -29,7 +29,7 @@ make dmg      # build/Spotlite-<version>.dmg
 
 ## Data
 
-- App index: depth-2 scan of `/Applications`, `/System/Applications`, `/System/Applications/Utilities`, `/System/Library/CoreServices/Applications`, `~/Applications`; background-only agents skipped; localized Finder names. Cached in `~/Library/Caches/Spotlite`, refreshed by FSEventStream (2 s latency) and an mtime check on panel open.
+- App index: depth-2 scan of `/Applications`, `/System/Applications`, `/System/Library/CoreServices/Applications`, `~/Applications`; background-only agents skipped; localized Finder names. Cached in `~/Library/Caches/Spotlite`, refreshed by FSEventStream (2 s latency) and an mtime check on panel open.
 - Prefs and launch history: `~/Library/Application Support/Spotlite`. Never mix with the cache (index is regenerable, prefs are not).
 - Not sandboxed: a sandboxed app can't launch arbitrary apps.
 

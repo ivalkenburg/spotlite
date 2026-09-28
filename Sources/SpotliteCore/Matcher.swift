@@ -146,30 +146,26 @@ public final class Matcher {
                 var ending = Int.min / 4
 
                 if q[i] == text[j] {
-                    let carried: Int
                     if i == 0 {
-                        carried = 0
-                    } else if j == 0 {
-                        carried = Int.min / 4
-                    } else {
-                        carried = scoreBest[previousRow + j - 1]
-                    }
-
-                    if carried > Int.min / 8 {
-                        var value = carried + Scoring.match + bonus[j]
-                        if i == 0 {
-                            value += bonus[j] * (Scoring.firstCharMultiplier - 1)
-                            if j > 0 {
-                                let leading = Scoring.gapStart + Scoring.gapExtension * (j - 1)
-                                value += max(leading, Scoring.maxLeadingPenalty)
-                            }
-                        }
-                        // Consecutive run: the previous query char matched at j-1.
-                        if i > 0, j > 0, scoreEnding[previousRow + j - 1] > Int.min / 8,
-                           scoreEnding[previousRow + j - 1] == scoreBest[previousRow + j - 1] {
-                            value += Scoring.bonusConsecutive
+                        var value = Scoring.match + bonus[j] * Scoring.firstCharMultiplier
+                        if j > 0 {
+                            let leading = Scoring.gapStart + Scoring.gapExtension * (j - 1)
+                            value += max(leading, Scoring.maxLeadingPenalty)
                         }
                         ending = value
+                    } else if j > 0 {
+                        let previous = previousRow + j - 1
+                        let gapped = scoreBest[previous]
+                        if gapped > Int.min / 8 {
+                            ending = gapped + Scoring.match + bonus[j]
+                        }
+                        // The adjacent ending can lose to an earlier match before the
+                        // consecutive bonus, yet win once that bonus is included.
+                        let adjacent = scoreEnding[previous]
+                        if adjacent > Int.min / 8 {
+                            ending = max(ending, adjacent + Scoring.match + bonus[j]
+                                         + Scoring.bonusConsecutive)
+                        }
                     }
                 }
 
@@ -195,23 +191,35 @@ public final class Matcher {
         }
         guard final > Int.min / 8 else { return nil }
 
-        return (final, backtrack(m: m, from: endColumn, stride: stride))
+        return (final, backtrack(m: m, from: endColumn, stride: stride, bonus: bonus))
     }
 
     /// Walks the DP tables backwards to recover which characters were matched.
-    private func backtrack(m: Int, from endColumn: Int, stride: Int) -> [Int] {
+    private func backtrack(m: Int, from endColumn: Int, stride: Int, bonus: [Int]) -> [Int] {
         var positions = [Int]()
         positions.reserveCapacity(m)
         var j = endColumn
         var i = m - 1
 
         while i >= 0 && j >= 0 {
-            if scoreEnding[i * stride + j] == scoreBest[i * stride + j],
-               scoreEnding[i * stride + j] > Int.min / 8 {
-                positions.append(j)
+            positions.append(j)
+            guard i > 0 else { break }
+            let previous = (i - 1) * stride + j - 1
+            if j > 0, scoreEnding[previous] > Int.min / 8,
+               scoreEnding[i * stride + j] == scoreEnding[previous] + Scoring.match
+                    + bonus[j] + Scoring.bonusConsecutive {
+                // This row chose the adjacent predecessor, which need not be the
+                // previous row's best-so-far state.
                 i -= 1
                 j -= 1
-            } else {
+                continue
+            }
+            // The row chose a gapped predecessor. Walk back to the match that
+            // produced the previous row's best score at j-1.
+            i -= 1
+            j -= 1
+            while j >= 0, (scoreEnding[i * stride + j] <= Int.min / 8
+                           || scoreEnding[i * stride + j] != scoreBest[i * stride + j]) {
                 j -= 1
             }
         }

@@ -102,12 +102,12 @@ public enum Calculator {
             return value
         }
 
-        /// term := power (('*' | '/' | '%') power)*
+        /// term := unary (('*' | '/' | '%') unary)*
         mutating func term() -> Double? {
-            guard var value = power() else { return nil }
+            guard var value = unary() else { return nil }
             while let op = peek(), op == "*" || op == "/" || op == "%" || op == "×" || op == "÷" {
                 pos += 1
-                guard let rhs = power() else { return nil }
+                guard let rhs = unary() else { return nil }
                 switch op {
                 case "*", "×": value *= rhs
                 case "/", "÷":
@@ -121,18 +121,20 @@ public enum Calculator {
             return value
         }
 
-        /// power := unary ('^' power)?  — right associative, so 2^3^2 is 2^(3^2).
+        /// power := primary ('^' unary)? — right associative, so 2^3^2 is 2^(3^2).
+        /// A leading sign belongs outside the power: -2^2 is -(2^2), while 2^-2
+        /// still accepts a signed exponent.
         mutating func power() -> Double? {
-            guard let base = unary() else { return nil }
+            guard let base = primary() else { return nil }
             if let op = peek(), op == "^" {
                 pos += 1
-                guard let exponent = power() else { return nil }
+                guard let exponent = unary() else { return nil }
                 return pow(base, exponent)
             }
             return base
         }
 
-        /// unary := ('-' | '+' | '√')? primary
+        /// unary := ('-' | '+' | '√') unary | power
         mutating func unary() -> Double? {
             guard let op = peek() else { return nil }
             if op == "-" {
@@ -149,7 +151,7 @@ public enum Calculator {
                 guard let value = unary() else { return nil }
                 return value.squareRoot()
             }
-            return primary()
+            return power()
         }
 
         /// primary := number | name | name '(' expression ')' | '(' expression ')'

@@ -244,8 +244,8 @@ final class SearchBar {
     }
 
     private func showBarIcon(for item: ResultItem) {
-        let wasHidden = barIcon.isHidden
         func reveal(_ image: NSImage?) {
+            let wasHidden = barIcon.isHidden
             barIcon.image = image
             barIcon.isHidden = image == nil
             guard wasHidden, image != nil else { return }
@@ -258,12 +258,17 @@ final class SearchBar {
         pendingIconURL = nil
         if let ready = item.barIcon {
             reveal(ready)
-        } else if let url = item.iconURL {
-            pendingIconURL = url
-            IconCache.shared.load(for: url) { [weak self] loaded in
-                guard let self, self.pendingIconURL == url else { return }
-                self.pendingIconURL = nil
-                reveal(loaded)
+        } else {
+            // A newly selected row must not wear the previous row's icon while its
+            // own icon is still loading (or if no app handles its URL).
+            reveal(nil)
+            if let url = item.iconURL {
+                pendingIconURL = url
+                IconCache.shared.load(for: url) { [weak self] loaded in
+                    guard let self, self.pendingIconURL == url else { return }
+                    self.pendingIconURL = nil
+                    reveal(loaded)
+                }
             }
         }
     }

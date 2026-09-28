@@ -15,12 +15,13 @@ final class AppLibrary {
     var extras: [AppEntry] = [] {
         didSet {
             combine()
-            onChange?(entries)
+            onChange?(entries, false)
         }
     }
     private(set) var frecency = Storage.loadFrecency()
-    /// Called with every freshly scanned index, and whenever `extras` change.
-    var onChange: (([AppEntry]) -> Void)?
+    /// The Bool is true after a disk scan, when cached icons may have changed at
+    /// paths whose app names and bundle identifiers stayed the same.
+    var onChange: (([AppEntry], Bool) -> Void)?
 
     /// Cached so pruning on every show doesn't rebuild it from the index each time.
     private var indexedIDs: Set<String> = []
@@ -72,7 +73,7 @@ final class AppLibrary {
             self.combine()
             self.pruneFrecency()
             self.fingerprint = AppIndex.directoriesFingerprint()
-            self.onChange?(self.entries)
+            self.onChange?(self.entries, true)
 
             self.refreshTask = nil
             if self.refreshPending {
