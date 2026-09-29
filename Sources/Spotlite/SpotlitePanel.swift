@@ -10,7 +10,7 @@ final class SpotlitePanel: NSPanel {
         super.init(
             contentRect: NSRect(x: 0, y: 0,
                                 width: Metrics.windowWidth(for: PanelGeometry.defaultWidth),
-                                height: Metrics.windowHeight),
+                                height: Metrics.windowHeight(visibleRows: Preferences.defaultVisibleRows)),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false

@@ -26,6 +26,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         case hotKeyCode, hotKeyModifiers, showMenuBarIcon, hasCompletedFirstRun
         case queryRetention, showSystemSettings
         case showSystemCommands, showRecentApps, showRunningIndicator, showWebSearch, webSearchEngine, links
+        case visibleRows
     }
 
     public var hiddenBundleIDs: Set<String>
@@ -57,6 +58,11 @@ public struct Preferences: Codable, Sendable, Equatable {
     public var showWebSearch: Bool
     public var webSearchEngine: WebSearchEngine
     public var links: [Link]
+    /// How many results the panel shows before the list scrolls.
+    public var visibleRows: Int
+
+    public static let visibleRowsRange = 4...10
+    public static let defaultVisibleRows = 7
 
     /// Option-Space: free on a stock system, unlike Control-Space and Command-Space.
     ///
@@ -101,6 +107,8 @@ public struct Preferences: Codable, Sendable, Equatable {
         webSearchEngine = (try? c.decodeIfPresent(WebSearchEngine.self, forKey: .webSearchEngine)) ?? .google
         // Per element: one hand-edited link must not reset every other setting.
         links = (try? c.decodeIfPresent([Lossy<Link>].self, forKey: .links))?.compactMap(\.value) ?? []
+        visibleRows = Preferences.clampedVisibleRows(
+            try c.decodeIfPresent(Int.self, forKey: .visibleRows) ?? Preferences.defaultVisibleRows)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -124,6 +132,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         try c.encode(showWebSearch, forKey: .showWebSearch)
         try c.encode(webSearchEngine, forKey: .webSearchEngine)
         try c.encode(links, forKey: .links)
+        try c.encode(visibleRows, forKey: .visibleRows)
     }
 
     public init(
@@ -144,7 +153,8 @@ public struct Preferences: Codable, Sendable, Equatable {
         showRunningIndicator: Bool = true,
         showWebSearch: Bool = true,
         webSearchEngine: WebSearchEngine = .google,
-        links: [Link] = []
+        links: [Link] = [],
+        visibleRows: Int = Preferences.defaultVisibleRows
     ) {
         self.hiddenBundleIDs = hiddenBundleIDs
         self.aliases = aliases
@@ -164,6 +174,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         self.showWebSearch = showWebSearch
         self.webSearchEngine = webSearchEngine
         self.links = links
+        self.visibleRows = Preferences.clampedVisibleRows(visibleRows)
     }
 
     /// The entries Spotlite adds to the scanned index: its commands and the user's links.
@@ -176,6 +187,10 @@ public struct Preferences: Codable, Sendable, Equatable {
     /// A hand-edited file must not produce a tint the glass cannot represent.
     private static func clampedTint(_ value: Double) -> Double {
         value.isFinite ? min(max(value, 0), 1) : 0
+    }
+
+    private static func clampedVisibleRows(_ value: Int) -> Int {
+        min(max(value, visibleRowsRange.lowerBound), visibleRowsRange.upperBound)
     }
 
     private static func clampedRetention(_ value: TimeInterval) -> TimeInterval {

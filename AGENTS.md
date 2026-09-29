@@ -41,7 +41,7 @@ make dmg      # build/Spotlite-<version>.dmg
 | `--search <query>` | Print ranked results with scores |
 | `--dump` | Print the index |
 | `SPOTLITE_SHOW_ON_LAUNCH=1` | Show the panel at launch |
-| `SPOTLITE_DEV_FRAMES=1` | Dump view frames (collapsed, expanded) and exit |
+| `SPOTLITE_DEV_FRAMES=1` | Dump view frames (collapsed, expanded for `SPOTLITE_DEV_QUERY` or "a") and exit |
 | `SPOTLITE_DEV_SEQUENCE=1` | Show, type, clear; log panel frames |
 | `SPOTLITE_DEV_PIN=1` | Keep the panel open when it loses focus |
 | `SPOTLITE_DEV_QUERY=<q>` | Prefill a query |

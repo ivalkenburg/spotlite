@@ -8,13 +8,7 @@ enum Metrics {
     /// Half the input height, as Spotlight does: a capsule while collapsed, a rounded
     /// rect once results expand it.
     static let cornerRadius: CGFloat = inputHeight / 2
-    /// Spotlight caps the panel here, which cuts the seventh row off at the bottom edge.
-    /// The cut-off row is what says the list scrolls.
-    static let maxPanelHeight: CGFloat = 467
-
     static let rowHeight: CGFloat = 56
-    /// Extra space after the top hit, which Spotlight spaces as a group of its own.
-    static let topHitGap: CGFloat = 2
     static let listTopPadding: CGFloat = 10
     static let listBottomPadding: CGFloat = 8
     static let horizontalInset: CGFloat = 20
@@ -97,6 +91,12 @@ enum Metrics {
     /// Card, the gap and 1pt separator under it, then the usual space before a row.
     static var cardRowHeight: CGFloat { cardHeight + cardSeparatorGap + 1 + listTopPadding }
 
+    /// The panel's tallest state: a full list led by the calculator card, whose slot is
+    /// taller than the top hit's padding and row together.
+    static func maxPanelHeight(visibleRows: Int) -> CGFloat {
+        inputHeight + cardRowHeight + CGFloat(visibleRows - 1) * rowHeight + listBottomPadding
+    }
+
     /// Transparent margin around the glass view, inside the window. The glass view's
     /// shadow is clipped hard at the window bounds, so this must exceed the shadow's
     /// full reach (blur + downward offset + the blur's tail) or the clip shows as a
@@ -124,7 +124,9 @@ enum Metrics {
     /// The window is always tall enough for a full list. Growing the glass inside a
     /// fixed window lets it animate; resizing the window itself makes Liquid Glass
     /// visibly nudge its top edge on every frame.
-    static var windowHeight: CGFloat { maxPanelHeight + chromeInset * 2 }
+    static func windowHeight(visibleRows: Int) -> CGFloat {
+        maxPanelHeight(visibleRows: visibleRows) + chromeInset * 2
+    }
 
     /// Width of the invisible strip at each edge that resizes the panel. Deliberately
     /// unmarked: only the cursor tells you it is there.

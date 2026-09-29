@@ -29,6 +29,7 @@ struct PreferencesTests {
         prefs.showWebSearch = false
         prefs.webSearchEngine = .kagi
         prefs.links = [Link(name: "Downloads", target: "~/Downloads")]
+        prefs.visibleRows = 9
 
         let data = try JSONEncoder().encode(prefs)
         #expect(try JSONDecoder().decode(Preferences.self, from: data) == prefs)
@@ -56,6 +57,16 @@ struct PreferencesTests {
         #expect(decoded.showWebSearch)
         #expect(decoded.webSearchEngine == .google)
         #expect(decoded.links.isEmpty)
+        #expect(decoded.visibleRows == 7)
+    }
+
+    /// A hand-edited row count must not size the panel off the screen or to nothing.
+    @Test func clampsVisibleRows() throws {
+        let tooMany = Data(#"{"visibleRows":50}"#.utf8)
+        let tooFew = Data(#"{"visibleRows":0}"#.utf8)
+        #expect(try JSONDecoder().decode(Preferences.self, from: tooMany).visibleRows == 10)
+        #expect(try JSONDecoder().decode(Preferences.self, from: tooFew).visibleRows == 4)
+        #expect(Preferences(visibleRows: 2).visibleRows == 4)
     }
 
     /// One hand-edited link must not reset every other setting, or lose the good links.

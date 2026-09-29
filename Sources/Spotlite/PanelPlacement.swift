@@ -67,7 +67,7 @@ final class PanelPlacement: PanelDragReceiver {
     private func fitted(_ geometry: PanelGeometry, for visibleFrame: CGRect) -> PanelGeometry {
         geometry.fitted(visibleFrame: visibleFrame,
                         chromeInset: Metrics.chromeInset,
-                        expandedHeight: Metrics.maxPanelHeight)
+                        expandedHeight: Metrics.maxPanelHeight(visibleRows: preferences().visibleRows))
     }
 
     private var currentVisibleFrame: CGRect {
@@ -81,7 +81,7 @@ final class PanelPlacement: PanelDragReceiver {
     private func apply(_ geometry: PanelGeometry, on visibleFrame: CGRect) {
         let anchorTopY = geometry.anchorTopY(visibleFrame: visibleFrame)
 
-        let height = Metrics.windowHeight
+        let height = Metrics.windowHeight(visibleRows: preferences().visibleRows)
         let width = Metrics.windowWidth(for: geometry.width)
         let frame = NSRect(x: visibleFrame.midX - width / 2,
                            y: anchorTopY + Metrics.chromeInset - height,

@@ -74,9 +74,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if ProcessInfo.processInfo.environment["SPOTLITE_DEV_FRAMES"] == "1" {
             Task { @MainActor in
                 self.controller.show()
+                // show() prefills SPOTLITE_DEV_QUERY; clear it so this really is collapsed.
+                self.controller.field.stringValue = ""
+                self.controller.updateMatches(for: "")
                 self.controller.dumpFrames("collapsed")
-                self.controller.field.stringValue = "a"
-                self.controller.updateMatches(for: "a")
+                let query = ProcessInfo.processInfo.environment["SPOTLITE_DEV_QUERY"] ?? "a"
+                self.controller.field.stringValue = query
+                self.controller.updateMatches(for: query)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     self.controller.dumpFrames("expanded")
                     exit(0)

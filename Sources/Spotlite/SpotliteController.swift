@@ -66,9 +66,11 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// treat it as hidden, and a show that lands mid-fade must cancel the pending cleanup.
     private var isDismissing = false
     /// The list height is set explicitly rather than inferred: an implicit Auto Layout
-    /// minimum (input height + content insets) otherwise becomes a floor the panel
-    /// cannot collapse below once the scroll view has held rows.
+    /// minimum otherwise becomes a floor the panel cannot collapse below once the scroll
+    /// view has held rows.
     private var listHeight: NSLayoutConstraint!
+    /// The list's top edge, below the bar and its top padding.
+    private var listTop: NSLayoutConstraint!
     /// The glass's own height inside the fixed-size window, animated as results appear.
     private var glassHeight: NSLayoutConstraint!
     /// Steps the glass's size constraints frame by frame; see `FrameAnimator`.
@@ -102,6 +104,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         NotificationCenter.default.addObserver(
             self, selector: #selector(resignedKey),
             name: NSWindow.didResignKeyNotification, object: panel
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(liveScrollStarted),
+            name: NSScrollView.willStartLiveScrollNotification, object: scroll
         )
         flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             self?.modifiersChanged(event.modifierFlags)
@@ -154,14 +160,14 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         }
 
         listHeight = scroll.heightAnchor.constraint(equalToConstant: 0)
+        // The list padding sits outside the scroll view rather than in its content
+        // insets, so rows are clipped at the padding instead of showing slivers in it.
+        listTop = scroll.topAnchor.constraint(equalTo: content.topAnchor, constant: Metrics.inputHeight)
 
         NSLayoutConstraint.activate([
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            // Zero constant: padding baked into a constraint becomes an Auto Layout
-            // minimum height, which would stop the panel collapsing back to the input height.
-            // The list padding lives in the scroll view's content insets instead.
-            scroll.topAnchor.constraint(equalTo: content.topAnchor, constant: Metrics.inputHeight),
+            listTop,
             listHeight,
 
             divider.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: Metrics.horizontalInset),
@@ -430,6 +436,15 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         hide()
     }
 
+    /// A trackpad scroll uses the resting height, so scrolling back to the top after the
+    /// arrow keys shortened the list doesn't leave its last row cut off.
+    @objc private func liveScrollStarted() {
+        let resting = viewport.restingHeight
+        guard !items.isEmpty, listHeight.constant != resting else { return }
+        listHeight.constant = resting
+        scroll.layoutSubtreeIfNeeded()
+    }
+
     /// Dev harness: show -> type -> clear, logging the panel frame at each step,
     /// so the collapse-back state can be measured rather than eyeballed.
     func runDevSequence() {
@@ -498,24 +513,19 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         return SearchResults.build(for: query, corpus: corpus, matcher: matcher,
                                    frecency: library.frecency,
                                    previousResult: previousResult,
-                                   recents: preferences.showRecentApps ? Self.recentCount : 0,
+                                   recents: preferences.showRecentApps ? preferences.visibleRows : 0,
                                    webSearch: preferences.showWebSearch ? preferences.webSearchEngine : nil)
             .map { ResultItem($0, caffeine: state) }
     }
-
-    /// Enough to fill the panel without scrolling.
-    private static let recentCount = 6
 
     private var calculationFirst: Bool {
         if case .calculation = items.first { return true }
         return false
     }
 
-    /// The top hit is followed by a small gap, and the calculator card carries its own
-    /// separator and spacing.
+    /// The calculator card carries its own separator and spacing.
     private func rowHeight(at row: Int) -> CGFloat {
-        guard row == 0 else { return Metrics.rowHeight }
-        guard calculationFirst else { return Metrics.rowHeight + Metrics.topHitGap }
+        guard row == 0, calculationFirst else { return Metrics.rowHeight }
         // With nothing under it, the card needs no separator; the list's bottom padding
         // follows it directly.
         return items.count > 1 ? Metrics.cardRowHeight : Metrics.cardHeight
@@ -524,31 +534,37 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// The card sits directly under the bar with no divider; rows start after a gap.
     private var listTopInset: CGFloat { calculationFirst ? 0 : Metrics.listTopPadding }
 
-    private var listContentHeight: CGFloat {
-        guard !items.isEmpty else { return 0 }
-        let rows = items.indices.reduce(0) { $0 + rowHeight(at: $1) }
-        return listTopInset + rows + Metrics.listBottomPadding
+    private var viewport: ListViewport {
+        ListViewport(count: items.count, leadHeight: rowHeight(at: 0),
+                     rowHeight: Metrics.rowHeight, visibleRows: preferences.visibleRows)
     }
 
     /// Lays the list out at its final size, then resizes the glass to reveal it. The
-    /// height is capped at Spotlight's maximum, where a partly visible row shows the list
-    /// scrolls.
+    /// list shows whole rows only, up to the Rows Shown setting.
     private func layoutList(animated: Bool) {
-        let fullHeight = Metrics.inputHeight + listContentHeight
-        let target = min(fullHeight, Metrics.maxPanelHeight)
-        listHeight.constant = target - Metrics.inputHeight
-        scroll.contentInsets = NSEdgeInsets(top: listTopInset, left: 0,
-                                            bottom: Metrics.listBottomPadding, right: 0)
         // Contents vanish at once when the list empties; only the glass animates away.
         scroll.isHidden = items.isEmpty
         divider.isHidden = items.isEmpty || calculationFirst
 
-        scroll.layoutSubtreeIfNeeded()
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: -listTopInset))
-        scroll.reflectScrolledClipView(scroll.contentView)
-        scrollCursorIntoView()
-
+        var target = Metrics.inputHeight
+        if items.isEmpty {
+            listHeight.constant = 0
+        } else {
+            listTop.constant = Metrics.inputHeight + listTopInset
+            showRows(from: 0)
+            target += listTopInset + viewport.restingHeight + Metrics.listBottomPadding
+        }
         resizeGlass(to: target, animated: animated)
+    }
+
+    /// Starts the list at `first`. Rows past the resting list begin on a row boundary,
+    /// so keyboard scrolling never cuts a row off.
+    private func showRows(from first: Int) {
+        let viewport = viewport
+        listHeight.constant = viewport.height(from: first)
+        scroll.layoutSubtreeIfNeeded()
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: viewport.top(of: first)))
+        scroll.reflectScrolledClipView(scroll.contentView)
     }
 
     /// Stands down while a drag is in flight; the size is applied directly then, since an
@@ -654,9 +670,14 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         updateChrome()
     }
 
+    /// Scrolls by whole rows. A trackpad scroll can leave the list between rows; the
+    /// next arrow key that moves off screen lines it up again.
     private func scrollCursorIntoView() {
-        guard !items.isEmpty else { return }
-        table.scrollRowToVisible(cursor)
+        guard !items.isEmpty,
+              let first = viewport.firstRow(showing: cursor, offset: scroll.contentView.bounds.minY,
+                                            height: listHeight.constant)
+        else { return }
+        showRows(from: first)
     }
 
     @objc private func tableClicked() {

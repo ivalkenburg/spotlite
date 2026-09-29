@@ -1,7 +1,7 @@
 import AppKit
 import SpotliteCore
 
-/// Theme, glass tint, the running-app dot, and where the panel opens.
+/// Theme, glass tint, the running-app dot, how many rows show, and where the panel opens.
 @MainActor
 final class AppearanceSettingsViewController: SettingsPaneController {
     /// Popup order of the Theme menu.
@@ -32,6 +32,12 @@ final class AppearanceSettingsViewController: SettingsPaneController {
                                         action: #selector(toggleRunningIndicator))
         runningIndicator.state = prefs.showRunningIndicator ? .on : .off
 
+        let rowsPicker = NSPopUpButton()
+        rowsPicker.addItems(withTitles: Preferences.visibleRowsRange.map(String.init))
+        rowsPicker.selectItem(at: prefs.visibleRows - Preferences.visibleRowsRange.lowerBound)
+        rowsPicker.target = self
+        rowsPicker.action = #selector(visibleRowsChanged)
+
         let screenPicker = NSPopUpButton()
         screenPicker.addItems(withTitles: ["Display with pointer", "Main display"])
         screenPicker.selectItem(at: prefs.panelScreen == .primary ? 1 : 0)
@@ -46,6 +52,7 @@ final class AppearanceSettingsViewController: SettingsPaneController {
             ("Theme:", themePicker),
             ("Tint:", SettingsForm.row([clearLabel, tintSlider, solidLabel])),
             ("Results:", runningIndicator),
+            ("Rows shown:", rowsPicker),
             ("Open on:", screenPicker),
             ("Panel:", resetButton),
         ])
@@ -63,6 +70,10 @@ final class AppearanceSettingsViewController: SettingsPaneController {
 
     @objc private func toggleRunningIndicator(_ sender: NSButton) {
         model.set(\.showRunningIndicator, sender.state == .on)
+    }
+
+    @objc private func visibleRowsChanged(_ sender: NSPopUpButton) {
+        model.set(\.visibleRows, sender.indexOfSelectedItem + Preferences.visibleRowsRange.lowerBound)
     }
 
     @objc private func screenChoiceChanged(_ sender: NSPopUpButton) {
