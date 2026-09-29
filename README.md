@@ -20,7 +20,7 @@ keystroke.
 - System commands such as Lock Screen, Sleep, Restart and Empty Trash.
 - Links to folders, files or web pages, each with its own name and alias.
 - Links with a `{query}` placeholder: press Tab and type to search GitHub or pass text to a Shortcut.
-- A web search row (Google, DuckDuckGo, Bing or Kagi) for when nothing on the Mac matches.
+- A web search row (DuckDuckGo, Google or Bing) for when nothing on the Mac matches.
 - Aliases, so `ps` opens Photoshop.
 - Hide apps you never launch with Command-Delete.
 - Optional recent apps list before you type, and a dot under apps that are running.

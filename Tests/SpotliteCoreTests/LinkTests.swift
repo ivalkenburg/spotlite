@@ -126,6 +126,6 @@ struct WebSearchEngineTests {
         #expect(WebSearchEngine.google.url(for: " a&b=c #1 ")?.absoluteString
                 == "https://www.google.com/search?q=a%26b%3Dc%20%231")
         #expect(WebSearchEngine.duckDuckGo.url(for: "c++")?.absoluteString == "https://duckduckgo.com/?q=c%2B%2B")
-        #expect(WebSearchEngine.kagi.url(for: "   ") == nil)
+        #expect(WebSearchEngine.bing.url(for: "   ") == nil)
     }
 }

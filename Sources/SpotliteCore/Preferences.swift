@@ -104,7 +104,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         showRunningIndicator = try c.decodeIfPresent(Bool.self, forKey: .showRunningIndicator) ?? true
         showWebSearch = try c.decodeIfPresent(Bool.self, forKey: .showWebSearch) ?? true
         // An engine a later build removed falls back rather than resetting every setting.
-        webSearchEngine = (try? c.decodeIfPresent(WebSearchEngine.self, forKey: .webSearchEngine)) ?? .google
+        webSearchEngine = (try? c.decodeIfPresent(WebSearchEngine.self, forKey: .webSearchEngine)) ?? .default
         // Per element: one hand-edited link must not reset every other setting.
         links = (try? c.decodeIfPresent([Lossy<Link>].self, forKey: .links))?.compactMap(\.value) ?? []
         visibleRows = Preferences.clampedVisibleRows(
@@ -152,7 +152,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         showRecentApps: Bool = false,
         showRunningIndicator: Bool = true,
         showWebSearch: Bool = true,
-        webSearchEngine: WebSearchEngine = .google,
+        webSearchEngine: WebSearchEngine = .default,
         links: [Link] = [],
         visibleRows: Int = Preferences.defaultVisibleRows
     ) {

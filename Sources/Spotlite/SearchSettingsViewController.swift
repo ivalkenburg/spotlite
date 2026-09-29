@@ -87,7 +87,7 @@ final class SearchSettingsViewController: SettingsPaneController {
 
     @objc private func engineChoiceChanged(_ sender: NSPopUpButton) {
         let index = sender.indexOfSelectedItem
-        model.set(\.webSearchEngine, Self.engines.indices.contains(index) ? Self.engines[index] : .google)
+        model.set(\.webSearchEngine, Self.engines.indices.contains(index) ? Self.engines[index] : .default)
     }
 
     @objc private func toggleRecentApps(_ sender: NSButton) {

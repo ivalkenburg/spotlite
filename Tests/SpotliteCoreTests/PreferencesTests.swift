@@ -27,7 +27,7 @@ struct PreferencesTests {
         prefs.showRecentApps = true
         prefs.showRunningIndicator = false
         prefs.showWebSearch = false
-        prefs.webSearchEngine = .kagi
+        prefs.webSearchEngine = .bing
         prefs.links = [Link(name: "Downloads", target: "~/Downloads")]
         prefs.visibleRows = 9
 
@@ -55,7 +55,7 @@ struct PreferencesTests {
         #expect(!decoded.showRecentApps)
         #expect(decoded.showRunningIndicator)
         #expect(decoded.showWebSearch)
-        #expect(decoded.webSearchEngine == .google)
+        #expect(decoded.webSearchEngine == .duckDuckGo)
         #expect(decoded.links.isEmpty)
         #expect(decoded.visibleRows == 7)
     }
@@ -79,9 +79,9 @@ struct PreferencesTests {
 
     /// An engine a later build dropped must not reset every other setting.
     @Test func unknownSearchEngineFallsBack() throws {
-        let data = Data(#"{"webSearchEngine":"altavista","showMenuBarIcon":false}"#.utf8)
+        let data = Data(#"{"webSearchEngine":"kagi","showMenuBarIcon":false}"#.utf8)
         let decoded = try JSONDecoder().decode(Preferences.self, from: data)
-        #expect(decoded.webSearchEngine == .google)
+        #expect(decoded.webSearchEngine == .duckDuckGo)
         #expect(!decoded.showMenuBarIcon)
     }
 

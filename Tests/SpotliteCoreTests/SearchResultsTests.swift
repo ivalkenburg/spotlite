@@ -95,7 +95,7 @@ struct SearchResultsTests {
 
     @Test func webSearchComesLastAndLeadsWhenNothingMatches() {
         #expect(describe(build(" saf ", web: .google)) == ["Safari", "Google: saf"])
-        #expect(describe(build("zzq", web: .kagi)) == ["Kagi: zzq"])
+        #expect(describe(build("zzq", web: .bing)) == ["Bing: zzq"])
         #expect(build("", web: .google).isEmpty)
     }
 

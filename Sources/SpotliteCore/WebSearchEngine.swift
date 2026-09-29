@@ -5,14 +5,14 @@ public enum WebSearchEngine: String, Codable, Sendable, CaseIterable {
     case google
     case duckDuckGo
     case bing
-    case kagi
+
+    public static let `default` = WebSearchEngine.duckDuckGo
 
     public var name: String {
         switch self {
         case .google: return "Google"
         case .duckDuckGo: return "DuckDuckGo"
         case .bing: return "Bing"
-        case .kagi: return "Kagi"
         }
     }
 
@@ -21,7 +21,6 @@ public enum WebSearchEngine: String, Codable, Sendable, CaseIterable {
         case .google: return "https://www.google.com/search?q="
         case .duckDuckGo: return "https://duckduckgo.com/?q="
         case .bing: return "https://www.bing.com/search?q="
-        case .kagi: return "https://kagi.com/search?q="
         }
     }
 
