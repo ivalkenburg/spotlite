@@ -549,7 +549,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         scrollCursorIntoView()
 
         resizeGlass(to: target, animated: animated)
-        if fullHeight > Metrics.maxPanelHeight { scroll.flashScrollers() }
     }
 
     /// Stands down while a drag is in flight; the size is applied directly then, since an
