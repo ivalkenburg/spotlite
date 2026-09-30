@@ -512,9 +512,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         return items.count > 1 ? Metrics.cardRowHeight : Metrics.cardHeight
     }
 
-    /// The card sits directly under the bar with no divider; rows start after a gap.
-    private var listTopInset: CGFloat { cardFirst ? 0 : Metrics.listTopPadding }
-
     private var viewport: ListViewport {
         ListViewport(count: items.count, leadHeight: rowHeight(at: 0),
                      rowHeight: Metrics.rowHeight, visibleRows: preferences.visibleRows)
@@ -531,9 +528,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         if items.isEmpty {
             listHeight.constant = 0
         } else {
-            listTop.constant = Metrics.inputHeight + listTopInset
+            listTop.constant = Metrics.inputHeight + Metrics.listTopPadding
             showRows(from: 0)
-            target += listTopInset + viewport.restingHeight + Metrics.listBottomPadding
+            target += Metrics.listTopPadding + viewport.restingHeight + Metrics.listBottomPadding
         }
         resizeGlass(to: target, animated: animated)
     }
@@ -1385,7 +1382,7 @@ extension SpotliteController {
         try? await Task.sleep(for: .milliseconds(400))
         let childHeight = glassHeight.constant
         _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertBacktab(_:)))
-        precondition(Metrics.inputHeight + listTopInset + viewport.restingHeight
+        precondition(Metrics.inputHeight + Metrics.listTopPadding + viewport.restingHeight
                      + Metrics.listBottomPadding > childHeight)
         _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:)))
         try? await Task.sleep(for: .milliseconds(400))

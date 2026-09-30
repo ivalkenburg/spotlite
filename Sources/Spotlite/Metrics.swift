@@ -76,10 +76,10 @@ enum Metrics {
     static let hintBadgeGap: CGFloat = 8.5
     static let hintPairGap: CGFloat = 14
 
-    /// The calculator's result card, which replaces a row when the query is arithmetic.
-    static let cardInset: CGFloat = 18
+    /// Calculation and conversion cards share the selection highlight's geometry.
+    static let cardInset: CGFloat = highlightInset
     static let cardHeight: CGFloat = 62
-    static let cardRadius: CGFloat = 16
+    static let cardRadius: CGFloat = highlightRadius
     static let cardBorderWidth: CGFloat = 2
     static let cardSelectedBorderWidth: CGFloat = 2
     static let cardSeparatorGap: CGFloat = 8
@@ -94,7 +94,8 @@ enum Metrics {
     /// The panel's tallest state: a full list led by the calculator card, whose slot is
     /// taller than the top hit's padding and row together.
     static func maxPanelHeight(visibleRows: Int) -> CGFloat {
-        inputHeight + cardRowHeight + CGFloat(visibleRows - 1) * rowHeight + listBottomPadding
+        inputHeight + listTopPadding + cardRowHeight
+            + CGFloat(visibleRows - 1) * rowHeight + listBottomPadding
     }
 
     /// Transparent margin around the glass view, inside the window. The glass view's
