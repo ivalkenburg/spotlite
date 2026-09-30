@@ -18,6 +18,11 @@ make install  # copy to /Applications (required for Start at login)
 make dmg      # build/Spotlite-<version>.dmg
 ```
 
+## Commits
+
+- Use semantic commit messages: `<type>[optional scope]: <description>` (Conventional Commits).
+- Choose the type that describes the change, such as `fix`, `feat`, `refactor`, `perf`, `test`, `docs`, or `chore`. Example: `fix(matcher): rank consecutive matches above scattered letters`.
+
 ## Performance rules
 
 - Idle CPU must stay 0%. Avoid polling; the only timer is a coalescible 5 s caffeine refresh.
