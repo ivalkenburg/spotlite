@@ -37,7 +37,13 @@ public final class Matcher {
         limit: Int = 50
     ) -> [MatchResult] {
         guard limit > 0 else { return [] }
-        var out = matches(query, in: SearchCorpus(entries: entries, aliases: aliases))
+        return search(query, in: SearchCorpus(entries: entries, aliases: aliases), limit: limit)
+    }
+
+    /// Search a prepared corpus without filtering or allocating its metadata again.
+    public func search(_ query: String, in corpus: SearchCorpus, limit: Int = 50) -> [MatchResult] {
+        guard limit > 0 else { return [] }
+        var out = matches(query, in: corpus)
         out.sort { a, b in
             // Raw values: comparing the enums directly more than doubled search time.
             if a.tier.rawValue != b.tier.rawValue { return a.tier.rawValue > b.tier.rawValue }

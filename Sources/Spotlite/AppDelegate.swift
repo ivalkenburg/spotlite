@@ -90,6 +90,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if ProcessInfo.processInfo.environment["SPOTLITE_DEV_SEQUENCE"] == "1" {
             Task { @MainActor in self.controller.runDevSequence() }
         }
+        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_MENU"] == "1" {
+            Task { @MainActor in
+                await self.controller.runDevMenuFrames()
+                exit(0)
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

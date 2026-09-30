@@ -96,6 +96,11 @@ final class ResultRowView: NSTableCellView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    func dumpFrames(_ tag: String) {
+        print("[\(tag)] row=\(frame) label=\(label.frame) hints=\(hintStack.frame)")
+        print("[\(tag)] switch=\(stateSwitch.frame) switchHidden=\(stateSwitch.isHidden) state=\(stateSwitch.state.rawValue)")
+    }
+
     private var lastConfiguration: (item: ResultItem, selection: RowSelection,
                                     modifiers: NSEvent.ModifierFlags, running: Bool, marksRunning: Bool)?
 
@@ -156,7 +161,7 @@ final class ResultRowView: NSTableCellView {
         } else {
             stateSwitch.isHidden = true
         }
-        // Deactivate before activating, so the two are never both active.
+        // Deactivate before activating, so alternate trailing constraints never compete.
         let showsSwitch = !stateSwitch.isHidden
         NSLayoutConstraint.deactivate([showsSwitch ? hintsBeforeEdge : hintsBeforeSwitch])
         NSLayoutConstraint.activate([showsSwitch ? hintsBeforeSwitch : hintsBeforeEdge])

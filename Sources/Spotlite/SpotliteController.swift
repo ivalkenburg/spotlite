@@ -48,11 +48,13 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// the selection solid accent blue; the first Backspace after a completion removes
     /// the completion and shows no selection at all, while Return still launches the
     /// top result.
-    private enum Selection { case topHit, navigated, dismissed }
+    private typealias Selection = SearchSelection
     private var selection = Selection.topHit
-    /// The template link Tab entered, and the query that found it for Backspace to bring
-    /// back. While set, the field holds the link's argument and the list stays empty.
-    private var argument: (link: AppEntry, query: String)?
+    private var navigation = SearchNavigation()
+    private var argument: AppEntry? {
+        if case .argument(let link) = navigation.scope { return link }
+        return nil
+    }
     /// The query before the latest edit, to tell typing from deleting.
     private var lastQuery = ""
     /// The query at the last close, offered back on a quick reopen.
@@ -284,15 +286,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         panel.isVisible && !isDismissing ? hide() : show()
     }
 
-    func dumpFrames(_ tag: String) {
-        panel.layoutIfNeeded()
-        print("[\(tag)] window=\(panel.frame)")
-        print("[\(tag)] host=\(panel.contentView?.frame ?? .zero)")
-        print("[\(tag)] glass=\(glass.frame)  cornerRadius=\(glass.cornerRadius)")
-        print("[\(tag)] content=\(glass.contentView?.frame ?? .zero)")
-        print("[\(tag)] scroll=\(scroll.frame) listHeight=\(listHeight.constant) glassHeight=\(glassHeight.constant)")
-    }
-
     func show() {
         isDismissing = false
         modifiers = NSEvent.modifierFlags
@@ -300,8 +293,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         caffeine.refresh()
         loadLibrary()
         runningPaths = Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL?.standardizedFileURL.path })
-        // A show during the close fade finds argument mode still on.
-        dropArgument()
+        // A show during the close fade can still find a submenu or argument open.
+        resetNavigation()
         ResultItem.forgetHandlers()
 
         let recalled = devQuery == nil ? queryMemory.recall(retention: preferences.queryRetention) : nil
@@ -389,7 +382,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         isDismissing = true
         // Taken now rather than when the fade ends: a show() during the fade must
         // already see this query.
-        queryMemory.remember(argument?.query ?? field.stringValue)
+        queryMemory.remember(navigation.rootQuery ?? field.stringValue)
         if case .calculation(_, let value) = items.first { previousResult = value }
         // Holds the shrunk transform until the window is ordered out; removed on show.
         let shrink = scaleAnimation(from: 1, to: Metrics.hideEndScale, duration: Metrics.hideDuration)
@@ -413,7 +406,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private func finishHide() {
         panel.orderOut(nil)
         glass.layer?.removeAnimation(forKey: "hide")
-        dropArgument()
+        resetNavigation()
         field.stringValue = ""
         lastQuery = ""
         selection = .topHit
@@ -443,25 +436,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         guard !items.isEmpty, listHeight.constant != resting else { return }
         listHeight.constant = resting
         scroll.layoutSubtreeIfNeeded()
-    }
-
-    /// Dev harness: show -> type -> clear, logging the panel frame at each step,
-    /// so the collapse-back state can be measured rather than eyeballed.
-    func runDevSequence() {
-        show()
-        NSLog("DEV step1 shown: \(panel.frame)")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            self.field.stringValue = "a"
-            self.updateMatches(for: "a")
-            NSLog("DEV step2 typed: \(self.panel.frame)")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                self.field.stringValue = ""
-                self.updateMatches(for: "")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    NSLog("DEV step3 cleared: \(self.panel.frame)")
-                }
-            }
-        }
     }
 
     // MARK: - Query
@@ -507,9 +481,13 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     private func buildItems(for query: String) -> [ResultItem] {
-        // The chip already says where Return goes; there is nothing to list.
-        guard argument == nil else { return [] }
         let state = caffeine.state
+        switch navigation.scope {
+        case .argument: return []
+        case .menu(let menu):
+            return menu.search(query, matcher: matcher).map { .menuItem($0, state: state) }
+        case .root: break
+        }
         return SearchResults.build(for: query, corpus: corpus, matcher: matcher,
                                    frecency: library.frecency,
                                    previousResult: previousResult,
@@ -573,12 +551,18 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// Clearing the query snaps back to the bar: its contents are already gone, so a
     /// shrinking empty panel only delays the next keystroke's feedback.
     private func resizeGlass(to target: CGFloat, animated: Bool) {
-        guard target != glassHeight.constant else { return }
-
         let collapsing = target == Metrics.inputHeight
         guard animated, !collapsing, panel.isVisible, !isDismissing, !placement.isDragging else {
+            // Cancel even when the current height already equals the target: an older
+            // grow animation may still be waiting to run after a quick navigation.
             animator.cancel()
             glassHeight.constant = target
+            return
+        }
+        guard target != glassHeight.constant else {
+            // A rapid back/entry can return to this height before an older animation
+            // starts moving toward a different one.
+            animator.cancel()
             return
         }
 
@@ -615,10 +599,15 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             moveCursor(by: -1); return true
         case #selector(NSResponder.insertTab(_:)):
             if argument != nil { return true }
-            // Anything but a template link keeps the field's own Tab.
-            guard items.indices.contains(cursor), case .app(let match) = items[cursor],
-                  match.entry.template != nil else { return false }
-            enterArgument(for: cursor); return true
+            guard items.indices.contains(cursor) else { return true }
+            if let submenu = items[cursor].submenu {
+                enterScope(.menu(submenu))
+            } else if case .app(let match) = items[cursor], match.entry.template != nil {
+                enterArgument(for: cursor)
+            }
+            return true
+        case #selector(NSResponder.insertBacktab(_:)):
+            leaveScope(); return true
         case #selector(NSResponder.insertNewline(_:)):
             if argument != nil { openArgument() } else { launch(at: cursor) }
             return true
@@ -627,11 +616,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             copyPath(); return true
         case #selector(NSResponder.cancelOperation(_:)):
             hide(); return true
-        case #selector(NSResponder.deleteBackward(_:)) where argument != nil:
-            // Backspace past the start of the argument takes the chip away.
-            guard field.stringValue.isEmpty else { return false }
-            leaveArgument(); return true
         case #selector(NSResponder.deleteBackward(_:)):
+            if navigation.canGoBack, field.stringValue.isEmpty {
+                leaveScope(); return true
+            }
             // Spotlight's first Backspace removes only the completion; the typed text
             // stays. A selection is being deleted on purpose, so that goes through.
             guard bar.isShowingCompletion, textView.selectedRange().length == 0 else { return false }
@@ -703,9 +691,17 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             onOpenSettings?()
 
         case .caffeinate:
-            // Stays open, unlike every other action: the switch is the only confirmation
-            // that anything happened, and closing would hide it.
-            caffeine.toggle()
+            enterScope(.menu(.caffeinate))
+
+        case .menuItem(let item, _):
+            if let action = item.action {
+                if item.closesPanelOnAction { hide() }
+                switch action {
+                case .toggleCaffeinate: caffeine.toggle()
+                }
+            } else if let submenu = item.submenu {
+                enterScope(.menu(submenu))
+            }
 
         case .webSearch(let query, let engine):
             hide()
@@ -770,42 +766,63 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         }
     }
 
+    // MARK: - Scoped navigation
+
+    private func enterScope(_ scope: SearchScope) {
+        navigation.enter(scope, query: field.stringValue,
+                         selectedID: items.indices.contains(cursor) ? items[cursor].identity : nil,
+                         selection: selection)
+        updateScopeChip()
+        setQuery("")
+        selection = .topHit
+        updateMatches(for: "")
+    }
+
+    private func leaveScope() {
+        guard let parent = navigation.back(behavior: preferences.backNavigationBehavior) else { return }
+        updateScopeChip()
+        setQuery(parent.query)
+        selection = .topHit
+        updateMatches(for: parent.query)
+        if let row = items.firstIndex(where: { $0.identity == parent.selectedID }) {
+            select(row, as: parent.selection)
+        }
+    }
+
+    private func setQuery(_ query: String) {
+        field.stringValue = query
+        lastQuery = query
+        field.currentEditor()?.selectedRange = NSRange(location: (query as NSString).length, length: 0)
+    }
+
+    private func updateScopeChip() {
+        switch navigation.scope {
+        case .root: bar.hideChip()
+        case .menu(let menu):
+            bar.showChip(title: menu.title, icon: ResultItem.symbol(menu.symbolName))
+        case .argument(let link):
+            let url = ResultItem.iconURL(for: link)
+            bar.showChip(title: link.name, icon: url == nil ? ResultItem.linkIcon : nil, iconURL: url)
+        }
+    }
+
+    private func resetNavigation() {
+        navigation.reset()
+        bar.hideChip()
+    }
+
     // MARK: - Argument
 
     /// Swaps the query for the chip of the template link at `row`; what is typed next
     /// fills its `{query}`.
     private func enterArgument(for row: Int) {
         guard case .app(let match) = items[row] else { return }
-        argument = (match.entry, field.stringValue)
-        bar.showChip(for: items[row])
-        field.stringValue = ""
-        lastQuery = ""
-        updateMatches(for: "")
-    }
-
-    /// Backspace on an empty argument: the query comes back with the link selected, so
-    /// a mistaken Tab costs one key.
-    private func leaveArgument() {
-        guard let argument else { return }
-        dropArgument()
-        field.stringValue = argument.query
-        lastQuery = argument.query
-        selection = .topHit
-        field.currentEditor()?.selectedRange = NSRange(location: (argument.query as NSString).length, length: 0)
-        updateMatches(for: argument.query)
-        if let row = items.firstIndex(where: { $0.identity == argument.link.instanceID }), row != cursor {
-            select(row, as: .navigated)
-        }
-    }
-
-    private func dropArgument() {
-        argument = nil
-        bar.hideChip()
+        enterScope(.argument(match.entry))
     }
 
     /// The template filled with what is typed, or nil outside argument mode.
     private var argumentURL: URL? {
-        guard let argument, let template = argument.link.template else { return nil }
+        guard let argument, let template = argument.template else { return nil }
         return Link.resolve(template, argument: field.stringValue)
     }
 
@@ -815,7 +832,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             return
         }
         hide()
-        openLink(url, id: argument.link.id)
+        openLink(url, id: argument.id)
     }
 
     /// Opens a pane, or System Settings itself when the pane's link is refused: that is
@@ -917,13 +934,18 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         preferences = updated
         applyResolvedAppearance()
         guard panel.isVisible else { return }
-        updateMatches(for: field.stringValue)
+        refreshMatches()
         // Picks up a Reset Size & Position from Settings while the panel is on screen.
         placement.reapply(screenChanged: screenChanged)
     }
 
     func caffeineStateDidChange() {
-        guard panel.isVisible, SearchResults.offersCaffeinate(field.stringValue) else { return }
+        guard panel.isVisible else { return }
+        if case .menu = navigation.scope {
+            refreshMatches()
+            return
+        }
+        guard argument == nil, SearchResults.offersCaffeinate(field.stringValue) else { return }
         refreshMatches()
     }
 
@@ -965,6 +987,220 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// Hover must never move the cursor: an incidental mouse position silently
     /// changing what Enter does is a genuinely dangerous interaction in a launcher.
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { false }
+}
+
+/// Development checks live apart from the launcher behavior without widening access.
+extension SpotliteController {
+    func dumpFrames(_ tag: String) {
+        panel.layoutIfNeeded()
+        print("[\(tag)] window=\(panel.frame)")
+        print("[\(tag)] host=\(panel.contentView?.frame ?? .zero)")
+        print("[\(tag)] glass=\(glass.frame)  cornerRadius=\(glass.cornerRadius)")
+        print("[\(tag)] content=\(glass.contentView?.frame ?? .zero)")
+        print("[\(tag)] scroll=\(scroll.frame) listHeight=\(listHeight.constant) glassHeight=\(glassHeight.constant)")
+        bar.dumpFrames(tag)
+        if items.indices.contains(cursor),
+           let row = table.view(atColumn: 0, row: cursor, makeIfNecessary: true) as? ResultRowView {
+            row.dumpFrames(tag)
+        }
+    }
+
+    /// Exercise scoped keyboard navigation through the real field editor and dump
+    /// frames after the glass animation settles. Only invoked by the dev hook.
+    func runDevMenuFrames() async {
+        let savedPreferences = preferences
+        defer { preferencesDidChange(savedPreferences) }
+        preferences.backNavigationBehavior = .restoreQuery
+        show()
+        setQuery("caf")
+        updateMatches(for: "caf")
+        guard let row = items.firstIndex(where: { $0.identity == "caffeinate" }),
+              let editor = field.currentEditor() as? NSTextView else {
+            print("DEV menu: missing Caffeinate or field editor")
+            exit(1)
+        }
+        select(row, as: .navigated)
+        precondition(items[row].switchState == nil)
+        try? await Task.sleep(for: .milliseconds(400))
+        dumpFrames("menu-parent")
+        let originalState = caffeine.state.spotlite
+        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
+        precondition(caffeine.state.spotlite == originalState)
+        try? await Task.sleep(for: .milliseconds(400))
+        precondition(items.count == 1 && items[0].title == "Toggle Caffeinate")
+        dumpFrames("submenu")
+        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
+        precondition(caffeine.state.spotlite != originalState && items[0].switchState == caffeine.state.spotlite)
+        dumpFrames("submenu-toggled")
+        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
+        precondition(caffeine.state.spotlite == originalState)
+        setQuery("tgc")
+        updateMatches(for: "tgc")
+        precondition(items.count == 1)
+        dumpFrames("submenu-filtered")
+        setQuery("safari")
+        updateMatches(for: "safari")
+        precondition(items.isEmpty)
+        dumpFrames("submenu-no-match")
+        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertBacktab(_:)))
+        precondition(field.stringValue == "caf" && items[cursor].identity == "caffeinate" && selection == .navigated)
+        try? await Task.sleep(for: .milliseconds(400))
+        dumpFrames("submenu-backtab")
+        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:)))
+        precondition(items.count == 1 && items[0].title == "Toggle Caffeinate" && caffeine.state.spotlite == originalState)
+        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.deleteBackward(_:)))
+        precondition(field.stringValue == "caf" && items[cursor].identity == "caffeinate")
+        print("DEV menu: Return/Tab entry, toggle, filtering, Shift+Tab and empty Backspace passed")
+        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.cancelOperation(_:)))
+        show()
+        precondition(!navigation.canGoBack && argument == nil)
+        print("DEV menu: Escape and reopen reset passed")
+        await runDevNestedMenuChecks(editor)
+        await runDevBackNavigationChecks(editor)
+    }
+
+    private func runDevNestedMenuChecks(_ editor: NSTextView) async {
+        let fixture = SearchMenu(id: "dev.menu", title: "Menu fixture", items: [
+            SearchMenuItem(id: "dev.first", title: "First", action: .toggleCaffeinate,
+                           closesPanelOnAction: false),
+            SearchMenuItem(id: "dev.both", title: "Both", action: .toggleCaffeinate,
+                           closesPanelOnAction: false, submenu: .caffeinate),
+            SearchMenuItem(id: "dev.nested", title: "Nested", submenu: .caffeinate),
+        ])
+        preferences.visibleRows = max(preferences.visibleRows, fixture.items.count)
+        enterScope(.menu(fixture))
+        select(1, as: .navigated)
+        let originalState = caffeine.state.spotlite
+        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
+        guard case .menu(let current) = navigation.scope else { preconditionFailure("Expected fixture") }
+        precondition(current.id == fixture.id && caffeine.state.spotlite != originalState && cursor == 1)
+        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
+        precondition(caffeine.state.spotlite == originalState)
+        var updated = preferences
+        updated.backNavigationBehavior = .clearQuery
+        preferencesDidChange(updated)
+        precondition(cursor == 1 && selection == .navigated)
+        preferences.backNavigationBehavior = .restoreQuery
+
+        for style in [Selection.topHit, .dismissed, .navigated] {
+            select(0, as: style)
+            // The same dispatcher serves a mouse click and Cmd-digit on a nonselected row.
+            launch(at: 2)
+            _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertBacktab(_:)))
+            precondition(cursor == 0 && selection == style && items[0].identity == "dev.first")
+        }
+
+        select(1, as: .navigated)
+        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:)))
+        try? await Task.sleep(for: .milliseconds(400))
+        let childHeight = glassHeight.constant
+        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertBacktab(_:)))
+        precondition(Metrics.inputHeight + listTopInset + viewport.restingHeight
+                     + Metrics.listBottomPadding > childHeight)
+        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:)))
+        try? await Task.sleep(for: .milliseconds(400))
+        precondition(items.count == 1 && items[0].identity == "caffeinate.toggle"
+                     && glassHeight.constant == childHeight)
+        dumpFrames("nested-rapid-roundtrip")
+        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertBacktab(_:)))
+
+        let backKeys = [#selector(NSResponder.insertBacktab(_:)), #selector(NSResponder.deleteBackward(_:))]
+        for behavior in BackNavigationBehavior.allCases {
+            preferences.backNavigationBehavior = behavior
+            for key in backKeys {
+                setQuery("bo")
+                updateMatches(for: "bo")
+                select(0, as: .navigated)
+                _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:)))
+                precondition(items.count == 1 && items[0].identity == "caffeinate.toggle")
+                _ = control(field, textView: editor, doCommandBy: key)
+                switch behavior {
+                case .restoreQuery:
+                    precondition(field.stringValue == "bo" && items[cursor].identity == "dev.both"
+                                 && selection == .navigated)
+                case .clearQuery:
+                    precondition(field.stringValue.isEmpty && items.count == fixture.items.count
+                                 && cursor == 0 && selection == .topHit)
+                }
+            }
+        }
+        resetNavigation()
+        setQuery("")
+        updateMatches(for: "")
+        precondition(ResultItem.symbol("folder") === ResultItem.symbol("folder"))
+        print("DEV menu: nested navigation, direct action plus submenu, nonselected activation and rapid resize passed")
+    }
+
+    private func runDevBackNavigationChecks(_ editor: NSTextView) async {
+        let backKeys = [#selector(NSResponder.insertBacktab(_:)), #selector(NSResponder.deleteBackward(_:))]
+        let link = Link(name: "Docs", target: "https://example.com/?q={query}").entry!
+        for behavior in BackNavigationBehavior.allCases {
+            for key in backKeys {
+                for isArgument in [false, true] {
+                    setQuery("caf")
+                    updateMatches(for: "caf")
+                    let row = items.firstIndex(where: { $0.identity == "caffeinate" })!
+                    select(row, as: .navigated)
+                    enterScope(isArgument ? .argument(link) : .menu(.caffeinate))
+                    // Change the preference after entry: the next back action must use it.
+                    var updated = preferences
+                    updated.backNavigationBehavior = behavior
+                    updated.showRecentApps = false
+                    preferencesDidChange(updated)
+                    if key == #selector(NSResponder.insertBacktab(_:)) {
+                        setQuery("filter")
+                        updateMatches(for: "filter")
+                    }
+                    _ = control(field, textView: editor, doCommandBy: key)
+                    precondition(!navigation.canGoBack && argument == nil)
+                    switch behavior {
+                    case .restoreQuery:
+                        precondition(field.stringValue == "caf" && items[cursor].identity == "caffeinate"
+                                     && selection == .navigated)
+                    case .clearQuery:
+                        precondition(field.stringValue.isEmpty && items.isEmpty && cursor == 0 && selection == .topHit)
+                    }
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(400))
+            dumpFrames("back-\(behavior.rawValue)")
+        }
+        print("DEV menu: both back-query modes and live changes passed for menus and arguments")
+
+        let settingsModel = SettingsModel(preferences: preferences, library: library)
+        let settingsController = SearchSettingsViewController(model: settingsModel)
+        let page = settingsController.view
+        page.setFrameSize(page.fittingSize)
+        page.layoutSubtreeIfNeeded()
+        func descendants(of view: NSView) -> [NSView] {
+            view.subviews.flatMap { [$0] + descendants(of: $0) }
+        }
+        let picker = descendants(of: page).compactMap { $0 as? NSPopUpButton }
+            .first { $0.itemTitles == ["Restore previous query", "Clear query"] }!
+        let pickerFrame = picker.convert(picker.bounds, to: page)
+        precondition(picker.titleOfSelectedItem == "Clear query" && page.bounds.contains(pickerFrame))
+        print("DEV settings: Search page=\(page.frame) back-query picker=\(pickerFrame)")
+    }
+
+    /// Dev harness: show -> type -> clear, logging the panel frame at each step,
+    /// so the collapse-back state can be measured rather than eyeballed.
+    func runDevSequence() {
+        show()
+        NSLog("DEV step1 shown: \(panel.frame)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            self.field.stringValue = "a"
+            self.updateMatches(for: "a")
+            NSLog("DEV step2 typed: \(self.panel.frame)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                self.field.stringValue = ""
+                self.updateMatches(for: "")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    NSLog("DEV step3 cleared: \(self.panel.frame)")
+                }
+            }
+        }
+    }
+
 }
 
 /// Top-left origin, so everything pinned to the top keeps its frame while the glass

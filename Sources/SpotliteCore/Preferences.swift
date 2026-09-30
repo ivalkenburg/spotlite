@@ -15,6 +15,12 @@ public enum ThemeMode: String, Codable, Sendable, CaseIterable {
     case system
 }
 
+/// What happens to the parent query when leaving a menu or link argument.
+public enum BackNavigationBehavior: String, Codable, Sendable, CaseIterable {
+    case restoreQuery
+    case clearQuery
+}
+
 /// User settings. Lives in Application Support, never in Caches: the hidden-app list
 /// is not regenerable, and eviction would silently un-hide everything.
 public struct Preferences: Codable, Sendable, Equatable {
@@ -24,7 +30,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         case formatVersion
         case hiddenBundleIDs, aliases, panelScreen, panelGeometry, themeMode, glassTint
         case hotKeyCode, hotKeyModifiers, showMenuBarIcon, hasCompletedFirstRun
-        case queryRetention, showSystemSettings
+        case queryRetention, backNavigationBehavior, showSystemSettings
         case showSystemCommands, showRecentApps, showRunningIndicator, showWebSearch, webSearchEngine, links
         case visibleRows
     }
@@ -46,6 +52,8 @@ public struct Preferences: Codable, Sendable, Equatable {
     /// Seconds after closing during which reopening brings the last query back. Zero,
     /// the default, always opens empty.
     public var queryRetention: TimeInterval
+    /// Backspace on empty input and Shift-Tab restore the parent query by default.
+    public var backNavigationBehavior: BackNavigationBehavior
     /// Whether System Settings panes appear in results.
     public var showSystemSettings: Bool
     /// Whether Lock Screen, Sleep, Restart and the other built-in commands appear.
@@ -98,6 +106,8 @@ public struct Preferences: Codable, Sendable, Equatable {
         hasCompletedFirstRun = try c.decodeIfPresent(Bool.self, forKey: .hasCompletedFirstRun) ?? false
         queryRetention = Preferences.clampedRetention(
             try c.decodeIfPresent(TimeInterval.self, forKey: .queryRetention) ?? 0)
+        backNavigationBehavior = (try? c.decodeIfPresent(BackNavigationBehavior.self,
+                                                        forKey: .backNavigationBehavior)) ?? .restoreQuery
         showSystemSettings = try c.decodeIfPresent(Bool.self, forKey: .showSystemSettings) ?? true
         showSystemCommands = try c.decodeIfPresent(Bool.self, forKey: .showSystemCommands) ?? true
         showRecentApps = try c.decodeIfPresent(Bool.self, forKey: .showRecentApps) ?? false
@@ -125,6 +135,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         try c.encode(showMenuBarIcon, forKey: .showMenuBarIcon)
         try c.encode(hasCompletedFirstRun, forKey: .hasCompletedFirstRun)
         try c.encode(queryRetention, forKey: .queryRetention)
+        try c.encode(backNavigationBehavior, forKey: .backNavigationBehavior)
         try c.encode(showSystemSettings, forKey: .showSystemSettings)
         try c.encode(showSystemCommands, forKey: .showSystemCommands)
         try c.encode(showRecentApps, forKey: .showRecentApps)
@@ -147,6 +158,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         showMenuBarIcon: Bool = true,
         hasCompletedFirstRun: Bool = false,
         queryRetention: TimeInterval = 0,
+        backNavigationBehavior: BackNavigationBehavior = .restoreQuery,
         showSystemSettings: Bool = true,
         showSystemCommands: Bool = true,
         showRecentApps: Bool = false,
@@ -167,6 +179,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         self.showMenuBarIcon = showMenuBarIcon
         self.hasCompletedFirstRun = hasCompletedFirstRun
         self.queryRetention = Preferences.clampedRetention(queryRetention)
+        self.backNavigationBehavior = backNavigationBehavior
         self.showSystemSettings = showSystemSettings
         self.showSystemCommands = showSystemCommands
         self.showRecentApps = showRecentApps

@@ -10,6 +10,7 @@ enum ResultItem {
     case calculation(expression: String, value: Double)
     case settings
     case caffeinate(state: CaffeineState)
+    case menuItem(SearchMenuItem, state: CaffeineState)
     case webSearch(query: String, engine: WebSearchEngine)
 
     init(_ result: SearchResult, caffeine: CaffeineState) {
@@ -30,6 +31,7 @@ enum ResultItem {
         case .calculation: return "calculation"
         case .settings: return "settings"
         case .caffeinate: return "caffeinate"
+        case .menuItem(let item, _): return item.id
         case .webSearch: return "webSearch"
         }
     }
@@ -40,6 +42,7 @@ enum ResultItem {
         case .calculation(_, let value): return Calculator.format(value)
         case .settings: return "Spotlite Settings"
         case .caffeinate: return "Caffeinate"
+        case .menuItem(let item, _): return item.title
         case .webSearch(let query, let engine): return "Search \(engine.name) for “\(query)”"
         }
     }
@@ -48,14 +51,26 @@ enum ResultItem {
     /// say whether it is on. For Caffeinate it is Spotlite's own assertion only: exactly
     /// what Return toggles.
     var switchState: Bool? {
-        if case .caffeinate(let state) = self { return state.spotlite }
+        if case .menuItem(let item, let state) = self, item.action == .toggleCaffeinate {
+            return state.spotlite
+        }
         return nil
+    }
+
+    var submenu: SearchMenu? {
+        switch self {
+        case .caffeinate: return .caffeinate
+        case .menuItem(let item, _): return item.submenu
+        default: return nil
+        }
     }
 
     /// The verb the completion pill names.
     private var action: String {
         switch self {
-        case .caffeinate(let state): return state.spotlite ? "Turn Off" : "Turn On"
+        case .menuItem(let item, let state):
+            if item.action == .toggleCaffeinate { return state.spotlite ? "Turn Off" : "Turn On" }
+            return item.action == nil ? "Open" : "Run"
         case .app(let match) where match.entry.kind == .command: return "Run"
         default: return "Open"
         }
@@ -82,12 +97,16 @@ enum ResultItem {
     /// Holding a modifier swaps the path for what that modifier does, so the alternate
     /// actions are discoverable without a legend.
     ///
-    /// Caffeinate says when another process is also keeping the display awake, since its
-    /// switch shows only Spotlite's own assertion.
+    /// The Caffeinate toggle says when another process is also keeping the display
+    /// awake, since its switch shows only Spotlite's own assertion.
     /// `running` says whether the app has an instance to quit, from the panel's snapshot:
     /// asking NSWorkspace here would enumerate every process on each render while ⌘ is held.
     func hints(modifiers: NSEvent.ModifierFlags, running: Bool) -> [Hint] {
-        if case .caffeinate(let state) = self, state.external {
+        if submenu != nil {
+            return [Hint(text: "Actions", key: "⇥")]
+        }
+        if case .menuItem(let item, let state) = self,
+           item.action == .toggleCaffeinate, state.external {
             return [Hint(text: "Also active in another app", key: nil)]
         }
         guard case .app(let match) = self else { return [] }
@@ -177,6 +196,11 @@ enum ResultItem {
         case .settings: return ResultItem.settingsIcon
         case .caffeinate(let state):
             return state.spotlite ? ResultItem.caffeineOnIcon : ResultItem.caffeineOffIcon
+        case .menuItem(let item, let state):
+            if item.action == .toggleCaffeinate {
+                return state.spotlite ? ResultItem.caffeineOnIcon : ResultItem.caffeineOffIcon
+            }
+            return ResultItem.symbol(item.symbolName)
         }
     }
 
@@ -244,9 +268,14 @@ enum ResultItem {
         }
     }
 
-    private static func symbol(_ name: String) -> NSImage? {
-        let config = NSImage.SymbolConfiguration(pointSize: 30, weight: .regular)
-        return NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-            .withSymbolConfiguration(config)
+    private static let symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 30, weight: .regular)
+    private static var symbols: [String: NSImage] = [:]
+
+    static func symbol(_ name: String) -> NSImage? {
+        if let cached = symbols[name] { return cached }
+        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(symbolConfiguration) else { return nil }
+        symbols[name] = image
+        return image
     }
 }

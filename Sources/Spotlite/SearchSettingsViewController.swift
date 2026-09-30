@@ -9,6 +9,7 @@ final class SearchSettingsViewController: SettingsPaneController {
     private static let engines = WebSearchEngine.allCases
     /// Seconds offered for "Remember last search". Zero is Off.
     private static let retentionChoices: [TimeInterval] = [0, 5, 10, 15, 30]
+    private static let backNavigationChoices: [BackNavigationBehavior] = [.restoreQuery, .clearQuery]
 
     override func loadView() {
         let prefs = model.preferences
@@ -42,6 +43,12 @@ final class SearchSettingsViewController: SettingsPaneController {
         retentionPicker.target = self
         retentionPicker.action = #selector(retentionChanged)
 
+        let backNavigationPicker = NSPopUpButton()
+        backNavigationPicker.addItems(withTitles: ["Restore previous query", "Clear query"])
+        backNavigationPicker.selectItem(at: Self.backNavigationChoices.firstIndex(of: prefs.backNavigationBehavior) ?? 0)
+        backNavigationPicker.target = self
+        backNavigationPicker.action = #selector(backNavigationChanged)
+
         resetHistoryButton.target = self
         resetHistoryButton.action = #selector(confirmResetHistory)
         resetHistoryButton.bezelStyle = .rounded
@@ -59,6 +66,10 @@ final class SearchSettingsViewController: SettingsPaneController {
             ("Remember last search:", SettingsForm.column([
                 retentionPicker,
                 SettingsForm.hint("Reopening Spotlite within this time brings the last query back."),
+            ])),
+            ("When going back:", SettingsForm.column([
+                backNavigationPicker,
+                SettingsForm.hint("Backspace on empty input or Shift-Tab returns to the previous level."),
             ])),
             ("Launch history:", SettingsForm.column([
                 resetHistoryButton,
@@ -100,6 +111,12 @@ final class SearchSettingsViewController: SettingsPaneController {
         let index = sender.indexOfSelectedItem
         guard Self.retentionChoices.indices.contains(index) else { return }
         model.set(\.queryRetention, Self.retentionChoices[index])
+    }
+
+    @objc private func backNavigationChanged(_ sender: NSPopUpButton) {
+        let index = sender.indexOfSelectedItem
+        guard Self.backNavigationChoices.indices.contains(index) else { return }
+        model.set(\.backNavigationBehavior, Self.backNavigationChoices[index])
     }
 
     // MARK: - Launch history

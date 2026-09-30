@@ -21,7 +21,7 @@ final class SearchBar {
     private let completionPill = NSView()
     private let completionLabel = NSTextField(labelWithString: "")
     private var completionLeading: NSLayoutConstraint!
-    /// The template link Tab entered, before its argument. Pill, icon and name are
+    /// The active menu or template link, before the query. Pill, icon and name are
     /// siblings like the completion's, so the icon is not blended with the pill.
     private let chip = PassthroughView()
     private let chipPill = NSView()
@@ -186,12 +186,13 @@ final class SearchBar {
         setCaretVisible(true)
     }
 
-    /// Puts the template link's chip before the field, which now takes its argument.
-    func showChip(for item: ResultItem) {
-        chipLabel.stringValue = item.title
+    /// The current menu or template link appears before the query field.
+    func showChip(title: String, icon: NSImage?, iconURL: URL? = nil) {
+        chipLabel.stringValue = title
         pendingChipIconURL = nil
-        chipIcon.image = item.immediateIcon
-        if chipIcon.image == nil, let url = item.iconURL {
+        chipIcon.imageScaling = iconURL == nil ? .scaleProportionallyDown : .scaleProportionallyUpOrDown
+        chipIcon.image = icon ?? iconURL.flatMap { IconCache.shared.cached(for: $0) }
+        if chipIcon.image == nil, let url = iconURL {
             pendingChipIconURL = url
             IconCache.shared.load(for: url) { [weak self] loaded in
                 guard let self, self.pendingChipIconURL == url else { return }
@@ -216,6 +217,10 @@ final class SearchBar {
         fieldAfterChip.isActive = false
         fieldAfterMagnifier.isActive = true
         content?.layoutSubtreeIfNeeded()
+    }
+
+    func dumpFrames(_ tag: String) {
+        print("[\(tag)] field=\(field.frame) chip=\(chip.frame) chipHidden=\(chip.isHidden)")
     }
 
     /// The field editor copies the placeholder when editing starts, so a change made

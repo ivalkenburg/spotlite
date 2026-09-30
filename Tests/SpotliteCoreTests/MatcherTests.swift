@@ -25,6 +25,22 @@ private func top(_ query: String) -> String? {
 @Suite("Fuzzy scoring")
 struct FuzzyScoringTests {
 
+    @Test func preparedCorpusPreservesSearchResultsAndLimits() {
+        let matcher = Matcher()
+        let aliases = AliasIndex(aliases: ["test.Firefox": "browser"])
+        let prepared = SearchCorpus(entries: corpus, aliases: aliases)
+        for query in ["saf", "gc", "browser", "zz", "", String(repeating: "s", count: 1_000)] {
+            for limit in [-1, 0, 1, 3, 50] {
+                let entriesResult = matcher.search(query, in: corpus, aliases: aliases, limit: limit)
+                let preparedResult = matcher.search(query, in: prepared, limit: limit)
+                #expect(preparedResult.map(\.entry.instanceID) == entriesResult.map(\.entry.instanceID))
+                #expect(preparedResult.map(\.score) == entriesResult.map(\.score))
+                #expect(preparedResult.map(\.positions) == entriesResult.map(\.positions))
+                #expect(preparedResult.map(\.tier) == entriesResult.map(\.tier))
+            }
+        }
+    }
+
     @Test func prefixMatchWins() {
         #expect(top("saf") == "Safari")
         #expect(top("term") == "Terminal")

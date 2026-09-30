@@ -23,6 +23,7 @@ struct PreferencesTests {
         prefs.showMenuBarIcon = false
         prefs.hasCompletedFirstRun = true
         prefs.queryRetention = 12
+        prefs.backNavigationBehavior = .clearQuery
         prefs.showSystemCommands = false
         prefs.showRecentApps = true
         prefs.showRunningIndicator = false
@@ -50,6 +51,7 @@ struct PreferencesTests {
         #expect(decoded.themeMode == .system)
         #expect(decoded.glassTint == 0)
         #expect(decoded.queryRetention == 0)
+        #expect(decoded.backNavigationBehavior == .restoreQuery)
         #expect(decoded.showSystemSettings)
         #expect(decoded.showSystemCommands)
         #expect(!decoded.showRecentApps)
@@ -83,6 +85,17 @@ struct PreferencesTests {
         let decoded = try JSONDecoder().decode(Preferences.self, from: data)
         #expect(decoded.webSearchEngine == .duckDuckGo)
         #expect(!decoded.showMenuBarIcon)
+    }
+
+    @Test func unknownBackNavigationBehaviorFallsBack() throws {
+        let data = Data(#"{"backNavigationBehavior":"futureOption","showMenuBarIcon":false}"#.utf8)
+        let decoded = try JSONDecoder().decode(Preferences.self, from: data)
+        #expect(decoded.backNavigationBehavior == .restoreQuery)
+        #expect(!decoded.showMenuBarIcon)
+    }
+
+    @Test func backNavigationRestoresQueryByDefault() {
+        #expect(Preferences().backNavigationBehavior == .restoreQuery)
     }
 
     @Test func movesAnUntouchedPanelToTheNewDefault() throws {
