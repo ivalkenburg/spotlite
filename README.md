@@ -16,12 +16,15 @@ keystroke.
 - Fuzzy app search: `saf` finds Safari, `gc` finds Google Chrome.
 - Apps you launch often rank higher, without taking over queries they match poorly.
 - A calculator that shows the result as you type; Return copies it.
+- Integer base conversion and offline unit conversion.
+- UUID generation, copied straight to the clipboard.
 - System Settings panes by name: `blue` opens Bluetooth.
 - System commands such as Lock Screen, Sleep, Restart and Empty Trash.
 - Links to folders, files or web pages, each with its own name and alias.
 - Links with a `{query}` placeholder: press Tab and type to search GitHub or pass text to a Shortcut.
 - A web search row (DuckDuckGo, Google or Bing) for when nothing on the Mac matches.
 - Aliases, so `ps` opens Photoshop.
+- Choose which folders to search for apps.
 - Hide apps you never launch with Command-Delete.
 - Optional recent apps list before you type, and a dot under apps that are running.
 - A Caffeinate switch that keeps the display awake.

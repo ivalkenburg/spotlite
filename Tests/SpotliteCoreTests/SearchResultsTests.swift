@@ -20,6 +20,8 @@ struct SearchResultsTests {
             switch $0 {
             case .calculation(_, let value): return "= \(value)"
             case .app(let match): return match.entry.name
+            case .conversion(_, let result): return result
+            case .generateUUID: return "generateUUID"
             case .settings: return "settings"
             case .caffeinate: return "caffeinate"
             case .webSearch(let query, let engine): return "\(engine.name): \(query)"

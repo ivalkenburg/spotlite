@@ -13,27 +13,45 @@ public enum AppIndex {
         return dirs
     }
 
+    /// Normalize paths once when preferences change, never while matching.
+    public static func normalizedDirectories(_ paths: [String]) -> [URL] {
+        var seen: Set<String> = []
+        return paths.compactMap { raw in
+            let path = (raw as NSString).expandingTildeInPath
+            guard path.hasPrefix("/") else { return nil }
+            let url = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+            return seen.insert(url.path).inserted ? url : nil
+        }
+    }
+
+    /// The same depth-2 rule as a scan, used to drop removed roots without blanking the list.
+    public static func includesApplication(at url: URL, directories: [URL]) -> Bool {
+        let parent = url.standardizedFileURL.deletingLastPathComponent()
+        let grandparent = parent.deletingLastPathComponent()
+        return directories.contains(parent) || directories.contains(grandparent)
+    }
+
     /// Returns an immediately usable cached snapshot. The cache turns a ~90ms cold scan
     /// of 88 bundles into a single small JSON read. Callers that keep running must
     /// revalidate it in the background: a cache cannot observe changes made while the
     /// process was not alive.
-    public static func loadCached() -> [AppEntry]? {
-        guard let cached = Storage.loadIndex(), !cached.isEmpty else { return nil }
+    public static func loadCached(directories: [URL] = searchDirectories) -> [AppEntry]? {
+        guard let cached = Storage.loadIndex(directories: directories), !cached.isEmpty else { return nil }
         return cached.map(AppEntry.init(cached:))
     }
 
     /// Rescans and rewrites the cache. Called from the FSEvents watcher and from the
     /// staleness check when the panel opens. Settings panes are rescanned with the apps
     /// but not watched: they only change with an OS update.
-    public static func refresh() -> [AppEntry] {
-        let scanned = scanAll()
-        Storage.saveIndex(scanned.map(\.cached))
+    public static func refresh(directories: [URL] = searchDirectories) -> [AppEntry] {
+        let scanned = scanAll(directories: directories)
+        Storage.saveIndex(scanned.map(\.cached), directories: directories)
         return scanned
     }
 
     /// Apps and settings panes, sorted by name: what the index holds.
-    public static func scanAll() -> [AppEntry] {
-        sortedByName(collect(searchDirectories) + SettingsPaneIndex.installed)
+    public static func scanAll(directories: [URL] = searchDirectories) -> [AppEntry] {
+        sortedByName(collect(directories) + SettingsPaneIndex.installed)
     }
 
     /// Newest modification time across the indexed directories. Comparing this on show

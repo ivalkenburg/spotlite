@@ -74,14 +74,21 @@ public struct Frecency: Codable, Sendable {
         let before = records.count
         records = records.filter { ids.contains($0.key) }
 
-        if records.count > Frecency.maxRecords {
-            // Keep the strongest by the same measure used for ranking, so pruning can
-            // never drop an app that currently outranks one it keeps.
-            let strongest = records
-                .sorted { multiplier(for: $0.key, now: now) > multiplier(for: $1.key, now: now) }
-                .prefix(Frecency.maxRecords)
-            records = Dictionary(uniqueKeysWithValues: strongest.map { ($0.key, $0.value) })
-        }
+        capRecords(now: now)
         return records.count != before
+    }
+
+    /// Bounds history without removing records from temporarily unindexed locations.
+    @discardableResult
+    public mutating func capRecords(now: Date = Date()) -> Bool {
+        guard records.count > Frecency.maxRecords else { return false }
+        // Compute expensive frequency/recency weights once, rather than per comparison.
+        let strongest = records.keys.map { ($0, multiplier(for: $0, now: now)) }
+            .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0 < $1.0 }
+            .prefix(Frecency.maxRecords)
+        records = Dictionary(uniqueKeysWithValues: strongest.compactMap { id, _ in
+            records[id].map { (id, $0) }
+        })
+        return true
     }
 }

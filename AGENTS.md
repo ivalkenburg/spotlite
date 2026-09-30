@@ -44,6 +44,7 @@ make dmg      # build/Spotlite-<version>.dmg
 | `SPOTLITE_DEV_FRAMES=1` | Dump view frames (collapsed, expanded for `SPOTLITE_DEV_QUERY` or "a") and exit |
 | `SPOTLITE_DEV_SEQUENCE=1` | Show, type, clear; log panel frames |
 | `SPOTLITE_DEV_MENU=1` | Exercise Caffeinate submenu keys, toggle and filtering; dump frames and exit |
+| `SPOTLITE_DEV_UTILITIES=1` | Exercise conversion cards and UUID submenu/copy actions, preserve clipboard, dump frames and exit |
 | `SPOTLITE_DEV_PIN=1` | Keep the panel open when it loses focus |
 | `SPOTLITE_DEV_QUERY=<q>` | Prefill a query |
 

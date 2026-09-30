@@ -133,7 +133,7 @@ final class ItemsSettingsViewController: SettingsPaneController, NSTableViewData
         let alias = existing.flatMap { model.preferences.aliases[$0.entryID] } ?? ""
         let fields = (name: NSTextField(string: draft?.name ?? existing?.name ?? ""),
                       target: NSTextField(string: draft?.target ?? existing?.target ?? ""),
-                      alias: NSTextField(string: draft?.alias ?? alias))
+                      alias: AliasEditorField(string: draft?.alias ?? alias))
         fields.name.placeholderString = "Downloads"
         fields.target.placeholderString = "~/Downloads or github.com"
         fields.alias.placeholderString = "Optional, e.g. dl"
@@ -152,7 +152,18 @@ final class ItemsSettingsViewController: SettingsPaneController, NSTableViewData
         alert.informativeText = problem
             ?? "A folder, file or web address, found by its name or alias like an app. "
             + "Put \(Link.placeholder) in it to type a search after pressing Tab."
-        alert.accessoryView = grid
+        let warning = SettingsForm.hint("", color: .systemOrange)
+        warning.preferredMaxLayoutWidth = 320
+        warning.widthAnchor.constraint(equalToConstant: 320).isActive = true
+        warning.heightAnchor.constraint(equalToConstant: 42).isActive = true
+        fields.alias.onEdit = { [weak self] alias in
+            warning.stringValue = self?.model.aliasWarning(for: alias, excluding: existing?.entryID) ?? ""
+            warning.toolTip = warning.stringValue
+        }
+        fields.alias.onEdit?(fields.alias.stringValue)
+        let accessory = SettingsForm.column([grid, warning], spacing: 8)
+        accessory.frame.size = accessory.fittingSize
+        alert.accessoryView = accessory
         alert.addButton(withTitle: existing == nil ? "Add" : "Save")
         alert.addButton(withTitle: "Cancel")
         alert.window.initialFirstResponder = fields.name
@@ -246,6 +257,9 @@ final class ItemsSettingsViewController: SettingsPaneController, NSTableViewData
             self.model.persist()
             self.table.reloadData()
         }
+        view.onAliasEdited = { [weak self] entry, alias in
+            self?.model.aliasWarning(for: alias, excluding: entry.id)
+        }
         view.onAliasChanged = { [weak self] entry, alias in
             guard let self, let id = entry.bundleID else { return }
             let trimmed = alias.trimmingCharacters(in: .whitespaces)
@@ -254,14 +268,33 @@ final class ItemsSettingsViewController: SettingsPaneController, NSTableViewData
             if trimmed.isEmpty { self.model.preferences.aliases.removeValue(forKey: id) }
             else { self.model.preferences.aliases[id] = trimmed }
             self.model.persist()
+            self.reload()
         }
 
         let hidden = app.bundleID.map { model.preferences.hiddenBundleIDs.contains($0) } ?? false
         let alias = app.bundleID.flatMap { model.preferences.aliases[$0] } ?? ""
         // The kind is already the filter's label everywhere but All.
-        view.configure(with: app, hidden: hidden, alias: alias, showsKind: selectedKind == nil)
+        view.configure(with: app, hidden: hidden, alias: alias, showsKind: selectedKind == nil,
+                       warning: model.aliasWarning(for: alias, excluding: app.id))
         return view
     }
 
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { false }
+}
+
+/// Local to the link editor: warnings update without blocking duplicate aliases.
+@MainActor
+private final class AliasEditorField: NSTextField, NSTextFieldDelegate {
+    var onEdit: ((String) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        delegate = self
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func controlTextDidChange(_ notification: Notification) {
+        onEdit?(stringValue)
+    }
 }

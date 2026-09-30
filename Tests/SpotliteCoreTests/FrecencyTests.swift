@@ -54,6 +54,28 @@ struct FrecencyTests {
         #expect(f.records.keys.sorted() == ["kept"])
     }
 
+    @Test func cappingRetainsTemporarilyUnindexedHistoryAndSkipsSmallMaps() {
+        var history = Frecency()
+        history.recordLaunch("temporarily.unindexed")
+        let capped = history.capRecords()
+        #expect(!capped)
+        #expect(history.records["temporarily.unindexed"]?.count == 1)
+    }
+
+    @Test func capKeepsTheStrongestRecordsWithDeterministicTies() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        var history = Frecency()
+        for i in 0..<Frecency.maxRecords { history.recordLaunch(String(format: "weak.%03d", i), now: now) }
+        for _ in 0..<20 { history.recordLaunch("strong", now: now) }
+        let capped = history.capRecords(now: now)
+        #expect(capped)
+        #expect(history.records.count == Frecency.maxRecords)
+        #expect(history.records["strong"]?.count == 20)
+        #expect(history.records["weak.499"] == nil)
+        let cappedAgain = history.capRecords(now: now)
+        #expect(!cappedAgain)
+    }
+
     @Test func frecencyImprovesANegativeTextualScore() {
         var f = Frecency()
         let now = Date()

@@ -1,8 +1,9 @@
 import Foundation
 
 /// Actions are dispatched by the AppKit layer; menu definitions stay headless.
-public enum SearchMenuAction: Sendable {
+public enum SearchMenuAction: Sendable, Equatable {
     case toggleCaffeinate
+    case generateUUID(UUIDVersion)
 }
 
 /// An item can have a direct Return action, a submenu, or both. Without an action,
@@ -56,6 +57,16 @@ public struct SearchMenu: Sendable {
             byID[$0.entry.id].map { items[$0] }
         }
     }
+
+    public static let generateUUID = SearchMenu(
+        id: "generateUUID", title: "Generate UUID", symbolName: "number",
+        items: [
+            SearchMenuItem(id: "uuid.v4", title: "v4 — Random", symbolName: "dice",
+                           action: .generateUUID(.v4)),
+            SearchMenuItem(id: "uuid.v7", title: "v7 — Time ordered", symbolName: "clock",
+                           action: .generateUUID(.v7)),
+        ]
+    )
 
     public static let caffeinate = SearchMenu(
         id: "caffeinate", title: "Caffeinate", symbolName: "cup.and.saucer",

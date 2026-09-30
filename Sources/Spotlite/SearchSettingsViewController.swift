@@ -6,6 +6,8 @@ import SpotliteCore
 final class SearchSettingsViewController: SettingsPaneController {
     private let resetHistoryButton = NSButton(title: "Reset…", target: nil, action: nil)
 
+    private var directoriesView: ApplicationDirectoriesView?
+
     private static let engines = WebSearchEngine.allCases
     /// Seconds offered for "Remember last search". Zero is Off.
     private static let retentionChoices: [TimeInterval] = [0, 5, 10, 15, 30]
@@ -53,7 +55,10 @@ final class SearchSettingsViewController: SettingsPaneController {
         resetHistoryButton.action = #selector(confirmResetHistory)
         resetHistoryButton.bezelStyle = .rounded
 
+        let directories = ApplicationDirectoriesView(model: model)
+        directoriesView = directories
         let grid = SettingsForm.grid([
+            ("App locations:", directories),
             ("Include:", SettingsForm.column([
                 systemSettings,
                 SettingsForm.column([
@@ -76,6 +81,10 @@ final class SearchSettingsViewController: SettingsPaneController {
                 SettingsForm.hint("Apps you open often rank higher."),
             ])),
         ])
+        // A directory list has no text baseline. Baseline alignment lifts its label
+        // above the list; align the two cell tops instead.
+        grid.row(at: 0).rowAlignment = .none
+        grid.row(at: 0).yPlacement = .top
         view = SettingsForm.page(grid)
         updateHistoryState()
     }
@@ -125,6 +134,7 @@ final class SearchSettingsViewController: SettingsPaneController {
     /// again whenever the tab or window comes forward.
     func updateHistoryState() {
         guard isViewLoaded else { return }
+        directoriesView?.reload()
         resetHistoryButton.isEnabled = model.library.hasHistory
     }
 

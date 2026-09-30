@@ -9,12 +9,14 @@ final class SettingsRowView: NSView, NSTextFieldDelegate {
     private let checkbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let iconView = NSImageView()
     private let label = NSTextField(labelWithString: "")
+    private let aliasWarning = NSImageView()
     private let aliasField = NSTextField()
 
     private var entry: AppEntry?
     private var pendingIconURL: URL?
 
     var onVisibilityChanged: ((AppEntry, Bool) -> Void)?
+    var onAliasEdited: ((AppEntry, String) -> String?)?
     var onAliasChanged: ((AppEntry, String) -> Void)?
 
     override init(frame frameRect: NSRect) {
@@ -32,7 +34,10 @@ final class SettingsRowView: NSView, NSTextFieldDelegate {
         aliasField.alignment = .center
         aliasField.delegate = self
 
-        let stack = NSStackView(views: [checkbox, iconView, label, aliasField])
+        aliasWarning.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill",
+                                      accessibilityDescription: "Alias conflict")
+        aliasWarning.contentTintColor = .systemOrange
+        let stack = NSStackView(views: [checkbox, iconView, label, aliasWarning, aliasField])
         stack.orientation = .horizontal
         stack.spacing = 8
         stack.alignment = .centerY
@@ -49,11 +54,13 @@ final class SettingsRowView: NSView, NSTextFieldDelegate {
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
             iconView.widthAnchor.constraint(equalToConstant: 18),
             iconView.heightAnchor.constraint(equalToConstant: 18),
+            aliasWarning.widthAnchor.constraint(equalToConstant: 14),
+            aliasWarning.heightAnchor.constraint(equalToConstant: 14),
             aliasField.widthAnchor.constraint(equalToConstant: 76),
         ])
         // Only the name may absorb slack. Everything else hugs its content, or the
         // stack hands the extra width to the checkbox and shunts the whole row right.
-        for fixed in [checkbox, iconView, aliasField] as [NSView] {
+        for fixed in [checkbox, iconView, aliasWarning, aliasField] as [NSView] {
             fixed.setContentHuggingPriority(.required, for: .horizontal)
         }
         label.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -63,7 +70,7 @@ final class SettingsRowView: NSView, NSTextFieldDelegate {
     required init?(coder: NSCoder) { fatalError() }
 
     /// `showsKind` suffixes non-apps with their kind, for a list that mixes kinds.
-    func configure(with entry: AppEntry, hidden: Bool, alias: String, showsKind: Bool) {
+    func configure(with entry: AppEntry, hidden: Bool, alias: String, showsKind: Bool, warning: String? = nil) {
         self.entry = entry
         checkbox.state = hidden ? .off : .on
         let suffix = switch entry.kind {
@@ -75,6 +82,7 @@ final class SettingsRowView: NSView, NSTextFieldDelegate {
         label.stringValue = showsKind ? entry.name + suffix : entry.name
         label.textColor = hidden ? .tertiaryLabelColor : .labelColor
         aliasField.stringValue = alias
+        showWarning(warning)
         // Hiding and aliases are keyed by bundle ID. Without one the checkbox would
         // untick while the app stayed visible.
         checkbox.isEnabled = entry.bundleID != nil
@@ -104,6 +112,19 @@ final class SettingsRowView: NSView, NSTextFieldDelegate {
             self.pendingIconURL = nil
             self.iconView.image = loaded
         }
+    }
+
+    private func showWarning(_ warning: String?) {
+        aliasField.textColor = warning == nil ? .labelColor : .systemOrange
+        aliasField.toolTip = warning
+        aliasWarning.isHidden = warning == nil
+        aliasWarning.toolTip = warning
+        aliasWarning.setAccessibilityLabel(warning ?? "Alias conflict")
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard let entry else { return }
+        showWarning(onAliasEdited?(entry, aliasField.stringValue))
     }
 
     @objc private func visibilityToggled() {

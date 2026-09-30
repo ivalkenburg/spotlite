@@ -86,6 +86,37 @@ struct AppIndexTests {
         #expect(AppIndex.scan(directories: [root]).isEmpty)
     }
 
+    @Test func normalizesDirectoriesWithoutRestoringRemovedDefaults() throws {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        #expect(AppIndex.normalizedDirectories(["~/Applications", home + "/Applications/", "relative", "/tmp/../tmp"])
+                .map(\.path) == [home + "/Applications", "/tmp"])
+        #expect(AppIndex.normalizedDirectories([]).isEmpty)
+        let old = try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8))
+        #expect(old.applicationDirectories == AppIndex.searchDirectories.map(\.path))
+        let empty = Preferences(applicationDirectories: [])
+        #expect(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(empty)).applicationDirectories.isEmpty)
+        let custom = Preferences(applicationDirectories: ["/tmp/Apps", "/tmp/Apps/"])
+        #expect(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(custom)) == custom)
+        #expect(custom.applicationDirectories == ["/tmp/Apps"])
+    }
+
+    @Test func customRootsRespectDepthAndDoNotIncludeStandardApps() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let vendor = root.appendingPathComponent("Vendor")
+        let deep = vendor.appendingPathComponent("Deep")
+        try FileManager.default.createDirectory(at: deep, withIntermediateDirectories: true)
+        try makeApp(in: root, name: "Root", bundleID: "test.root")
+        try makeApp(in: vendor, name: "Vendor", bundleID: "test.vendor")
+        try makeApp(in: deep, name: "Too Deep", bundleID: "test.deep")
+        #expect(AppIndex.includesApplication(at: root.appendingPathComponent("Root.app"), directories: [root]))
+        #expect(AppIndex.includesApplication(at: vendor.appendingPathComponent("Vendor.app"), directories: [root]))
+        #expect(!AppIndex.includesApplication(at: deep.appendingPathComponent("Too Deep.app"), directories: [root]))
+        #expect(!AppIndex.includesApplication(at: root.appendingPathComponent("Root.app"), directories: []))
+        #expect(AppIndex.scanAll(directories: [root]).filter { $0.kind == .app }.map(\.name) == ["Root", "Vendor"])
+        #expect(AppIndex.scanAll(directories: []).allSatisfy { $0.kind == .settingsPane })
+    }
+
     @Test func watcherCanStartAndStopForATemporaryDirectory() throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

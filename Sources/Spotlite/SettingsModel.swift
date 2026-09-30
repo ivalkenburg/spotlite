@@ -7,17 +7,27 @@ import SpotliteCore
 final class SettingsModel {
     var preferences: Preferences
     let library: AppLibrary
+    private let savePreferences: (Preferences) -> Void
 
     var onChange: ((Preferences) -> Void)?
     var onHotKeyChange: ((UInt32, UInt32) -> Bool)?
 
-    init(preferences: Preferences, library: AppLibrary) {
+    init(preferences: Preferences, library: AppLibrary,
+         savePreferences: @escaping (Preferences) -> Void = { Storage.save($0) }) {
         self.preferences = preferences
         self.library = library
+        self.savePreferences = savePreferences
+    }
+
+    func aliasWarning(for alias: String, excluding id: String?) -> String? {
+        let ids = AliasConflicts.conflictingIDs(for: alias, excluding: id, aliases: preferences.aliases)
+        guard !ids.isEmpty else { return nil }
+        let names = ids.map { id in library.entries.first(where: { $0.id == id })?.name ?? id }
+        return "Alias also used by " + names.joined(separator: ", ") + "."
     }
 
     func persist() {
-        Storage.save(preferences)
+        savePreferences(preferences)
         onChange?(preferences)
     }
 

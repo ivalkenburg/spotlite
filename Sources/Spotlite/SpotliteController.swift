@@ -496,21 +496,20 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             .map { ResultItem($0, caffeine: state) }
     }
 
-    private var calculationFirst: Bool {
-        if case .calculation = items.first { return true }
-        return false
+    private var cardFirst: Bool {
+        items.first?.isCard == true
     }
 
     /// The calculator card carries its own separator and spacing.
     private func rowHeight(at row: Int) -> CGFloat {
-        guard row == 0, calculationFirst else { return Metrics.rowHeight }
+        guard row == 0, cardFirst else { return Metrics.rowHeight }
         // With nothing under it, the card needs no separator; the list's bottom padding
         // follows it directly.
         return items.count > 1 ? Metrics.cardRowHeight : Metrics.cardHeight
     }
 
     /// The card sits directly under the bar with no divider; rows start after a gap.
-    private var listTopInset: CGFloat { calculationFirst ? 0 : Metrics.listTopPadding }
+    private var listTopInset: CGFloat { cardFirst ? 0 : Metrics.listTopPadding }
 
     private var viewport: ListViewport {
         ListViewport(count: items.count, leadHeight: rowHeight(at: 0),
@@ -522,7 +521,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private func layoutList(animated: Bool) {
         // Contents vanish at once when the list empties; only the glass animates away.
         scroll.isHidden = items.isEmpty
-        divider.isHidden = items.isEmpty || calculationFirst
+        divider.isHidden = items.isEmpty || cardFirst
 
         var target = Metrics.inputHeight
         if items.isEmpty {
@@ -686,6 +685,14 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             NSPasteboard.general.setString(text, forType: .string)
             hide()
 
+        case .conversion(_, let result):
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(result, forType: .string)
+            hide()
+
+        case .generateUUID:
+            enterScope(.menu(.generateUUID))
+
         case .settings:
             hide()
             onOpenSettings?()
@@ -698,6 +705,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                 if item.closesPanelOnAction { hide() }
                 switch action {
                 case .toggleCaffeinate: caffeine.toggle()
+                case .generateUUID(let version):
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(UUIDGenerator.generate(version), forType: .string)
                 }
             } else if let submenu = item.submenu {
                 enterScope(.menu(submenu))
@@ -961,14 +971,14 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        if case .calculation(let expression, let value) = items[row] {
+        if let content = items[row].cardContent {
             let card = tableView.makeView(withIdentifier: CalculationCardView.reuseID, owner: self)
                 as? CalculationCardView ?? {
                     let v = CalculationCardView(frame: .zero)
                     v.identifier = CalculationCardView.reuseID
                     return v
                 }()
-            card.configure(expression: expression, value: Calculator.format(value),
+            card.configure(expression: content.expression, value: content.result,
                            selection: rowSelection(row), showsSeparator: items.count > 1)
             return card
         }
@@ -999,6 +1009,10 @@ extension SpotliteController {
         print("[\(tag)] content=\(glass.contentView?.frame ?? .zero)")
         print("[\(tag)] scroll=\(scroll.frame) listHeight=\(listHeight.constant) glassHeight=\(glassHeight.constant)")
         bar.dumpFrames(tag)
+        if items.indices.contains(cursor),
+           let card = table.view(atColumn: 0, row: cursor, makeIfNecessary: true) as? CalculationCardView {
+            card.dumpFrames(tag)
+        }
         if items.indices.contains(cursor),
            let row = table.view(atColumn: 0, row: cursor, makeIfNecessary: true) as? ResultRowView {
             row.dumpFrames(tag)
@@ -1057,6 +1071,125 @@ extension SpotliteController {
         print("DEV menu: Escape and reopen reset passed")
         await runDevNestedMenuChecks(editor)
         await runDevBackNavigationChecks(editor)
+    }
+
+    /// Real AppKit conversion and generation checks; preserve every clipboard representation.
+    func runDevUtilityChecks() async throws {
+        let pasteboard = NSPasteboard.general
+        let savedClipboard = pasteboard.pasteboardItems?.map { item in
+            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+        } ?? []
+        defer {
+            pasteboard.clearContents()
+            let restored = savedClipboard.map { representations in
+                let item = NSPasteboardItem()
+                for (type, data) in representations { item.setData(data, forType: type) }
+                return item
+            }
+            if !restored.isEmpty { pasteboard.writeObjects(restored) }
+        }
+        for query in ["255 to hex", "18446744073709551615 to binary", "10 km to miles", "32 f to c"] {
+            show()
+            setQuery(query)
+            updateMatches(for: query)
+            try? await Task.sleep(for: .milliseconds(400))
+            let expected = QuickConversion.evaluate(query)!
+            try checkUtility(cardFirst && items.first?.cardContent?.result == expected)
+            try checkUtility(table.view(atColumn: 0, row: 0, makeIfNecessary: true) is CalculationCardView)
+            dumpFrames("conversion-\(query)")
+            if let card = table.view(atColumn: 0, row: 0, makeIfNecessary: true) as? CalculationCardView {
+                try checkUtility(card.hasValidGeometry)
+            }
+            launch(at: 0)
+            try checkUtility(pasteboard.string(forType: .string) == expected && isDismissing)
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+        for version in UUIDVersion.allCases {
+            show()
+            setQuery("uuid")
+            updateMatches(for: "uuid")
+            let rootRow = items.firstIndex { $0.identity == "generateUUID" }!
+            select(rootRow, as: .navigated)
+            let editor = field.currentEditor() as! NSTextView
+            _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:)))
+            try checkUtility(items.map(\.identity) == ["uuid.v4", "uuid.v7"])
+            _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertBacktab(_:)))
+            try checkUtility(field.stringValue == "uuid" && items[cursor].identity == "generateUUID")
+            _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
+            setQuery(version.rawValue)
+            updateMatches(for: version.rawValue)
+            try checkUtility(items.count == 1 && items[0].identity == "uuid." + version.rawValue)
+            try? await Task.sleep(for: .milliseconds(400))
+            dumpFrames("uuid-\(version.rawValue)")
+            _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
+            let generated = pasteboard.string(forType: .string)!
+            let parsed = UUID(uuidString: generated)!
+            try checkUtility(parsed.uuid.6 >> 4 == (version == .v4 ? 4 : 7))
+            try checkUtility(generated == generated.lowercased() && isDismissing)
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+        try runDevSettingsChecks()
+        print("DEV utilities: conversion cards, exact copying, UUID navigation and generation passed")
+    }
+
+    private func runDevSettingsChecks() throws {
+        // Exercise controls without writing to the user's preferences or changing their index.
+        let model = SettingsModel(preferences: Preferences(applicationDirectories: ["/Applications", "/tmp/Dev Apps"]),
+                                  library: library, savePreferences: { _ in })
+        let controller = SearchSettingsViewController(model: model)
+        let page = controller.view
+        page.setFrameSize(page.fittingSize)
+        page.layoutSubtreeIfNeeded()
+        func descendants(_ view: NSView) -> [NSView] {
+            view.subviews.flatMap { [$0] + descendants($0) }
+        }
+        let views = descendants(page)
+        let locationLabel = views.compactMap { $0 as? NSTextField }.first { $0.stringValue == "App locations:" }!
+        let locationView = views.first { $0 is ApplicationDirectoriesView }!
+        let labelAlignment = locationLabel.convert(locationLabel.alignmentRect(forFrame: locationLabel.bounds), to: page)
+        let listFrame = locationView.convert(locationView.bounds, to: page)
+        try checkUtility(abs(labelAlignment.maxY - listFrame.maxY) < 0.01)
+        print("DEV settings: location label alignment=\(labelAlignment) location view=\(listFrame) top difference=\(labelAlignment.maxY - listFrame.maxY)")
+        let directoryTable = views.compactMap { $0 as? NSTableView }.first!
+        let buttons = views.compactMap { $0 as? NSButton }
+        let remove = buttons.first { $0.title == "Remove" }!
+        let reset = buttons.first { $0.title == "Reset to Default" }!
+        directoryTable.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        remove.performClick(nil)
+        try checkUtility(model.preferences.applicationDirectories == ["/tmp/Dev Apps"])
+        reset.performClick(nil)
+        try checkUtility(model.preferences.applicationDirectories == AppIndex.searchDirectories.map(\.path))
+        while !model.preferences.applicationDirectories.isEmpty {
+            directoryTable.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            remove.performClick(nil)
+        }
+        try checkUtility(directoryTable.numberOfRows == 0 && !remove.isEnabled)
+        let locations = views.first { $0 is ApplicationDirectoriesView }!
+        try checkUtility(page.bounds.contains(locations.convert(locations.bounds, to: page)))
+        print("DEV settings: Search page=\(page.frame) locations=\(locations.convert(locations.bounds, to: page)); remove/reset/empty passed")
+
+        let apps = library.entries.filter { $0.bundleID != nil }
+        guard let first = apps.first, let second = apps.first(where: { $0.id != first.id }) else { return }
+        model.preferences.aliases = [first.id: "same", second.id: " SAME "]
+        let itemsController = ItemsSettingsViewController(model: model)
+        itemsController.setApps([first, second])
+        let itemsPage = itemsController.view
+        itemsPage.setFrameSize(itemsPage.fittingSize)
+        itemsPage.layoutSubtreeIfNeeded()
+        let itemsTable = descendants(itemsPage).compactMap { $0 as? NSTableView }.first!
+        let row = itemsTable.view(atColumn: 0, row: 0, makeIfNecessary: true) as! SettingsRowView
+        let alias = descendants(row).compactMap { $0 as? NSTextField }.first { $0.placeholderString == "alias" }!
+        try checkUtility(alias.toolTip?.contains(second.name) == true)
+        alias.stringValue = "different"
+        row.controlTextDidChange(Notification(name: NSText.didChangeNotification))
+        try checkUtility(alias.toolTip == nil)
+        row.controlTextDidEndEditing(Notification(name: NSText.didEndEditingNotification))
+        try checkUtility(model.preferences.aliases[first.id] == "different")
+        print("DEV settings: alias warning names, live edits and duplicate acceptance passed")
+    }
+
+    private func checkUtility(_ condition: @autoclosure () -> Bool, line: Int = #line) throws {
+        guard condition() else { throw NSError(domain: "SpotliteDevChecks", code: line) }
     }
 
     private func runDevNestedMenuChecks(_ editor: NSTextView) async {

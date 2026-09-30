@@ -8,6 +8,8 @@ enum ResultItem {
     case app(MatchResult)
     /// The expression is kept as typed: the card shows it above the result.
     case calculation(expression: String, value: Double)
+    case conversion(expression: String, result: String)
+    case generateUUID
     case settings
     case caffeinate(state: CaffeineState)
     case menuItem(SearchMenuItem, state: CaffeineState)
@@ -17,6 +19,8 @@ enum ResultItem {
         switch result {
         case .app(let match): self = .app(match)
         case .calculation(let expression, let value): self = .calculation(expression: expression, value: value)
+        case .conversion(let expression, let result): self = .conversion(expression: expression, result: result)
+        case .generateUUID: self = .generateUUID
         case .settings: self = .settings
         case .caffeinate: self = .caffeinate(state: caffeine)
         case .webSearch(let query, let engine): self = .webSearch(query: query, engine: engine)
@@ -29,6 +33,8 @@ enum ResultItem {
         switch self {
         case .app(let match): return match.entry.instanceID
         case .calculation: return "calculation"
+        case .conversion: return "conversion"
+        case .generateUUID: return "generateUUID"
         case .settings: return "settings"
         case .caffeinate: return "caffeinate"
         case .menuItem(let item, _): return item.id
@@ -40,10 +46,27 @@ enum ResultItem {
         switch self {
         case .app(let match): return match.entry.name
         case .calculation(_, let value): return Calculator.format(value)
+        case .conversion(_, let result): return result
+        case .generateUUID: return "Generate UUID"
         case .settings: return "Spotlite Settings"
         case .caffeinate: return "Caffeinate"
         case .menuItem(let item, _): return item.title
         case .webSearch(let query, let engine): return "Search \(engine.name) for “\(query)”"
+        }
+    }
+
+    var isCard: Bool {
+        switch self {
+        case .calculation, .conversion: true
+        default: false
+        }
+    }
+
+    var cardContent: (expression: String, result: String)? {
+        switch self {
+        case .calculation(let expression, let value): return (expression, Calculator.format(value))
+        case .conversion(let expression, let result): return (expression, result)
+        default: return nil
         }
     }
 
@@ -60,6 +83,7 @@ enum ResultItem {
     var submenu: SearchMenu? {
         switch self {
         case .caffeinate: return .caffeinate
+        case .generateUUID: return .generateUUID
         case .menuItem(let item, _): return item.submenu
         default: return nil
         }
@@ -70,6 +94,7 @@ enum ResultItem {
         switch self {
         case .menuItem(let item, let state):
             if item.action == .toggleCaffeinate { return state.spotlite ? "Turn Off" : "Turn On" }
+            if case .generateUUID = item.action { return "Copy" }
             return item.action == nil ? "Open" : "Run"
         case .app(let match) where match.entry.kind == .command: return "Run"
         default: return "Open"
@@ -80,6 +105,7 @@ enum ResultItem {
     func completion(for query: String) -> String {
         switch self {
         case .calculation(_, let value): return " = " + Calculator.format(value)
+        case .conversion(_, let result): return " = " + result
         // The title repeats the query, so the pill names only the engine.
         case .webSearch(_, let engine): return " — Search \(engine.name)"
         default: return Completion.suffix(query: query, title: title, action: action)
@@ -108,6 +134,9 @@ enum ResultItem {
         if case .menuItem(let item, let state) = self,
            item.action == .toggleCaffeinate, state.external {
             return [Hint(text: "Also active in another app", key: nil)]
+        }
+        if case .menuItem(let item, _) = self, case .generateUUID = item.action {
+            return [Hint(text: "Copy UUID", key: "↩")]
         }
         guard case .app(let match) = self else { return [] }
         let entry = match.entry
@@ -192,7 +221,8 @@ enum ResultItem {
             guard let url = iconURL else { return ResultItem.linkIcon }
             return IconCache.shared.cached(for: url)
         case .webSearch: return iconURL.flatMap { IconCache.shared.cached(for: $0) }
-        case .calculation: return ResultItem.calculatorIcon
+        case .calculation, .conversion: return ResultItem.calculatorIcon
+        case .generateUUID: return ResultItem.symbol("number")
         case .settings: return ResultItem.settingsIcon
         case .caffeinate(let state):
             return state.spotlite ? ResultItem.caffeineOnIcon : ResultItem.caffeineOffIcon

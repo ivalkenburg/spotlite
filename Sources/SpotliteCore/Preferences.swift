@@ -32,8 +32,11 @@ public struct Preferences: Codable, Sendable, Equatable {
         case hotKeyCode, hotKeyModifiers, showMenuBarIcon, hasCompletedFirstRun
         case queryRetention, backNavigationBehavior, showSystemSettings
         case showSystemCommands, showRecentApps, showRunningIndicator, showWebSearch, webSearchEngine, links
-        case visibleRows
+        case visibleRows, applicationDirectories
     }
+
+    /// Ordered search roots. Empty means no application locations; panes remain independent.
+    public var applicationDirectories: [String]
 
     public var hiddenBundleIDs: Set<String>
     /// Bundle ID to a short name the user types instead, e.g. "ps" for Photoshop.
@@ -91,6 +94,10 @@ public struct Preferences: Codable, Sendable, Equatable {
                 debugDescription: "Unsupported preferences format version \(version)"
             )
         }
+        applicationDirectories = AppIndex.normalizedDirectories(
+            try c.decodeIfPresent([String].self, forKey: .applicationDirectories)
+                ?? AppIndex.searchDirectories.map(\.path)
+        ).map(\.path)
         hiddenBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .hiddenBundleIDs) ?? []
         aliases = try c.decodeIfPresent([String: String].self, forKey: .aliases) ?? [:]
         panelScreen = try c.decodeIfPresent(PanelScreen.self, forKey: .panelScreen) ?? .followPointer
@@ -124,6 +131,7 @@ public struct Preferences: Codable, Sendable, Equatable {
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(Preferences.currentFormatVersion, forKey: .formatVersion)
+        try c.encode(applicationDirectories, forKey: .applicationDirectories)
         try c.encode(hiddenBundleIDs, forKey: .hiddenBundleIDs)
         try c.encode(aliases, forKey: .aliases)
         try c.encode(panelScreen, forKey: .panelScreen)
@@ -147,6 +155,7 @@ public struct Preferences: Codable, Sendable, Equatable {
     }
 
     public init(
+        applicationDirectories: [String] = AppIndex.searchDirectories.map(\.path),
         hiddenBundleIDs: Set<String> = [],
         aliases: [String: String] = [:],
         panelScreen: PanelScreen = .followPointer,
@@ -168,6 +177,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         links: [Link] = [],
         visibleRows: Int = Preferences.defaultVisibleRows
     ) {
+        self.applicationDirectories = AppIndex.normalizedDirectories(applicationDirectories).map(\.path)
         self.hiddenBundleIDs = hiddenBundleIDs
         self.aliases = aliases
         self.panelScreen = panelScreen
@@ -273,17 +283,38 @@ public enum Storage {
 
     static func save(_ frecency: Frecency, to url: URL) { write(frecency, to: url) }
 
-    public static func loadIndex() -> [CachedApp]? {
-        loadIndex(from: indexURL)
+    /// Cache provenance prevents removed locations from reappearing on the next launch.
+    private struct IndexSnapshot: Codable, Equatable {
+        let directories: [String]
+        let apps: [CachedApp]
     }
 
-    static func loadIndex(from url: URL) -> [CachedApp]? { load([CachedApp].self, from: url) }
-
-    public static func saveIndex(_ apps: [CachedApp]) {
-        saveIndex(apps, to: indexURL)
+    public static func loadIndex(directories: [URL]) -> [CachedApp]? {
+        loadIndex(directories: directories, from: indexURL)
     }
 
-    static func saveIndex(_ apps: [CachedApp], to url: URL) { write(apps, to: url) }
+    static func loadIndex(directories: [URL], from url: URL) -> [CachedApp]? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let decoder = JSONDecoder()
+        if let snapshot = try? decoder.decode(IndexSnapshot.self, from: data) {
+            return snapshot.directories == directories.map(\.path) ? snapshot.apps : nil
+        }
+        // Legacy array caches were always built with the standard locations.
+        guard directories == AppIndex.searchDirectories else { return nil }
+        return try? decoder.decode([CachedApp].self, from: data)
+    }
+
+    public static func saveIndex(_ apps: [CachedApp], directories: [URL]) {
+        saveIndex(apps, directories: directories, to: indexURL)
+    }
+
+    static func saveIndex(_ apps: [CachedApp], directories: [URL], to url: URL) {
+        let snapshot = IndexSnapshot(directories: directories.map(\.path), apps: apps)
+        // A watched root may contain the cache. Identical scans must not write it and
+        // trigger another filesystem event; compare values, not JSON key ordering.
+        guard load(IndexSnapshot.self, from: url) != snapshot else { return }
+        write(snapshot, to: url)
+    }
 
     // MARK: -
 

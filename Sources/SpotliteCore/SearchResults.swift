@@ -4,6 +4,8 @@ import Foundation
 public enum SearchResult {
     /// The expression is kept as typed: the card shows it above the result.
     case calculation(expression: String, value: Double)
+    case conversion(expression: String, result: String)
+    case generateUUID
     case app(MatchResult)
     case settings
     case caffeinate
@@ -15,8 +17,9 @@ public enum SearchResult {
 /// entries the query asks for, then the web search. Apps still appear below a
 /// calculation, since `x^2` shouldn't hide an app named X.
 public enum SearchResults {
-    /// Queries that offer the Settings and Caffeinate entries alongside any app matches.
+    /// Queries that offer built-in entries alongside any app matches.
     static let settingsKeywords = ["settings", "preferences", "spotlite"]
+    static let uuidKeywords = ["uuid", "generate uuid"]
     static let caffeineKeywords = ["caffeinate", "caffeine"]
 
     public static func build(
@@ -41,7 +44,9 @@ public enum SearchResults {
         }
 
         var result: [SearchResult] = []
-        if let value = Calculator.evaluate(trimmed, previous: previousResult) {
+        if let converted = QuickConversion.evaluate(trimmed) {
+            result.append(.conversion(expression: trimmed, result: converted))
+        } else if let value = Calculator.evaluate(trimmed, previous: previousResult) {
             result.append(.calculation(expression: trimmed, value: value))
         }
 
@@ -53,10 +58,11 @@ public enum SearchResults {
         // The self-indexed escape hatch: reachable even with the menu bar icon hidden.
         if mentions(trimmed, keywords: settingsKeywords) { result.append(.settings) }
         if mentions(trimmed, keywords: caffeineKeywords) { result.append(.caffeinate) }
+        if mentions(trimmed, keywords: uuidKeywords) { result.append(.generateUUID) }
         // Last, so it only becomes the top hit when nothing on this Mac matches. Not
         // under a calculation: arithmetic is already answered, and the card would lose
         // its standalone shape to a row nobody wants.
-        if let webSearch, !isCalculation(result) {
+        if let webSearch, !hasAnswer(result) {
             result.append(.webSearch(query: trimmed, engine: webSearch))
         }
         return result
@@ -65,8 +71,9 @@ public enum SearchResults {
     /// Longer than any typed query, short enough to stay a sane URL.
     static let maxWebQuery = 2_000
 
-    private static func isCalculation(_ results: [SearchResult]) -> Bool {
+    private static func hasAnswer(_ results: [SearchResult]) -> Bool {
         if case .calculation = results.first { return true }
+        if case .conversion = results.first { return true }
         return false
     }
 

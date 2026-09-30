@@ -83,6 +83,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
     func preferencesDidChange(_ updated: Preferences) {
         model.preferences = updated
         items.reload()
+        search.updateHistoryState()
     }
 
     func appsDidChange(_ apps: [AppEntry]) {

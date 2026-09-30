@@ -52,8 +52,42 @@ struct StorageTests {
         let cached = CachedApp(path: "/Applications/Test.app", name: "Test", bundleID: "test.app")
         let pane = CachedApp(path: "/System/Library/ExtensionKit/Extensions/Test.appex",
                              name: "Test Pane", bundleID: "test.pane", kind: .settingsPane)
-        Storage.saveIndex([cached, pane], to: indexURL)
-        #expect(Storage.loadIndex(from: indexURL) == [cached, pane])
+        Storage.saveIndex([cached, pane], directories: AppIndex.searchDirectories, to: indexURL)
+        #expect(Storage.loadIndex(directories: AppIndex.searchDirectories, from: indexURL) == [cached, pane])
+    }
+
+    @Test func indexCacheIsBoundToItsConfiguredRoots() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("index.json")
+        let roots = [directory]
+        let apps = [CachedApp(path: directory.appendingPathComponent("Test.app").path,
+                              name: "Test", bundleID: "test.app")]
+        Storage.saveIndex(apps, directories: roots, to: url)
+        #expect(Storage.loadIndex(directories: roots, from: url) == apps)
+        #expect(Storage.loadIndex(directories: [], from: url) == nil)
+        #expect(Storage.loadIndex(directories: AppIndex.searchDirectories, from: url) == nil)
+        try JSONEncoder().encode(apps).write(to: url)
+        #expect(Storage.loadIndex(directories: AppIndex.searchDirectories, from: url) == apps)
+        #expect(Storage.loadIndex(directories: roots, from: url) == nil)
+    }
+
+    @Test func identicalIndexSnapshotsDoNotTouchTheCache() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("index.json")
+        let apps = [CachedApp(path: "/Applications/Test.app", name: "Test", bundleID: "test.app")]
+        Storage.saveIndex(apps, directories: [directory], to: url)
+        let original = try Data(contentsOf: url)
+        let sentinel = Date(timeIntervalSince1970: 1_000)
+        try FileManager.default.setAttributes([.modificationDate: sentinel], ofItemAtPath: url.path)
+        Storage.saveIndex(apps, directories: [directory], to: url)
+        let unchanged = try url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        #expect(unchanged == sentinel)
+        #expect(try Data(contentsOf: url) == original)
+        Storage.saveIndex(apps, directories: [], to: url)
+        #expect(Storage.loadIndex(directories: [], from: url) == apps)
+        #expect(try Data(contentsOf: url) != original)
     }
 
     /// An index cached before panes existed has no `kind`; it must load, as apps, rather

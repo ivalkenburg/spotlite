@@ -13,7 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// or start the directory watcher before either Settings or search is used.
     private var library: AppLibrary {
         if let libraryInstance { return libraryInstance }
-        let created = AppLibrary()
+        let created = AppLibrary(directories: preferences.applicationDirectories)
         created.extras = preferences.extraEntries
         created.onChange = { [weak self] apps, scanned in
             guard let self else { return }
@@ -89,6 +89,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if ProcessInfo.processInfo.environment["SPOTLITE_DEV_SEQUENCE"] == "1" {
             Task { @MainActor in self.controller.runDevSequence() }
+        }
+        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_UTILITIES"] == "1" {
+            Task { @MainActor in
+                do {
+                    try await self.controller.runDevUtilityChecks()
+                    exit(0)
+                } catch {
+                    print("DEV utilities failed: \(error)")
+                    exit(1)
+                }
+            }
         }
         if ProcessInfo.processInfo.environment["SPOTLITE_DEV_MENU"] == "1" {
             Task { @MainActor in
@@ -278,8 +289,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// from the app's.
     private func adoptPreferences(_ prefs: Preferences, forward: (Preferences) -> Void) {
         let enabledStatusItem = !preferences.showMenuBarIcon && prefs.showMenuBarIcon
+        let directoriesChanged = preferences.applicationDirectories != prefs.applicationDirectories
         let linksChanged = preferences.links != prefs.links
         preferences = prefs
+        if directoriesChanged { libraryInstance?.setDirectories(prefs.applicationDirectories) }
         if linksChanged { library.extras = prefs.extraEntries }
         applyTheme()
         forward(prefs)

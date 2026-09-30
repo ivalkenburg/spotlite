@@ -35,6 +35,8 @@ final class CalculationCardView: NSTableCellView {
         expression.wantsLayer = true
         value.font = .systemFont(ofSize: Metrics.titleFontSize, weight: .regular)
         value.textColor = .labelColor
+        value.lineBreakMode = .byTruncatingTail
+        expression.lineBreakMode = .byTruncatingTail
 
         let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
         copyGlyph.image = NSImage(systemSymbolName: "doc.on.doc.fill", accessibilityDescription: "Copy")?
@@ -60,6 +62,7 @@ final class CalculationCardView: NSTableCellView {
             expression.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: Metrics.cardTextInset),
             expression.firstBaselineAnchor.constraint(equalTo: card.topAnchor,
                                                       constant: Metrics.cardExpressionBaseline),
+            expression.trailingAnchor.constraint(lessThanOrEqualTo: copyCircle.leadingAnchor, constant: -8),
             value.leadingAnchor.constraint(equalTo: expression.leadingAnchor),
             value.firstBaselineAnchor.constraint(equalTo: card.topAnchor, constant: Metrics.cardValueBaseline),
             value.trailingAnchor.constraint(lessThanOrEqualTo: copyCircle.leadingAnchor, constant: -8),
@@ -89,6 +92,18 @@ final class CalculationCardView: NSTableCellView {
                   showsSeparator: last.showsSeparator)
     }
 
+    var hasValidGeometry: Bool {
+        let valueAlignment = value.alignmentRect(forFrame: value.frame)
+        let copyAlignment = copyCircle.alignmentRect(forFrame: copyCircle.frame)
+        return bounds.contains(card.frame)
+            && card.frame.contains(expression.frame) && card.frame.contains(value.frame)
+            && valueAlignment.maxX <= copyAlignment.minX - 8 + 0.01
+    }
+
+    func dumpFrames(_ tag: String) {
+        print("[\(tag)] card=\(card.frame) expression=\(expression.frame) value=\(value.frame) copy=\(copyCircle.frame)")
+    }
+
     func configure(expression text: String, value result: String, selection: RowSelection,
                    showsSeparator: Bool) {
         lastConfiguration = (text, result, selection, showsSeparator)
@@ -99,6 +114,8 @@ final class CalculationCardView: NSTableCellView {
         expression.textColor = Vibrancy.color(Vibrancy.secondary, mode)
         Vibrancy.apply(mode, to: expression.layer)
         value.stringValue = result
+        value.toolTip = result
+        expression.toolTip = text
 
         Vibrancy.fill(card, Vibrancy.card, mode)
         Vibrancy.fill(copyCircle, Vibrancy.fill, mode)
