@@ -57,12 +57,10 @@ public final class Matcher {
     func matches(_ query: String, in corpus: SearchCorpus) -> [MatchResult] {
         guard let trimmed = query.boundedTrimmedWhitespace(maximumCount: Matcher.maxSupportedQuery)
         else { return [] }
-        let q = Array(trimmed.lowercased())
+        let q = trimmed.lowercased().map(AppEntry.typeable)
         // Unicode case conversion can expand a character, so retain the post-conversion
         // check even though the source substring was already bounded without copying.
         guard !q.isEmpty, q.count <= Matcher.maxSupportedQuery else { return [] }
-
-        ensureCapacity(query: q.count, text: max(capacity.text, corpus.maxAliasLength))
 
         let queryMask = Matcher.mask(of: q)
         var out: [MatchResult] = []
@@ -72,32 +70,51 @@ public final class Matcher {
         for index in entries.indices {
             let entry = entries[index]
             let alias = aliases?[index]
-            // The common path is one integer comparison. A longer name grows the shared
-            // buffer once, when first encountered, and subsequent searches reuse it.
-            let neededText = max(entry.lowerChars.count, entry.initials.count,
-                                 alias?.chars.count ?? 0)
-            if neededText > capacity.text {
-                ensureCapacity(query: q.count, text: neededText)
-            }
-
             // Cheap reject: if the name lacks a letter the query needs, no match is
             // possible - unless an alias might supply it.
             if alias == nil, queryMask & ~entry.charMask != 0 { continue }
 
             // An alias match highlights nothing: the matched characters are in the alias,
             // not in the displayed name, so there is nothing honest to embolden.
-            if let alias, alias.chars.starts(with: q), let hit = score(q, alias.chars, alias.bonus) {
-                out.append(MatchResult(entry: entry, score: hit.score, positions: [], tier: .aliasPrefix))
+            if let alias, alias.chars.count <= Matcher.maxSupportedText, alias.chars.starts(with: q) {
+                out.append(MatchResult(entry: entry,
+                                       score: consecutiveScore(length: q.count, start: 0, bonus: alias.bonus),
+                                       positions: [], tier: .aliasPrefix))
                 continue
             }
 
             // Highlights exactly the typed letters, which the completion then finishes.
-            if entry.lowerChars.starts(with: q), let hit = score(q, entry.lowerChars, entry.bonus) {
-                out.append(MatchResult(entry: entry, score: hit.score, positions: Array(0..<q.count),
+            if entry.lowerChars.count <= Matcher.maxSupportedText, entry.lowerChars.starts(with: q) {
+                out.append(MatchResult(entry: entry,
+                                       score: consecutiveScore(length: q.count, start: 0, bonus: entry.bonus),
+                                       positions: Array(0..<q.count),
                                        tier: .namePrefix))
                 continue
             }
 
+            // Find a full consecutive run before fuzzy scoring: boundary bonuses can
+            // otherwise select scattered letters even when the name contains the query.
+            var consecutive = consecutiveMatch(q, entry.lowerChars, entry.bonus)
+            if let alias, let hit = consecutiveMatch(q, alias.chars, alias.bonus),
+               consecutive == nil || hit.score > consecutive!.score {
+                consecutive = (score: hit.score, start: nil)
+            }
+            if let consecutive {
+                out.append(MatchResult(entry: entry, score: consecutive.score,
+                                       positions: consecutive.start.map { Array($0..<($0 + q.count)) } ?? [],
+                                       tier: .substring))
+                continue
+            }
+
+            // Only fuzzy matches need the DP buffers. Unsupported metadata must not
+            // expand them to the ceiling when it will be rejected by the scorer.
+            let nameLength = entry.lowerChars.count
+            let initialsLength = entry.initials.count
+            let aliasLength = alias?.chars.count ?? 0
+            let neededText = max(nameLength <= Matcher.maxSupportedText ? nameLength : 0,
+                                 initialsLength <= Matcher.maxSupportedText ? initialsLength : 0,
+                                 aliasLength <= Matcher.maxSupportedText ? aliasLength : 0)
+            ensureCapacity(query: q.count, text: neededText)
             var best = score(q, entry.lowerChars, entry.bonus)
 
             // A letter from the middle of an alias is an ordinary partial match; only
@@ -123,6 +140,40 @@ public final class Matcher {
         return out
     }
 
+    // MARK: - Consecutive matches
+
+    private func consecutiveScore(length: Int, start: Int, bonus: [Int]) -> Int {
+        var value = Scoring.match + bonus[start] * Scoring.firstCharMultiplier
+        if start > 0 {
+            value += max(Scoring.gapStart + Scoring.gapExtension * (start - 1),
+                         Scoring.maxLeadingPenalty)
+        }
+        for offset in 1..<length {
+            value += Scoring.match + bonus[start + offset] + Scoring.bonusConsecutive
+        }
+        return value
+    }
+
+    private func consecutiveMatch(_ q: [Character], _ text: [Character], _ bonus: [Int])
+        -> (score: Int, start: Int?)? {
+        guard q.count <= text.count, text.count <= Matcher.maxSupportedText else { return nil }
+        var bestScore = Int.min
+        var bestStart = 0
+        for start in 0...(text.count - q.count) where text[start] == q[0] {
+            var offset = 1
+            while offset < q.count, text[start + offset] == q[offset] { offset += 1 }
+            guard offset == q.count else { continue }
+
+            let value = consecutiveScore(length: q.count, start: start, bonus: bonus)
+            if value > bestScore {
+                bestScore = value
+                bestStart = start
+            }
+        }
+        guard bestScore != Int.min else { return nil }
+        return (bestScore, bestStart)
+    }
+
     // MARK: - DP
 
     private func ensureCapacity(query: Int, text: Int) {
@@ -137,8 +188,7 @@ public final class Matcher {
     private func score(_ q: [Character], _ text: [Character], _ bonus: [Int]) -> (score: Int, positions: [Int])? {
         let m = q.count, n = text.count
         guard m > 0, n > 0, m <= n else { return nil }
-        // Names longer than the scratch buffer simply don't match; growing the buffer
-        // mid-search would defeat the point of preallocating it.
+        // The caller grows the buffers once per fuzzy candidate, within the ceilings.
         guard m <= capacity.query, n <= capacity.text else { return nil }
 
         let stride = capacity.text

@@ -155,7 +155,8 @@ public struct AppEntry: Sendable, Hashable {
 
     /// U+2011 is the non-breaking hyphen System Settings writes in "Wi‑Fi".
     static func isSeparator(_ ch: Character) -> Bool {
-        ch == " " || ch == "-" || ch == "_" || ch == "." || ch == "/" || ch == "(" || ch == "\u{2011}"
+        ch == " " || ch == "-" || ch == "_" || ch == "." || ch == "/" || ch == "("
+            || ch == "\u{2010}" || ch == "\u{2011}" || ch == "\u{2012}"
     }
 
     /// The Unicode hyphens (U+2010-2012) match the "-" a keyboard types, so "wi-fi" finds

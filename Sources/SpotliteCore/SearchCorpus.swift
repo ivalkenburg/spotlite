@@ -8,7 +8,6 @@ public struct SearchCorpus: Sendable {
     /// Parallel to `entries`.
     let aliases: [AliasIndex.Prepared?]
     let hasAliases: Bool
-    let maxAliasLength: Int
 
     public static let empty = SearchCorpus(entries: [])
 
@@ -28,6 +27,5 @@ public struct SearchCorpus: Sendable {
         self.entries = kept
         self.aliases = aliases.isEmpty ? [] : kept.map { aliases[$0.id] }
         hasAliases = !aliases.isEmpty
-        maxAliasLength = aliases.maxLength
     }
 }

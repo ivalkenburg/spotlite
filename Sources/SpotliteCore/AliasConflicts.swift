@@ -4,10 +4,10 @@ import Foundation
 public enum AliasConflicts {
     public static func conflictingIDs(for alias: String, excluding id: String?,
                                       aliases: [String: String]) -> [String] {
-        let normalized = alias.trimmingCharacters(in: .whitespaces).lowercased()
+        let normalized = AliasIndex.normalizedCharacters(alias)
         guard !normalized.isEmpty else { return [] }
         return aliases.compactMap { key, value in
-            key != id && value.trimmingCharacters(in: .whitespaces).lowercased() == normalized ? key : nil
+            key != id && AliasIndex.normalizedCharacters(value) == normalized ? key : nil
         }.sorted()
     }
 }

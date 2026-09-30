@@ -14,26 +14,25 @@ public struct AliasIndex: Sendable {
     }
 
     private let prepared: [String: Prepared]
-    public let maxLength: Int
 
     public static let empty = AliasIndex(aliases: [:])
 
     public init(aliases: [String: String]) {
         var built: [String: Prepared] = [:]
-        var longest = 0
         built.reserveCapacity(aliases.count)
         for (id, alias) in aliases {
-            let trimmed = alias.trimmingCharacters(in: .whitespaces).lowercased()
-            guard !trimmed.isEmpty else { continue }
-            let chars = Array(trimmed)
-            longest = max(longest, chars.count)
+            let chars = AliasIndex.normalizedCharacters(alias)
+            guard !chars.isEmpty else { continue }
             built[id] = Prepared(chars: chars,
                                  bonus: Array(repeating: Scoring.bonusBoundary, count: chars.count))
         }
         prepared = built
-        maxLength = longest
     }
 
     public subscript(id: String) -> Prepared? { prepared[id] }
     public var isEmpty: Bool { prepared.isEmpty }
+
+    static func normalizedCharacters(_ alias: String) -> [Character] {
+        alias.trimmingCharacters(in: .whitespaces).lowercased().map(AppEntry.typeable)
+    }
 }

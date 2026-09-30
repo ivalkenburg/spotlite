@@ -85,11 +85,85 @@ struct FuzzyScoringTests {
         }
     }
 
+    @Test func keychainSubstringBeatsScatteredWordStart() {
+        let ranked = Matcher().search("cha", in: [app("T3 Code (Alpha)"), app("Keychain Access")])
+        #expect(ranked.map(\.entry.name) == ["Keychain Access", "T3 Code (Alpha)"])
+        #expect(ranked.first?.tier == .substring)
+        #expect(ranked.first?.positions == [3, 4, 5])
+    }
+
+    @Test func substringKeepsNameAndAliasPrefixesAhead() {
+        let entries = [app("T3 Code (Alpha)"), app("Keychain Access"), app("Charles")]
+        #expect(Matcher().search("cha", in: entries).map(\.entry.name)
+                == ["Charles", "Keychain Access", "T3 Code (Alpha)"])
+        let aliases = AliasIndex(aliases: ["test.T3 Code (Alpha)": "chat"])
+        #expect(Matcher().search("cha", in: entries, aliases: aliases).map(\.entry.name)
+                == ["T3 Code (Alpha)", "Charles", "Keychain Access"])
+
+        let interiorAlias = AliasIndex(aliases: ["test.T3 Code (Alpha)": "launcher"])
+        let hit = Matcher().search("aunch", in: entries, aliases: interiorAlias).first
+        #expect(hit?.entry.name == "T3 Code (Alpha)")
+        #expect(hit?.tier == .substring)
+        #expect(hit?.positions.isEmpty == true)
+    }
+
     @Test func adjacentPathCanWinAfterItsBonus() {
         // The first A wins before the bonus, but the final AB wins with it.
         let result = Matcher().search("ab", in: [app("A-AB")]).first
         #expect(result?.score == 100)
         #expect(result?.positions == [2, 3])
+    }
+
+    @Test func fuzzyAdjacentPredecessorWinsBeforeAGap() {
+        let result = Matcher().search("abc", in: [app("A-AB C")]).first
+        #expect(result?.tier == .other)
+        #expect(result?.score == 145)
+        #expect(result?.positions == [2, 3, 5])
+    }
+
+    @Test func prefixScoreUsesTheHighlightedRun() {
+        let plain = Matcher().search("ab", in: [app("ab")]).first
+        let repeated = Matcher().search("ab", in: [app("ab A B")]).first
+        #expect(repeated?.score == plain?.score)
+        #expect(repeated?.positions == [0, 1])
+        #expect(repeated?.tier == .namePrefix)
+
+        let aliases = AliasIndex(aliases: ["test.Safari": "ab A B"])
+        let alias = Matcher().search("ab", in: [app("Safari")], aliases: aliases).first
+        #expect(alias?.score == 134)
+        #expect(alias?.tier == .aliasPrefix)
+        #expect(alias?.positions.isEmpty == true)
+    }
+
+    @Test func textLimitAppliesToEveryMatchingPath() {
+        let matcher = Matcher(maxQuery: 1, maxText: 1)
+        let oversized = app("s" + String(repeating: "x", count: Matcher.maxSupportedText))
+        #expect(matcher.search("sxxx", in: [oversized]).isEmpty)
+        #expect(matcher.search("xxx", in: [oversized]).isEmpty)
+        // The supported initials can still match even if the full name is too long.
+        #expect(matcher.search("s", in: [oversized]).first?.tier == .other)
+
+        let supported = app(String(repeating: "x", count: Matcher.maxSupportedText))
+        #expect(matcher.search("xxx", in: [supported]).first?.tier == .namePrefix)
+        let aliases = AliasIndex(aliases: ["test.Safari": String(repeating: "z", count: Matcher.maxSupportedText + 1)])
+        #expect(matcher.search("zz", in: [app("Safari")], aliases: aliases).isEmpty)
+        #expect(matcher.search("saf", in: [app("Safari")], aliases: aliases).first?.tier == .namePrefix)
+        // Fuzzy scoring must grow the small buffers after the preceding fast paths.
+        #expect(matcher.search("gc", in: [app("Google Chrome")]).first?.positions == [0, 7])
+    }
+
+    @Test func unicodeHyphensMatchInNamesQueriesAndAliases() {
+        let hyphens = ["-", "\u{2010}", "\u{2011}", "\u{2012}"]
+        for nameHyphen in hyphens {
+            let entry = app("Wi\(nameHyphen)Fi")
+            #expect(Matcher().search("wf", in: [entry]).first?.positions == [0, 3])
+            let aliases = AliasIndex(aliases: ["test.Safari": "wi\(nameHyphen)fi"])
+            for queryHyphen in hyphens {
+                let query = "wi\(queryHyphen)fi"
+                #expect(Matcher().search(query, in: [entry]).first?.tier == .namePrefix)
+                #expect(Matcher().search(query, in: [app("Safari")], aliases: aliases).first?.tier == .aliasPrefix)
+            }
+        }
     }
 
     @Test func nonMatchesAreExcluded() {

@@ -78,4 +78,21 @@ struct AppRankingTests {
         let ranked = AppRanking.rank(matches, frecency: frecency, now: now)
         #expect(ranked.map(\.entry.bundleID) == ["ghostty", "github"])
     }
+
+    @Test func frequentScatteredMatchCannotBeatKeychainSubstring() {
+        let now = Date()
+        let entries = ["T3 Code (Alpha)", "Keychain Access"].map {
+            AppEntry(url: URL(fileURLWithPath: "/Applications/\($0).app"), name: $0, bundleID: $0)
+        }
+        var frecency = Frecency()
+        for _ in 0..<50 { frecency.recordLaunch("T3 Code (Alpha)", now: now) }
+        let results = SearchResults.build(for: "cha", corpus: SearchCorpus(entries: entries),
+                                          matcher: Matcher(), frecency: frecency, now: now)
+        guard case .app(let first) = results.first else {
+            Issue.record("Expected an app result")
+            return
+        }
+        #expect(first.entry.name == "Keychain Access")
+        #expect(first.positions == [3, 4, 5])
+    }
 }

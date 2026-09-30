@@ -11,4 +11,9 @@ struct AliasConflictsTests {
         #expect(AliasConflicts.conflictingIDs(for: " ", excluding: nil, aliases: aliases).isEmpty)
         #expect(AliasConflicts.conflictingIDs(for: "other", excluding: nil, aliases: aliases).isEmpty)
     }
+
+    @Test func unicodeHyphensConflictLikeTheyMatch() {
+        let aliases = ["a": "wi\u{2010}fi", "b": "Wi\u{2011}Fi", "c": "wi\u{2012}fi"]
+        #expect(AliasConflicts.conflictingIDs(for: "wi-fi", excluding: nil, aliases: aliases) == ["a", "b", "c"])
+    }
 }

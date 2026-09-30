@@ -1,7 +1,7 @@
 import Foundation
 
-/// Weights for the match scorer. Tuned so that a word-start match always beats a
-/// mid-word one, and a consecutive run always beats a scattered subsequence.
+/// Weights for the match scorer. Word starts and consecutive letters earn bonuses;
+/// match tiers keep a full consecutive run above scattered subsequences.
 public enum Scoring {
     public static let match = 16
     public static let bonusBoundary = 30
@@ -22,8 +22,11 @@ public enum Scoring {
 /// Which kind of match a result is. Tiers rank strictly above one another; the score,
 /// launch history and tie-breaks only order results within a tier.
 public enum MatchTier: Int, Sendable {
-    /// Word starts, acronyms, scattered letters, or letters from inside an alias.
+    /// Acronyms or scattered letters from the name or alias.
     case other
+    /// The whole query appears consecutively inside the name or alias: "cha" in
+    /// Keychain Access beats the scattered letters in T3 Code (Alpha).
+    case substring
     /// The query is the start of the name: "gh" reaches Ghostty before the acronym
     /// "GitHub Desktop", as in Spotlight.
     case namePrefix
