@@ -168,10 +168,15 @@ final class SearchBar {
     }
 
     /// Shows the completion and bar icon for the selected row.
-    func show(_ item: ResultItem) {
+    func show(_ item: ResultItem, appNameCompletion: AppNameCompletion) {
+        let suffix = item.completion(for: field.stringValue, appNameCompletion: appNameCompletion)
+        guard !suffix.isEmpty else {
+            clear()
+            return
+        }
         // Spotlight hides the caret while a completion shows; it would sit on the pill.
         setCaretVisible(false)
-        completionLabel.stringValue = item.completion(for: field.stringValue)
+        completionLabel.stringValue = suffix
         if let content { completionLeading.constant = typedTextEndX(in: content) - Metrics.pillOverlap }
         completion.isHidden = false
         showBarIcon(for: item)
@@ -220,6 +225,7 @@ final class SearchBar {
     }
 
     func dumpFrames(_ tag: String) {
+        print("[\(tag)] completion=\(completion.frame) text=\(completionLabel.stringValue) hidden=\(completion.isHidden) iconHidden=\(barIcon.isHidden)")
         print("[\(tag)] field=\(field.frame) chip=\(chip.frame) chipHidden=\(chip.isHidden)")
     }
 

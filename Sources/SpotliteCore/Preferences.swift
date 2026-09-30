@@ -32,12 +32,14 @@ public struct Preferences: Codable, Sendable, Equatable {
         case hotKeyCode, hotKeyModifiers, showMenuBarIcon, hasCompletedFirstRun
         case queryRetention, backNavigationBehavior, showSystemSettings
         case showSystemCommands, showRecentApps, showRunningIndicator, showWebSearch, webSearchEngine, links
-        case visibleRows, applicationDirectories
+        case visibleRows, applicationDirectories, appNameCompletion, hiddenUtilities
     }
 
     /// Ordered search roots. Empty means no application locations; panes remain independent.
     public var applicationDirectories: [String]
 
+    /// Utilities hidden from search; independent of indexed apps and running activity.
+    public var hiddenUtilities: Set<SearchUtility>
     public var hiddenBundleIDs: Set<String>
     /// Bundle ID to a short name the user types instead, e.g. "ps" for Photoshop.
     public var aliases: [String: String]
@@ -65,6 +67,8 @@ public struct Preferences: Codable, Sendable, Equatable {
     public var showRecentApps: Bool
     /// Whether a dot marks apps that are already running.
     public var showRunningIndicator: Bool
+    /// How the selected app name is shown after the query.
+    public var appNameCompletion: AppNameCompletion
     /// Whether a last row offers the query to a web search engine.
     public var showWebSearch: Bool
     public var webSearchEngine: WebSearchEngine
@@ -98,6 +102,8 @@ public struct Preferences: Codable, Sendable, Equatable {
             try c.decodeIfPresent([String].self, forKey: .applicationDirectories)
                 ?? AppIndex.searchDirectories.map(\.path)
         ).map(\.path)
+        hiddenUtilities = Set((try? c.decodeIfPresent([Lossy<SearchUtility>].self,
+                                                      forKey: .hiddenUtilities))?.compactMap(\.value) ?? [])
         hiddenBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .hiddenBundleIDs) ?? []
         aliases = try c.decodeIfPresent([String: String].self, forKey: .aliases) ?? [:]
         panelScreen = try c.decodeIfPresent(PanelScreen.self, forKey: .panelScreen) ?? .followPointer
@@ -119,6 +125,8 @@ public struct Preferences: Codable, Sendable, Equatable {
         showSystemCommands = try c.decodeIfPresent(Bool.self, forKey: .showSystemCommands) ?? true
         showRecentApps = try c.decodeIfPresent(Bool.self, forKey: .showRecentApps) ?? false
         showRunningIndicator = try c.decodeIfPresent(Bool.self, forKey: .showRunningIndicator) ?? true
+        appNameCompletion = (try? c.decodeIfPresent(AppNameCompletion.self,
+                                                   forKey: .appNameCompletion)) ?? .allMatches
         showWebSearch = try c.decodeIfPresent(Bool.self, forKey: .showWebSearch) ?? true
         // An engine a later build removed falls back rather than resetting every setting.
         webSearchEngine = (try? c.decodeIfPresent(WebSearchEngine.self, forKey: .webSearchEngine)) ?? .default
@@ -132,6 +140,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(Preferences.currentFormatVersion, forKey: .formatVersion)
         try c.encode(applicationDirectories, forKey: .applicationDirectories)
+        try c.encode(hiddenUtilities, forKey: .hiddenUtilities)
         try c.encode(hiddenBundleIDs, forKey: .hiddenBundleIDs)
         try c.encode(aliases, forKey: .aliases)
         try c.encode(panelScreen, forKey: .panelScreen)
@@ -148,6 +157,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         try c.encode(showSystemCommands, forKey: .showSystemCommands)
         try c.encode(showRecentApps, forKey: .showRecentApps)
         try c.encode(showRunningIndicator, forKey: .showRunningIndicator)
+        try c.encode(appNameCompletion, forKey: .appNameCompletion)
         try c.encode(showWebSearch, forKey: .showWebSearch)
         try c.encode(webSearchEngine, forKey: .webSearchEngine)
         try c.encode(links, forKey: .links)
@@ -157,6 +167,7 @@ public struct Preferences: Codable, Sendable, Equatable {
     public init(
         applicationDirectories: [String] = AppIndex.searchDirectories.map(\.path),
         hiddenBundleIDs: Set<String> = [],
+        hiddenUtilities: Set<SearchUtility> = [],
         aliases: [String: String] = [:],
         panelScreen: PanelScreen = .followPointer,
         panelGeometry: PanelGeometry = .default,
@@ -172,6 +183,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         showSystemCommands: Bool = true,
         showRecentApps: Bool = false,
         showRunningIndicator: Bool = true,
+        appNameCompletion: AppNameCompletion = .allMatches,
         showWebSearch: Bool = true,
         webSearchEngine: WebSearchEngine = .default,
         links: [Link] = [],
@@ -179,6 +191,7 @@ public struct Preferences: Codable, Sendable, Equatable {
     ) {
         self.applicationDirectories = AppIndex.normalizedDirectories(applicationDirectories).map(\.path)
         self.hiddenBundleIDs = hiddenBundleIDs
+        self.hiddenUtilities = hiddenUtilities
         self.aliases = aliases
         self.panelScreen = panelScreen
         self.panelGeometry = panelGeometry
@@ -194,6 +207,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         self.showSystemCommands = showSystemCommands
         self.showRecentApps = showRecentApps
         self.showRunningIndicator = showRunningIndicator
+        self.appNameCompletion = appNameCompletion
         self.showWebSearch = showWebSearch
         self.webSearchEngine = webSearchEngine
         self.links = links

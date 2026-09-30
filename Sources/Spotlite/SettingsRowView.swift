@@ -13,8 +13,10 @@ final class SettingsRowView: NSView, NSTextFieldDelegate {
     private let aliasField = NSTextField()
 
     private var entry: AppEntry?
+    private var utility: SearchUtility?
     private var pendingIconURL: URL?
 
+    var onUtilityVisibilityChanged: ((SearchUtility, Bool) -> Void)?
     var onVisibilityChanged: ((AppEntry, Bool) -> Void)?
     var onAliasEdited: ((AppEntry, String) -> String?)?
     var onAliasChanged: ((AppEntry, String) -> Void)?
@@ -72,6 +74,9 @@ final class SettingsRowView: NSView, NSTextFieldDelegate {
     /// `showsKind` suffixes non-apps with their kind, for a list that mixes kinds.
     func configure(with entry: AppEntry, hidden: Bool, alias: String, showsKind: Bool, warning: String? = nil) {
         self.entry = entry
+        utility = nil
+        aliasField.isHidden = false
+        checkbox.setAccessibilityLabel("Show \(entry.name) in search")
         checkbox.state = hidden ? .off : .on
         let suffix = switch entry.kind {
         case .app: ""
@@ -114,6 +119,22 @@ final class SettingsRowView: NSView, NSTextFieldDelegate {
         }
     }
 
+    /// Utilities have visibility only: no alias, launch history, or file icon lookup.
+    func configure(with utility: SearchUtility, hidden: Bool, showsKind: Bool) {
+        entry = nil
+        self.utility = utility
+        pendingIconURL = nil
+        checkbox.state = hidden ? .off : .on
+        checkbox.isEnabled = true
+        checkbox.setAccessibilityLabel("Show \(utility.name) in search")
+        label.stringValue = utility.name + (showsKind ? " (Utility)" : "")
+        label.textColor = hidden ? .tertiaryLabelColor : .labelColor
+        aliasField.stringValue = ""
+        aliasField.isHidden = true
+        showWarning(nil)
+        iconView.image = ResultItem.symbol(utility.symbolName)
+    }
+
     private func showWarning(_ warning: String?) {
         aliasField.textColor = warning == nil ? .labelColor : .systemOrange
         aliasField.toolTip = warning
@@ -128,8 +149,8 @@ final class SettingsRowView: NSView, NSTextFieldDelegate {
     }
 
     @objc private func visibilityToggled() {
-        guard let entry else { return }
-        onVisibilityChanged?(entry, checkbox.state == .off)
+        if let utility { onUtilityVisibilityChanged?(utility, checkbox.state == .off) }
+        else if let entry { onVisibilityChanged?(entry, checkbox.state == .off) }
     }
 
     /// Commit on blur and on return, so an alias typed and then dismissed isn't lost.

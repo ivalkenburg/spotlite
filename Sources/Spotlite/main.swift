@@ -31,7 +31,8 @@ if CommandLine.arguments.contains("--bench") {
     // The same call each keystroke makes: calculator, matcher, ranking and built-ins.
     func search(_ q: String) -> Int {
         SearchResults.build(for: q, corpus: corpus, matcher: matcher, frecency: frecency,
-                            webSearch: preferences.showWebSearch ? preferences.webSearchEngine : nil).count
+                            webSearch: preferences.showWebSearch ? preferences.webSearchEngine : nil,
+                            hiddenUtilities: preferences.hiddenUtilities).count
     }
     // Warm up, then time enough iterations to escape timer granularity.
     for q in queries { sink &+= search(q) }

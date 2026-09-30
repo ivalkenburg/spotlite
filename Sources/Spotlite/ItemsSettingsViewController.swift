@@ -1,17 +1,34 @@
 import AppKit
 import SpotliteCore
 
-/// Every app, System Settings pane, command and link, each with a visibility checkbox
-/// and an alias field; plus adding, editing and removing links.
+/// Indexed items and built-in utilities with visibility controls; indexed items also
+/// support aliases. Links can be added, edited and removed.
 @MainActor
 final class ItemsSettingsViewController: SettingsPaneController, NSTableViewDataSource, NSTableViewDelegate,
                                          NSMenuDelegate {
     private let table = NSTableView()
     private let filterField = NSSearchField()
-    private let kindPicker = NSSegmentedControl(labels: ["All", "Apps", "Settings", "Commands", "Links"],
+    private let caption = SettingsForm.hint("")
+    private let kindPicker = NSSegmentedControl(labels: ["All", "Apps", "Settings", "Commands", "Links", "Utility"],
                                                 trackingMode: .selectOne, target: nil, action: nil)
-    private var allApps: [AppEntry] = []
-    private var visibleApps: [AppEntry] = []
+    private enum Item {
+        case entry(AppEntry)
+        case utility(SearchUtility)
+
+        var name: String {
+            switch self {
+            case .entry(let entry): entry.name
+            case .utility(let utility): utility.name
+            }
+        }
+    }
+    private static let utilityItems = SearchUtility.allCases.map(Item.utility).sorted(by: itemNameOrder)
+    private var allItems: [Item] = ItemsSettingsViewController.utilityItems
+    private var visibleItems: [Item] = []
+
+    private nonisolated static func itemNameOrder(_ lhs: Item, _ rhs: Item) -> Bool {
+        lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+    }
 
     /// Segment order of the kind picker. Nil shows every kind.
     private static let kinds: [EntryKind?] = [nil, .app, .settingsPane, .command, .link]
@@ -52,8 +69,6 @@ final class ItemsSettingsViewController: SettingsPaneController, NSTableViewData
         filterRow.alignment = .centerY
         filterRow.spacing = 8
 
-        let caption = SettingsForm.hint(
-            "Uncheck to hide from results, or give one a short alias. Right-click to forget its launch history, or to edit a link.")
         caption.preferredMaxLayoutWidth = SettingsForm.width - 40
 
         let stack = NSStackView(views: [kindPicker, filterRow, scroll, caption])
@@ -65,7 +80,8 @@ final class ItemsSettingsViewController: SettingsPaneController, NSTableViewData
         for fullWidth in [kindPicker, filterRow, scroll, caption] as [NSView] {
             fullWidth.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
         }
-        kindPicker.segmentDistribution = .fillEqually
+        // Let longer labels such as Commands use more space than All.
+        kindPicker.segmentDistribution = .fill
         NSLayoutConstraint.activate([
             stack.widthAnchor.constraint(equalToConstant: SettingsForm.width),
             stack.heightAnchor.constraint(equalToConstant: Self.height),
@@ -75,12 +91,15 @@ final class ItemsSettingsViewController: SettingsPaneController, NSTableViewData
     }
 
     func setApps(_ apps: [AppEntry]) {
-        allApps = apps  // AppIndex returns them sorted by name already.
+        allItems = (apps.map(Item.entry) + Self.utilityItems).sorted(by: Self.itemNameOrder)
         reload()
     }
 
     func reload() {
         guard isViewLoaded else { return }
+        caption.stringValue = showsUtilitiesOnly
+            ? "Uncheck to hide from results. Hiding Caffeinate does not stop an active session."
+            : "Uncheck to hide from results, or give an item a short alias. Right-click to forget launch history or edit a link."
         applyFilter()
         table.reloadData()
     }
@@ -91,6 +110,8 @@ final class ItemsSettingsViewController: SettingsPaneController, NSTableViewData
         reload()
     }
 
+    private var showsUtilitiesOnly: Bool { kindPicker.selectedSegment == Self.kinds.count }
+
     private var selectedKind: EntryKind? {
         Self.kinds.indices.contains(kindPicker.selectedSegment) ? Self.kinds[kindPicker.selectedSegment] : nil
     }
@@ -98,8 +119,12 @@ final class ItemsSettingsViewController: SettingsPaneController, NSTableViewData
     private func applyFilter() {
         let query = filterField.stringValue.lowercased().trimmingCharacters(in: .whitespaces)
         let kind = selectedKind
-        visibleApps = allApps.filter {
-            (kind == nil || $0.kind == kind) && (query.isEmpty || $0.name.lowercased().contains(query))
+        visibleItems = allItems.filter { item in
+            guard query.isEmpty || item.name.lowercased().contains(query) else { return false }
+            switch item {
+            case .entry(let entry): return !showsUtilitiesOnly && (kind == nil || entry.kind == kind)
+            case .utility: return showsUtilitiesOnly || kindPicker.selectedSegment == 0
+            }
         }
     }
 
@@ -212,8 +237,7 @@ final class ItemsSettingsViewController: SettingsPaneController, NSTableViewData
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         let row = table.clickedRow
-        guard visibleApps.indices.contains(row) else { return }
-        let app = visibleApps[row]
+        guard visibleItems.indices.contains(row), case .entry(let app) = visibleItems[row] else { return }
         if app.kind == .link {
             for (title, action) in [("Edit Link…", #selector(editLinkClicked)),
                                     ("Remove Link", #selector(removeLinkClicked))] {
@@ -239,10 +263,9 @@ final class ItemsSettingsViewController: SettingsPaneController, NSTableViewData
 
     // MARK: - Table
 
-    func numberOfRows(in tableView: NSTableView) -> Int { visibleApps.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { visibleItems.count }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let app = visibleApps[row]
         let view = tableView.makeView(withIdentifier: SettingsRowView.reuseID, owner: self) as? SettingsRowView
             ?? {
                 let v = SettingsRowView(frame: .zero)
@@ -250,6 +273,23 @@ final class ItemsSettingsViewController: SettingsPaneController, NSTableViewData
                 return v
             }()
 
+        view.onUtilityVisibilityChanged = nil
+        if case .utility(let utility) = visibleItems[row] {
+            view.onVisibilityChanged = nil
+            view.onAliasEdited = nil
+            view.onAliasChanged = nil
+            view.onUtilityVisibilityChanged = { [weak self] utility, hidden in
+                guard let self else { return }
+                if hidden { self.model.preferences.hiddenUtilities.insert(utility) }
+                else { self.model.preferences.hiddenUtilities.remove(utility) }
+                self.model.persist()
+                self.table.reloadData()
+            }
+            view.configure(with: utility, hidden: model.preferences.hiddenUtilities.contains(utility),
+                           showsKind: kindPicker.selectedSegment == 0)
+            return view
+        }
+        guard case .entry(let app) = visibleItems[row] else { return nil }
         view.onVisibilityChanged = { [weak self] entry, hidden in
             guard let self, let id = entry.bundleID else { return }
             if hidden { self.model.preferences.hiddenBundleIDs.insert(id) }

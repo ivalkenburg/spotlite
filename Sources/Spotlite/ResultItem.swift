@@ -102,12 +102,14 @@ enum ResultItem {
     }
 
     /// What the pill after the query says while this row is selected.
-    func completion(for query: String) -> String {
+    func completion(for query: String, appNameCompletion: AppNameCompletion) -> String {
         switch self {
         case .calculation(_, let value): return " = " + Calculator.format(value)
         case .conversion(_, let result): return " = " + result
         // The title repeats the query, so the pill names only the engine.
-        case .webSearch(_, let engine): return " — Search \(engine.name)"
+        case .webSearch(_, let engine): return " – Search \(engine.name)"
+        case .app(let match) where match.entry.kind == .app:
+            return Completion.suffix(query: query, title: title, action: action, mode: appNameCompletion)
         default: return Completion.suffix(query: query, title: title, action: action)
         }
     }

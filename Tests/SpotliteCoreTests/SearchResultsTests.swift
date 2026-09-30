@@ -10,9 +10,11 @@ struct SearchResultsTests {
     }
 
     private func build(_ query: String, hidden: Set<String> = [], frecency: Frecency = Frecency(),
-                       recents: Int = 0, web: WebSearchEngine? = nil) -> [SearchResult] {
+                       recents: Int = 0, web: WebSearchEngine? = nil,
+                       hiddenUtilities: Set<SearchUtility> = []) -> [SearchResult] {
         SearchResults.build(for: query, corpus: SearchCorpus(entries: entries, hiddenBundleIDs: hidden),
-                            matcher: Matcher(), frecency: frecency, recents: recents, webSearch: web)
+                            matcher: Matcher(), frecency: frecency, recents: recents, webSearch: web,
+                            hiddenUtilities: hiddenUtilities)
     }
 
     private func describe(_ results: [SearchResult]) -> [String] {
@@ -99,6 +101,34 @@ struct SearchResultsTests {
         #expect(describe(build(" saf ", web: .google)) == ["Safari", "Google: saf"])
         #expect(describe(build("zzq", web: .bing)) == ["Bing: zzq"])
         #expect(build("", web: .google).isEmpty)
+    }
+
+    @Test(arguments: SearchUtility.allCases)
+    func utilityVisibilityIsIndependent(_ utility: SearchUtility) {
+        let query = switch utility {
+        case .caffeinate: "caf"
+        case .generateUUID: "uuid"
+        case .calculator: "2+2"
+        case .unitConversion: "10 km to miles"
+        }
+        #expect(!build(query).isEmpty)
+        #expect(build(query, hiddenUtilities: [utility]).isEmpty)
+        let others = Set(SearchUtility.allCases).subtracting([utility])
+        #expect(describe(build(query, hiddenUtilities: others)) == describe(build(query)))
+    }
+
+    @Test func hidingUtilitiesPreservesAppsSettingsAndWebSearch() {
+        let hidden = Set(SearchUtility.allCases)
+        #expect(describe(build("calc", hiddenUtilities: hidden)) == ["Calculator"])
+        #expect(describe(build("sett", hiddenUtilities: hidden)) == ["Settings Sync", "settings"])
+        #expect(describe(build("2+2", web: .google, hiddenUtilities: hidden)) == ["Google: 2+2"])
+        #expect(describe(build("uuid", web: .google, hiddenUtilities: hidden)) == ["Google: uuid"])
+    }
+
+    @Test func uuidKeywordsKeepWorkingByDefault() {
+        for query in ["uuid", "gen", "generate uuid"] {
+            #expect(describe(build(query)).contains("generateUUID"))
+        }
     }
 
     @Test func offersCaffeinateIgnoresSurroundingSpaces() {

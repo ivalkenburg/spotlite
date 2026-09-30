@@ -1,11 +1,13 @@
 import AppKit
 import SpotliteCore
 
-/// Theme, glass tint, the running-app dot, how many rows show, and where the panel opens.
+/// Search-field completion, theme, glass tint, result appearance and panel placement.
 @MainActor
 final class AppearanceSettingsViewController: SettingsPaneController {
     /// Popup order of the Theme menu.
     private static let themeModes: [ThemeMode] = [.system, .light, .dark]
+
+    private static let completionModes: [AppNameCompletion] = [.off, .prefixOnly, .allMatches]
 
     override func loadView() {
         let prefs = model.preferences
@@ -32,6 +34,12 @@ final class AppearanceSettingsViewController: SettingsPaneController {
                                         action: #selector(toggleRunningIndicator))
         runningIndicator.state = prefs.showRunningIndicator ? .on : .off
 
+        let completionPicker = NSPopUpButton()
+        completionPicker.addItems(withTitles: ["Off", "Prefix matches only", "All matches"])
+        completionPicker.selectItem(at: Self.completionModes.firstIndex(of: prefs.appNameCompletion) ?? 2)
+        completionPicker.target = self
+        completionPicker.action = #selector(completionChoiceChanged)
+
         let rowsPicker = NSPopUpButton()
         rowsPicker.addItems(withTitles: Preferences.visibleRowsRange.map(String.init))
         rowsPicker.selectItem(at: prefs.visibleRows - Preferences.visibleRowsRange.lowerBound)
@@ -51,6 +59,7 @@ final class AppearanceSettingsViewController: SettingsPaneController {
         let grid = SettingsForm.grid([
             ("Theme:", themePicker),
             ("Tint:", SettingsForm.row([clearLabel, tintSlider, solidLabel])),
+            ("App name completion:", completionPicker),
             ("Results:", runningIndicator),
             ("Rows shown:", rowsPicker),
             ("Open on:", screenPicker),
@@ -70,6 +79,12 @@ final class AppearanceSettingsViewController: SettingsPaneController {
 
     @objc private func toggleRunningIndicator(_ sender: NSButton) {
         model.set(\.showRunningIndicator, sender.state == .on)
+    }
+
+    @objc private func completionChoiceChanged(_ sender: NSPopUpButton) {
+        let index = sender.indexOfSelectedItem
+        model.set(\.appNameCompletion,
+                  Self.completionModes.indices.contains(index) ? Self.completionModes[index] : .allMatches)
     }
 
     @objc private func visibleRowsChanged(_ sender: NSPopUpButton) {

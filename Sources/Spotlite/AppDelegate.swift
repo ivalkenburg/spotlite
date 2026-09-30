@@ -101,6 +101,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }
         }
+        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_COMPLETION"] == "1" {
+            Task { @MainActor in
+                await self.controller.runDevCompletionChecks()
+                exit(0)
+            }
+        }
         if ProcessInfo.processInfo.environment["SPOTLITE_DEV_MENU"] == "1" {
             Task { @MainActor in
                 await self.controller.runDevMenuFrames()

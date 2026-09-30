@@ -30,6 +30,7 @@ public enum SearchResults {
         previousResult: Double? = nil,
         recents: Int = 0,
         webSearch: WebSearchEngine? = nil,
+        hiddenUtilities: Set<SearchUtility> = [],
         now: Date = Date()
     ) -> [SearchResult] {
         if query.allSatisfy(\.isWhitespace) {
@@ -44,9 +45,10 @@ public enum SearchResults {
         }
 
         var result: [SearchResult] = []
-        if let converted = QuickConversion.evaluate(trimmed) {
+        if !hiddenUtilities.contains(.unitConversion), let converted = QuickConversion.evaluate(trimmed) {
             result.append(.conversion(expression: trimmed, result: converted))
-        } else if let value = Calculator.evaluate(trimmed, previous: previousResult) {
+        } else if !hiddenUtilities.contains(.calculator),
+                  let value = Calculator.evaluate(trimmed, previous: previousResult) {
             result.append(.calculation(expression: trimmed, value: value))
         }
 
@@ -57,8 +59,12 @@ public enum SearchResults {
 
         // The self-indexed escape hatch: reachable even with the menu bar icon hidden.
         if mentions(trimmed, keywords: settingsKeywords) { result.append(.settings) }
-        if mentions(trimmed, keywords: caffeineKeywords) { result.append(.caffeinate) }
-        if mentions(trimmed, keywords: uuidKeywords) { result.append(.generateUUID) }
+        if !hiddenUtilities.contains(.caffeinate), mentions(trimmed, keywords: caffeineKeywords) {
+            result.append(.caffeinate)
+        }
+        if !hiddenUtilities.contains(.generateUUID), mentions(trimmed, keywords: uuidKeywords) {
+            result.append(.generateUUID)
+        }
         // Last, so it only becomes the top hit when nothing on this Mac matches. Not
         // under a calculation: arithmetic is already answered, and the card would lose
         // its standalone shape to a row nobody wants.

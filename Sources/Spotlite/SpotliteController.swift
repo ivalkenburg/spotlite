@@ -485,6 +485,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         switch navigation.scope {
         case .argument: return []
         case .menu(let menu):
+            if let utility = SearchUtility(rawValue: menu.id), preferences.hiddenUtilities.contains(utility) {
+                return []
+            }
             return menu.search(query, matcher: matcher).map { .menuItem($0, state: state) }
         case .root: break
         }
@@ -492,7 +495,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                                    frecency: library.frecency,
                                    previousResult: previousResult,
                                    recents: preferences.showRecentApps ? preferences.visibleRows : 0,
-                                   webSearch: preferences.showWebSearch ? preferences.webSearchEngine : nil)
+                                   webSearch: preferences.showWebSearch ? preferences.webSearchEngine : nil,
+                                   hiddenUtilities: preferences.hiddenUtilities)
             .map { ResultItem($0, caffeine: state) }
     }
 
@@ -579,13 +583,13 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// disappear when Backspace dismisses the completion.
     private func updateChrome() {
         // Blank, not just empty: recents answer a query of spaces too, and a completion
-        // pill after nothing would read as a stray " — Safari".
+        // pill after nothing would read as a stray " – Safari".
         guard selection != .dismissed, items.indices.contains(cursor),
               !field.stringValue.allSatisfy(\.isWhitespace) else {
             bar.clear()
             return
         }
-        bar.show(items[cursor])
+        bar.show(items[cursor], appNameCompletion: preferences.appNameCompletion)
     }
 
     // MARK: - Keyboard
@@ -955,7 +959,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             refreshMatches()
             return
         }
-        guard argument == nil, SearchResults.offersCaffeinate(field.stringValue) else { return }
+        guard argument == nil, !preferences.hiddenUtilities.contains(.caffeinate),
+              SearchResults.offersCaffeinate(field.stringValue) else { return }
         refreshMatches()
     }
 
@@ -1001,6 +1006,67 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
 /// Development checks live apart from the launcher behavior without widening access.
 extension SpotliteController {
+    private func devDescendants(of view: NSView) -> [NSView] {
+        view.subviews.flatMap { [$0] + devDescendants(of: $0) }
+    }
+
+    /// Exercise completion visibility and real field-editor deletion without saving preferences.
+    func runDevCompletionChecks() async {
+        let savedPreferences = preferences
+        defer { preferencesDidChange(savedPreferences) }
+        show()
+        let entry = AppEntry(url: URL(fileURLWithPath: "/System/Applications/Safari.app"),
+                             name: "Google Chrome", bundleID: nil)
+        let fixtureMatcher = Matcher()
+        guard let editor = field.currentEditor() as? NSTextView else { preconditionFailure("Missing editor") }
+        for mode in AppNameCompletion.allCases {
+            preferences.appNameCompletion = mode
+            for query in ["go", "gc", "Google Chrome"] {
+                setQuery(query)
+                items = fixtureMatcher.search(query, in: [entry]).map(ResultItem.app)
+                precondition(items.count == 1)
+                cursor = 0
+                selection = .topHit
+                table.reloadData()
+                layoutList(animated: false)
+                updateChrome()
+                let visible = mode != .off && query != "Google Chrome"
+                    && (query == "go" || mode == .allMatches)
+                precondition(bar.isShowingCompletion == visible)
+                precondition((editor.insertionPointColor == .clear) == visible)
+                precondition(rowSelection(0) == .topHit)
+                let consumed = control(field, textView: editor, doCommandBy: #selector(NSResponder.deleteBackward(_:)))
+                precondition(consumed == visible && field.stringValue == query)
+                if !consumed {
+                    editor.deleteBackward(nil)
+                    precondition(field.stringValue == String(query.dropLast()))
+                    precondition(selection == .topHit)
+                }
+                // Restore before dumping, so frames describe the selected mode.
+                setQuery(query)
+                items = fixtureMatcher.search(query, in: [entry]).map(ResultItem.app)
+                cursor = 0
+                table.reloadData()
+                layoutList(animated: false)
+                selection = .topHit
+                updateChrome()
+                try? await Task.sleep(for: .milliseconds(100))
+                dumpFrames("completion-\(mode.rawValue)-\(query)")
+            }
+        }
+        let settingsModel = SettingsModel(preferences: preferences, library: library)
+        let settingsController = AppearanceSettingsViewController(model: settingsModel)
+        let page = settingsController.view
+        page.setFrameSize(page.fittingSize)
+        page.layoutSubtreeIfNeeded()
+        let picker = devDescendants(of: page).compactMap { $0 as? NSPopUpButton }
+            .first { $0.itemTitles == ["Off", "Prefix matches only", "All matches"] }!
+        let frame = picker.convert(picker.bounds, to: page)
+        precondition(picker.titleOfSelectedItem == "All matches" && page.bounds.contains(frame))
+        print("DEV settings: Appearance page=\(page.frame) completion picker=\(frame)")
+        print("DEV completion: all modes, caret, Backspace, selection and settings layout passed")
+    }
+
     func dumpFrames(_ tag: String) {
         panel.layoutIfNeeded()
         print("[\(tag)] window=\(panel.frame)")
@@ -1025,6 +1091,7 @@ extension SpotliteController {
         let savedPreferences = preferences
         defer { preferencesDidChange(savedPreferences) }
         preferences.backNavigationBehavior = .restoreQuery
+        preferences.hiddenUtilities.remove(.caffeinate)
         show()
         setQuery("caf")
         updateMatches(for: "caf")
@@ -1075,6 +1142,9 @@ extension SpotliteController {
 
     /// Real AppKit conversion and generation checks; preserve every clipboard representation.
     func runDevUtilityChecks() async throws {
+        let savedPreferences = preferences
+        defer { preferencesDidChange(savedPreferences) }
+        preferences.hiddenUtilities = []
         let pasteboard = NSPasteboard.general
         let savedClipboard = pasteboard.pasteboardItems?.map { item in
             item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
@@ -1129,6 +1199,8 @@ extension SpotliteController {
             try? await Task.sleep(for: .milliseconds(300))
         }
         try runDevSettingsChecks()
+        try runDevUtilitySettingsChecks()
+        try runDevUtilityVisibilityChecks()
         print("DEV utilities: conversion cards, exact copying, UUID navigation and generation passed")
     }
 
@@ -1140,10 +1212,7 @@ extension SpotliteController {
         let page = controller.view
         page.setFrameSize(page.fittingSize)
         page.layoutSubtreeIfNeeded()
-        func descendants(_ view: NSView) -> [NSView] {
-            view.subviews.flatMap { [$0] + descendants($0) }
-        }
-        let views = descendants(page)
+        let views = devDescendants(of: page)
         let locationLabel = views.compactMap { $0 as? NSTextField }.first { $0.stringValue == "App locations:" }!
         let locationView = views.first { $0 is ApplicationDirectoriesView }!
         let labelAlignment = locationLabel.convert(locationLabel.alignmentRect(forFrame: locationLabel.bounds), to: page)
@@ -1168,7 +1237,7 @@ extension SpotliteController {
         try checkUtility(page.bounds.contains(locations.convert(locations.bounds, to: page)))
         print("DEV settings: Search page=\(page.frame) locations=\(locations.convert(locations.bounds, to: page)); remove/reset/empty passed")
 
-        let apps = library.entries.filter { $0.bundleID != nil }
+        let apps = library.entries.filter { $0.kind == .app && $0.bundleID != nil }
         guard let first = apps.first, let second = apps.first(where: { $0.id != first.id }) else { return }
         model.preferences.aliases = [first.id: "same", second.id: " SAME "]
         let itemsController = ItemsSettingsViewController(model: model)
@@ -1176,9 +1245,12 @@ extension SpotliteController {
         let itemsPage = itemsController.view
         itemsPage.setFrameSize(itemsPage.fittingSize)
         itemsPage.layoutSubtreeIfNeeded()
-        let itemsTable = descendants(itemsPage).compactMap { $0 as? NSTableView }.first!
+        let kindPicker = devDescendants(of: itemsPage).compactMap { $0 as? NSSegmentedControl }.first!
+        kindPicker.selectedSegment = 1  // Alias checks apply to indexed apps, not utilities.
+        kindPicker.sendAction(kindPicker.action, to: kindPicker.target)
+        let itemsTable = devDescendants(of: itemsPage).compactMap { $0 as? NSTableView }.first!
         let row = itemsTable.view(atColumn: 0, row: 0, makeIfNecessary: true) as! SettingsRowView
-        let alias = descendants(row).compactMap { $0 as? NSTextField }.first { $0.placeholderString == "alias" }!
+        let alias = devDescendants(of: row).compactMap { $0 as? NSTextField }.first { $0.placeholderString == "alias" }!
         try checkUtility(alias.toolTip?.contains(second.name) == true)
         alias.stringValue = "different"
         row.controlTextDidChange(Notification(name: NSText.didChangeNotification))
@@ -1186,6 +1258,91 @@ extension SpotliteController {
         row.controlTextDidEndEditing(Notification(name: NSText.didEndEditingNotification))
         try checkUtility(model.preferences.aliases[first.id] == "different")
         print("DEV settings: alias warning names, live edits and duplicate acceptance passed")
+    }
+
+    private func runDevUtilitySettingsChecks() throws {
+        var saves = 0
+        let model = SettingsModel(preferences: Preferences(), library: library, savePreferences: { _ in saves += 1 })
+        let controller = ItemsSettingsViewController(model: model)
+        let app = AppEntry(url: URL(fileURLWithPath: "/Applications/Calculator.app"),
+                           name: "Calculator", bundleID: "dev.calculator")
+        controller.setApps([app])
+        let page = controller.view
+        page.setFrameSize(page.fittingSize)
+        page.layoutSubtreeIfNeeded()
+        let views = devDescendants(of: page)
+        let table = views.compactMap { $0 as? NSTableView }.first!
+        let picker = views.compactMap { $0 as? NSSegmentedControl }.first!
+        let filter = views.compactMap { $0 as? NSSearchField }.first!
+        func select(_ segment: Int) {
+            picker.selectedSegment = segment
+            picker.sendAction(picker.action, to: picker.target)
+            page.layoutSubtreeIfNeeded()
+        }
+        try checkUtility(picker.label(forSegment: 5) == "Utility" && table.numberOfRows == 5)
+        select(5)
+        try checkUtility(table.numberOfRows == 4)
+        for index in 0..<4 {
+            let row = table.view(atColumn: 0, row: index, makeIfNecessary: true) as! SettingsRowView
+            let fields = devDescendants(of: row).compactMap { $0 as? NSTextField }
+            let alias = fields.first { $0.placeholderString == "alias" }!
+            let name = fields.first { $0 !== alias }!.stringValue
+            let utility = SearchUtility.allCases.first { $0.name == name }!
+            let checkbox = devDescendants(of: row).compactMap { $0 as? NSButton }.first!
+            try checkUtility(alias.isHidden && checkbox.isEnabled && checkbox.state == .on)
+            checkbox.performClick(nil)
+            try checkUtility(model.preferences.hiddenUtilities.contains(utility))
+            let refreshed = table.view(atColumn: 0, row: index, makeIfNecessary: true) as! SettingsRowView
+            devDescendants(of: refreshed).compactMap { $0 as? NSButton }.first!.performClick(nil)
+            try checkUtility(!model.preferences.hiddenUtilities.contains(utility))
+            print("DEV settings: Utility row=\(row.frame) name=\(name) aliasHidden=\(alias.isHidden)")
+        }
+        try checkUtility(saves == 8 && model.preferences.hiddenBundleIDs.isEmpty && model.preferences.aliases.isEmpty)
+        select(0)
+        try checkUtility(table.numberOfRows == 5)
+        select(1)
+        try checkUtility(table.numberOfRows == 1)
+        let appRow = table.view(atColumn: 0, row: 0, makeIfNecessary: true) as! SettingsRowView
+        try checkUtility(!devDescendants(of: appRow).compactMap { $0 as? NSTextField }
+            .first { $0.placeholderString == "alias" }!.isHidden)
+        select(5)
+        filter.stringValue = "UUID"
+        filter.sendAction(filter.action, to: filter.target)
+        try checkUtility(table.numberOfRows == 1)
+        filter.stringValue = "nothing matches"
+        filter.sendAction(filter.action, to: filter.target)
+        try checkUtility(table.numberOfRows == 0)
+        try checkUtility(page.bounds.contains(picker.convert(picker.bounds, to: page)))
+        try checkUtility(picker.intrinsicContentSize.width <= picker.frame.width)
+        print("DEV settings: Items page=\(page.frame) tabs=\(picker.frame) naturalTabsWidth=\(picker.intrinsicContentSize.width); Utility toggles, filtering, All and row reuse passed")
+    }
+
+    private func runDevUtilityVisibilityChecks() throws {
+        let savedPreferences = preferences
+        let wasActive = caffeine.state.spotlite
+        defer {
+            if caffeine.state.spotlite != wasActive { caffeine.toggle() }
+            preferencesDidChange(savedPreferences)
+        }
+        for utility in [SearchUtility.caffeinate, .generateUUID] {
+            preferences.hiddenUtilities = []
+            show()
+            let query = utility == .caffeinate ? "caf" : "uuid"
+            setQuery(query)
+            updateMatches(for: query)
+            let index = items.firstIndex { $0.identity == utility.rawValue }!
+            launch(at: index)
+            try checkUtility(!items.isEmpty)
+            if utility == .caffeinate && !caffeine.state.spotlite { caffeine.toggle() }
+            var hidden = preferences
+            hidden.hiddenUtilities.insert(utility)
+            preferencesDidChange(hidden)
+            try checkUtility(items.isEmpty)
+            if utility == .caffeinate { try checkUtility(caffeine.state.spotlite) }
+            leaveScope()
+            try checkUtility(!items.contains { $0.identity == utility.rawValue })
+        }
+        print("DEV utilities: hiding open submenus removes their actions; active Caffeinate stays on")
     }
 
     private func checkUtility(_ condition: @autoclosure () -> Bool, line: Int = #line) throws {
@@ -1305,10 +1462,7 @@ extension SpotliteController {
         let page = settingsController.view
         page.setFrameSize(page.fittingSize)
         page.layoutSubtreeIfNeeded()
-        func descendants(of view: NSView) -> [NSView] {
-            view.subviews.flatMap { [$0] + descendants(of: $0) }
-        }
-        let picker = descendants(of: page).compactMap { $0 as? NSPopUpButton }
+        let picker = devDescendants(of: page).compactMap { $0 as? NSPopUpButton }
             .first { $0.itemTitles == ["Restore previous query", "Clear query"] }!
         let pickerFrame = picker.convert(picker.bounds, to: page)
         precondition(picker.titleOfSelectedItem == "Clear query" && page.bounds.contains(pickerFrame))

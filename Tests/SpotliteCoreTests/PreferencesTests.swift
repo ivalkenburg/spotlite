@@ -15,6 +15,7 @@ struct PreferencesTests {
 
     @Test func roundTripsThroughJSON() throws {
         var prefs = Preferences()
+        prefs.hiddenUtilities = [.caffeinate, .unitConversion]
         prefs.hiddenBundleIDs = ["com.example.one", "com.example.two"]
         prefs.aliases = ["com.adobe.Photoshop": "ps"]
         prefs.panelScreen = .primary
@@ -27,6 +28,7 @@ struct PreferencesTests {
         prefs.showSystemCommands = false
         prefs.showRecentApps = true
         prefs.showRunningIndicator = false
+        prefs.appNameCompletion = .prefixOnly
         prefs.showWebSearch = false
         prefs.webSearchEngine = .bing
         prefs.links = [Link(name: "Downloads", target: "~/Downloads")]
@@ -43,6 +45,7 @@ struct PreferencesTests {
         let old = Data(#"{"hiddenBundleIDs":["com.example.one"],"hotKeyCode":49,"hotKeyModifiers":2048,"showMenuBarIcon":false,"hasCompletedFirstRun":true}"#.utf8)
 
         let decoded = try JSONDecoder().decode(Preferences.self, from: old)
+        #expect(decoded.hiddenUtilities.isEmpty)
         #expect(decoded.hiddenBundleIDs == ["com.example.one"])
         #expect(decoded.showMenuBarIcon == false)
         #expect(decoded.hasCompletedFirstRun)
@@ -55,6 +58,7 @@ struct PreferencesTests {
         #expect(decoded.showSystemSettings)
         #expect(decoded.showSystemCommands)
         #expect(!decoded.showRecentApps)
+        #expect(decoded.appNameCompletion == .allMatches)
         #expect(decoded.showRunningIndicator)
         #expect(decoded.showWebSearch)
         #expect(decoded.webSearchEngine == .duckDuckGo)
@@ -91,6 +95,33 @@ struct PreferencesTests {
         let data = Data(#"{"backNavigationBehavior":"futureOption","showMenuBarIcon":false}"#.utf8)
         let decoded = try JSONDecoder().decode(Preferences.self, from: data)
         #expect(decoded.backNavigationBehavior == .restoreQuery)
+        #expect(!decoded.showMenuBarIcon)
+    }
+
+    @Test func utilitiesAreVisibleByDefault() {
+        #expect(Preferences().hiddenUtilities.isEmpty)
+    }
+
+    @Test func unknownUtilityDoesNotLoseOtherPreferences() throws {
+        let data = Data(#"{"hiddenUtilities":["caffeinate","futureUtility",42,"calculator"],"showMenuBarIcon":false}"#.utf8)
+        let decoded = try JSONDecoder().decode(Preferences.self, from: data)
+        #expect(decoded.hiddenUtilities == [.caffeinate, .calculator])
+        #expect(!decoded.showMenuBarIcon)
+    }
+
+    @Test func completionModesPersist() throws {
+        for mode in AppNameCompletion.allCases {
+            let prefs = Preferences(appNameCompletion: mode)
+            let data = try JSONEncoder().encode(prefs)
+            #expect(try JSONDecoder().decode(Preferences.self, from: data).appNameCompletion == mode)
+        }
+        #expect(Preferences().appNameCompletion == .allMatches)
+    }
+
+    @Test func unknownCompletionModeFallsBack() throws {
+        let data = Data(#"{"appNameCompletion":"futureOption","showMenuBarIcon":false}"#.utf8)
+        let decoded = try JSONDecoder().decode(Preferences.self, from: data)
+        #expect(decoded.appNameCompletion == .allMatches)
         #expect(!decoded.showMenuBarIcon)
     }
 
