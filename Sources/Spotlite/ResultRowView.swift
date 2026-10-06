@@ -9,7 +9,7 @@ enum RowSelection {
 
 /// One result row: icon, title, the selected row's hints, and the selection highlight.
 /// Deliberately not glass-on-glass: glass over glass reads as muddy.
-final class ResultRowView: NSTableCellView {
+final class ResultRowView: HoverResultCellView {
     static let reuseID = NSUserInterfaceItemIdentifier("ResultRow")
 
     private let icon = NSImageView()
@@ -128,17 +128,7 @@ final class ResultRowView: NSTableCellView {
         // Spotlight's titles are full white or black, not the slightly translucent label colour.
         label.textColor = selection == .navigated || mode == .lighten ? .white : .black
 
-        switch selection {
-        case .none:
-            highlight.isHidden = true
-        case .topHit:
-            highlight.isHidden = false
-            Vibrancy.fill(highlight, Vibrancy.fill, mode)
-        case .navigated:
-            highlight.isHidden = false
-            highlight.layer?.compositingFilter = nil
-            highlight.layer?.backgroundColor = Vibrancy.selectionColor.cgColor
-        }
+        updateHighlight(mode)
 
         runningDot.isHidden = !(running && marksRunning)
         if !runningDot.isHidden {
@@ -167,6 +157,26 @@ final class ResultRowView: NSTableCellView {
         NSLayoutConstraint.activate([showsSwitch ? hintsBeforeSwitch : hintsBeforeEdge])
 
         configureIcon(for: item)
+    }
+
+    override func hoverDidChange() {
+        updateHighlight(Vibrancy.mode(for: effectiveAppearance))
+    }
+
+    private func updateHighlight(_ mode: Vibrancy.Mode) {
+        guard let last = lastConfiguration else { return }
+        switch last.selection {
+        case .none:
+            highlight.isHidden = !isHovered
+            if isHovered { Vibrancy.fill(highlight, Vibrancy.hover, mode) }
+        case .topHit:
+            highlight.isHidden = false
+            Vibrancy.fill(highlight, Vibrancy.fill, mode)
+        case .navigated:
+            highlight.isHidden = false
+            highlight.layer?.compositingFilter = nil
+            highlight.layer?.backgroundColor = Vibrancy.selectionColor.cgColor
+        }
     }
 
     /// What the hint stack shows now. Every keystroke re-renders the selected row, and

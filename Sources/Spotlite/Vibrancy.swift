@@ -30,6 +30,10 @@ enum Vibrancy {
     /// Key badges always lighten, even in light mode and over the blue selection.
     static let badge = Strength(0.14)
 
+    /// Custom hover fills: a subtle row highlight and a small lift for cards.
+    static let hover = Strength(dark: 0.08, light: 0.05)
+    static let cardHover = Strength(dark: 0.21, light: 0.14)
+
     /// Spotlight's selection blue is the accent colour with this much light added, the
     /// same in both themes (#007AFF becomes #158EFF). Computed from the accent so other
     /// accent colours behave the same way.

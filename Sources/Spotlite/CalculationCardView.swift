@@ -4,9 +4,8 @@ import SpotliteCore
 /// The calculator result as Spotlight draws it: a bordered card holding the expression
 /// and its value, a round copy button, and a separator between it and the rows below.
 ///
-/// The card is never filled as the top hit; its completion pill says it is selected.
-/// Once the user arrows back onto it, it takes an accent ring instead of the blue fill.
-final class CalculationCardView: NSTableCellView {
+/// Top-hit selection uses the completion pill. Arrow navigation adds an accent ring.
+final class CalculationCardView: HoverResultCellView {
     static let reuseID = NSUserInterfaceItemIdentifier("CalculationCard")
 
     private let card = NSView()
@@ -117,7 +116,7 @@ final class CalculationCardView: NSTableCellView {
         value.toolTip = result
         expression.toolTip = text
 
-        Vibrancy.fill(card, Vibrancy.card, mode)
+        updateCardFill(mode)
         Vibrancy.fill(copyCircle, Vibrancy.fill, mode)
         Vibrancy.fill(separator, Vibrancy.fill, mode)
 
@@ -131,5 +130,15 @@ final class CalculationCardView: NSTableCellView {
             border.layer?.borderColor = Vibrancy.color(Vibrancy.cardBorder, mode).cgColor
             Vibrancy.apply(mode, to: border.layer)
         }
+    }
+
+    override func hoverDidChange() {
+        updateCardFill(Vibrancy.mode(for: effectiveAppearance))
+    }
+
+    private func updateCardFill(_ mode: Vibrancy.Mode) {
+        guard let last = lastConfiguration else { return }
+        let strength = isHovered && last.selection == .none ? Vibrancy.cardHover : Vibrancy.card
+        Vibrancy.fill(card, strength, mode)
     }
 }
