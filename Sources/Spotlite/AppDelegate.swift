@@ -48,6 +48,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var preferences = Storage.loadPreferences()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let materialBenchmark = ProcessInfo.processInfo.environment["SPOTLITE_DEV_MATERIAL_BENCH"] == "1"
+        if materialBenchmark {
+            // Fixed fixtures, no saved preference changes, and no collision with the
+            // installed app's hotkey. Do not build a panel until the idle sample.
+            preferences = Preferences()
+            preferences.hasCompletedFirstRun = true
+            preferences.showMenuBarIcon = false
+            preferences.showRecentApps = false
+            preferences.themeMode = ThemeMode(rawValue: ProcessInfo.processInfo.environment["SPOTLITE_DEV_THEME"] ?? "dark") ?? .dark
+        }
         applyTheme()
         // Query before drawing the status item so an assertion that predates Spotlite is
         // represented immediately. Later changes all flow through this single callback.
@@ -57,8 +67,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.refreshCaffeineStatusItem()
             self.controllerInstance?.caffeineStateDidChange()
         }
-        registerHotKey()
+        if !materialBenchmark { registerHotKey() }
         refreshStatusItem()
+
+        if materialBenchmark {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(750))
+                DevMaterialProbe.emit("idle")
+                await self.controller.runDevMaterialBenchmark()
+                exit(0)
+            }
+            return
+        }
 
         if !preferences.hasCompletedFirstRun {
             preferences.hasCompletedFirstRun = true

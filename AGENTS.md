@@ -53,6 +53,13 @@ make dmg      # build/Spotlite-<version>.dmg
 | `SPOTLITE_DEV_UTILITIES=1` | Exercise conversion cards, UUID actions, Utility settings and visibility; preserve clipboard, dump frames and exit |
 | `SPOTLITE_DEV_PIN=1` | Keep the panel open when it loses focus |
 | `SPOTLITE_DEV_QUERY=<q>` | Prefill a query |
+| `SPOTLITE_DEV_MATERIAL=<mode>` | Experimental panel material: `glass` (default), `hud`, `popover`; `solid` is a diagnostic without blur |
+| `SPOTLITE_DEV_MATERIAL_BENCH=1` | Compare material memory, animation pacing and interaction with fixed, unsaved preferences; exit after checks |
+| `SPOTLITE_DEV_THEME=<light\|dark>` | Theme for the material benchmark (default dark) |
+
+`python3 scripts/benchmark-materials.py` runs fresh processes sequentially in both themes
+and writes measurements to `build/material-benchmark`. Use `--capture` or `--vmmap` in
+separate runs to keep capture/inspection overhead out of timing comparisons.
 
 For layout bugs, compare `SPOTLITE_DEV_FRAMES` output against what the layout code claims; screenshots alone have missed bugs.
 

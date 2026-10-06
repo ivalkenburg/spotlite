@@ -41,14 +41,17 @@ final class SearchBar {
 
     var isShowingCompletion: Bool { !completion.isHidden }
 
-    init(in content: NSView) {
+    init(in content: NSView, explicitIconScaling: Bool = false) {
         self.content = content
 
         magnifier.wantsLayer = true
         field.wantsLayer = true
         completionLabel.wantsLayer = true
 
-        barIcon.imageScaling = .scaleProportionallyDown
+        // Ordinary material hosts need explicit scaling during the icon's fade;
+        // scaleProportionallyDown can leave the cached bitmap cropped on macOS 27.
+        barIcon.imageScaling = explicitIconScaling ? .scaleProportionallyUpOrDown : .scaleProportionallyDown
+        barIcon.wantsLayer = explicitIconScaling
         barIcon.isHidden = true
 
         completionPill.wantsLayer = true
@@ -226,6 +229,7 @@ final class SearchBar {
 
     func dumpFrames(_ tag: String) {
         print("[\(tag)] completion=\(completion.frame) text=\(completionLabel.stringValue) hidden=\(completion.isHidden) iconHidden=\(barIcon.isHidden)")
+        print("[\(tag)] barIcon=\(barIcon.frame) image=\(barIcon.image?.size ?? .zero) layerBounds=\(barIcon.layer?.bounds ?? .zero) contentsRect=\(barIcon.layer?.contentsRect ?? .zero)")
         print("[\(tag)] field=\(field.frame) chip=\(chip.frame) chipHidden=\(chip.isHidden)")
     }
 

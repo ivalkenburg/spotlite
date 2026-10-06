@@ -7,10 +7,11 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                                 NSTableViewDelegate {
 
     private let panel = SpotlitePanel()
-    private let glass = NSGlassEffectView()
+    private let surface = PanelSurface()
+    private var glass: NSView { surface.view }
     private let content = FlippedView()
     /// Lazy so the appearance applied at the start of construction can reach it.
-    private lazy var bar = SearchBar(in: content)
+    private lazy var bar = SearchBar(in: content, explicitIconScaling: surface.material != .glass)
     var field: SearchField { bar.field }
     /// Hairline between the query and the results, so the two don't read as one surface.
     private let divider = NSView()
@@ -120,8 +121,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     // MARK: - Construction
 
     private func buildUI() {
-        glass.cornerRadius = Metrics.cornerRadius
-        glass.style = .regular
         applyResolvedAppearance()
 
         field.delegate = self
@@ -206,18 +205,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             trailingEdge.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
 
-        glass.contentView = content
+        surface.installContent(content)
         // Rows are laid out at the list's final height and revealed by the glass's
         // growing edge, so anything past the glass must not draw.
         content.clipsToBounds = true
-        glass.wantsLayer = true
-        glass.shadow = {
-            let sh = NSShadow()
-            sh.shadowColor = NSColor.black.withAlphaComponent(Metrics.shadowOpacity)
-            sh.shadowBlurRadius = Metrics.shadowRadius
-            sh.shadowOffset = NSSize(width: 0, height: Metrics.shadowOffsetY)
-            return sh
-        }()
 
         // The glass view sits inside a transparent margin rather than being the window's
         // contentView: filling the frame exactly clips its shadow into a square halo.
@@ -262,12 +253,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         // Leaving the panel itself inherited in System mode lets the host observe later
         // system changes; glass and content still receive the resolved value immediately.
         panel.appearance = preferences.themeMode == .system ? nil : appearance
-        glass.appearance = appearance
         content.appearance = appearance
-        let tint = preferences.glassTint
-        glass.tintColor = tint > 0
-            ? Metrics.glassTint(dark: name == .darkAqua).withAlphaComponent(tint)
-            : nil
+        surface.applyAppearance(appearance, dark: name == .darkAqua, tint: preferences.glassTint)
         applyVibrancy()
     }
 
@@ -420,6 +407,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     /// Dev captures steal key focus, which would dismiss the panel mid-measurement.
     private let pinnedOpen = ProcessInfo.processInfo.environment["SPOTLITE_DEV_PIN"] == "1"
+        || ProcessInfo.processInfo.environment["SPOTLITE_DEV_MATERIAL_BENCH"] == "1"
     /// Dev hook: prefill a query so the expanded state can be inspected. Read once:
     /// `environment` builds a fresh dictionary on every access.
     private let devQuery = ProcessInfo.processInfo.environment["SPOTLITE_DEV_QUERY"]
@@ -1003,6 +991,114 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
 /// Development checks live apart from the launcher behavior without widening access.
 extension SpotliteController {
+    /// Repeatable comparison of material memory, layout, fade/scale and typing. These
+    /// waits and the probe's display link exist only for this explicitly requested run.
+    func runDevMaterialBenchmark() async {
+        let probe = DevMaterialProbe()
+        let firstOpen = CACurrentMediaTime()
+        show()
+        let firstOpenMS = (CACurrentMediaTime() - firstOpen) * 1_000
+        probe.start(in: glass)
+        try? await Task.sleep(for: .milliseconds(300))
+        probe.stop("first-open-animation", extra: ["show_sync_ms": firstOpenMS])
+        try? await Task.sleep(for: .milliseconds(700))
+        sampleMaterial("collapsed")
+        try? await Task.sleep(for: .milliseconds(750))
+
+        probe.start(in: glass)
+        setQuery("a")
+        updateMatches(for: "a")
+        try? await Task.sleep(for: .milliseconds(300))
+        probe.stop("expand-animation")
+        try? await Task.sleep(for: .milliseconds(700))
+        sampleMaterial("expanded")
+        dumpFrames("material-expanded")
+        try? await Task.sleep(for: .seconds(2))
+        sampleMaterial("expanded-settled")
+        try? await Task.sleep(for: .milliseconds(750))
+
+        setQuery("12 * 12")
+        updateMatches(for: "12 * 12")
+        try? await Task.sleep(for: .seconds(1))
+        sampleMaterial("card")
+        try? await Task.sleep(for: .milliseconds(750))
+
+        var typingMS: [Double] = []
+        let cpuStart = DevMaterialProbe.cpuSeconds()
+        probe.start(in: glass)
+        for _ in 0..<6 {
+            for query in ["", "s", "sa", "safari", "a", "12 * 12"] {
+                let start = CACurrentMediaTime()
+                setQuery(query)
+                updateMatches(for: query)
+                panel.contentView?.layoutSubtreeIfNeeded()
+                typingMS.append((CACurrentMediaTime() - start) * 1_000)
+                try? await Task.sleep(for: .milliseconds(180))
+            }
+        }
+        typingMS.sort()
+        probe.stop("typing", extra: [
+            "input_layout_p50_ms": typingMS[typingMS.count / 2],
+            "input_layout_p95_ms": typingMS[Int(Double(typingMS.count) * 0.95)],
+            "input_layout_max_ms": typingMS.last!,
+            "scenario_cpu_ms": (DevMaterialProbe.cpuSeconds() - cpuStart) * 1_000,
+        ])
+
+        hide()
+        try? await Task.sleep(for: .seconds(1))
+        sampleMaterial("hidden")
+        try? await Task.sleep(for: .milliseconds(750))
+        precondition(!panel.isVisible)
+
+        var reopenMS: [Double] = []
+        probe.start(in: glass)
+        for _ in 0..<10 {
+            let start = CACurrentMediaTime()
+            show()
+            reopenMS.append((CACurrentMediaTime() - start) * 1_000)
+            try? await Task.sleep(for: .milliseconds(180))
+            hide()
+            try? await Task.sleep(for: .milliseconds(120))
+        }
+        reopenMS.sort()
+        probe.stop("repeated-open", extra: [
+            "show_sync_p50_ms": reopenMS[reopenMS.count / 2],
+            "show_sync_max_ms": reopenMS.last!,
+        ])
+        // Reopen during the close fade: the pending hide must not dismiss this show.
+        show()
+        hide()
+        show()
+        try? await Task.sleep(for: .seconds(1))
+        precondition(panel.isVisible && !isDismissing && panel.alphaValue == 1)
+        setQuery("a")
+        updateMatches(for: "a")
+        try? await Task.sleep(for: .seconds(1))
+        sampleMaterial("reopened-expanded")
+        try? await Task.sleep(for: .seconds(2))
+        let idleCPU = DevMaterialProbe.cpuSeconds()
+        try? await Task.sleep(for: .seconds(1))
+        DevMaterialProbe.emit("visible-idle", extra: ["cpu_over_1s_ms": (DevMaterialProbe.cpuSeconds() - idleCPU) * 1_000])
+        hide()
+        try? await Task.sleep(for: .seconds(1))
+        sampleMaterial("final-hidden")
+    }
+
+    private func sampleMaterial(_ phase: String) {
+        panel.contentView?.layoutSubtreeIfNeeded()
+        // The script can crop captures to the panel and its shadow using screen coords.
+        let top = NSScreen.screens.first?.frame.maxY ?? 0
+        let frame = panel.frame
+        DevMaterialProbe.emit(phase, extra: [
+            "capture_rect": [frame.minX, top - frame.maxY, frame.width, frame.height],
+            "panel_size": [glass.frame.width, glass.frame.height],
+            "content_size": [content.frame.width, content.frame.height],
+            "backing_scale": panel.backingScaleFactor,
+            "fade_duration_s": Metrics.showFadeDuration,
+            "scale_duration_s": Metrics.showScaleDuration,
+        ])
+    }
+
     private func devDescendants(of view: NSView) -> [NSView] {
         view.subviews.flatMap { [$0] + devDescendants(of: $0) }
     }
@@ -1068,8 +1164,8 @@ extension SpotliteController {
         panel.layoutIfNeeded()
         print("[\(tag)] window=\(panel.frame)")
         print("[\(tag)] host=\(panel.contentView?.frame ?? .zero)")
-        print("[\(tag)] glass=\(glass.frame)  cornerRadius=\(glass.cornerRadius)")
-        print("[\(tag)] content=\(glass.contentView?.frame ?? .zero)")
+        print("[\(tag)] glass=\(glass.frame)  cornerRadius=\(Metrics.cornerRadius) material=\(surface.material.rawValue)")
+        print("[\(tag)] content=\(content.frame)")
         print("[\(tag)] scroll=\(scroll.frame) listHeight=\(listHeight.constant) glassHeight=\(glassHeight.constant)")
         bar.dumpFrames(tag)
         if items.indices.contains(cursor),
