@@ -67,17 +67,6 @@ public struct Frecency: Codable, Sendable {
     /// every id stays valid.
     public static let maxRecords = 500
 
-    /// Drops history for apps that are no longer indexed, then caps what remains.
-    /// - Returns: true if anything was removed, so the caller can skip a pointless write.
-    @discardableResult
-    public mutating func prune(keeping ids: Set<String>, now: Date = Date()) -> Bool {
-        let before = records.count
-        records = records.filter { ids.contains($0.key) }
-
-        capRecords(now: now)
-        return records.count != before
-    }
-
     /// Bounds history without removing records from temporarily unindexed locations.
     @discardableResult
     public mutating func capRecords(now: Date = Date()) -> Bool {

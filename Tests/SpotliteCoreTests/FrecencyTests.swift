@@ -46,14 +46,6 @@ struct FrecencyTests {
         #expect(boosted < 140.0)
     }
 
-    @Test func pruneDropsUninstalledApps() {
-        var f = Frecency()
-        f.recordLaunch("kept")
-        f.recordLaunch("gone")
-        f.prune(keeping: ["kept"])
-        #expect(f.records.keys.sorted() == ["kept"])
-    }
-
     @Test func cappingRetainsTemporarilyUnindexedHistoryAndSkipsSmallMaps() {
         var history = Frecency()
         history.recordLaunch("temporarily.unindexed")

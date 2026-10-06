@@ -191,6 +191,15 @@ public final class Matcher {
         // The caller grows the buffers once per fuzzy candidate, within the ceilings.
         guard m <= capacity.query, n <= capacity.text else { return nil }
 
+        // The character mask cannot reject letters in the wrong order or too few
+        // repetitions. Avoid filling the DP matrix when no subsequence exists.
+        var matched = 0
+        for character in text where character == q[matched] {
+            matched += 1
+            if matched == m { break }
+        }
+        guard matched == m else { return nil }
+
         let stride = capacity.text
 
         for i in 0..<m {

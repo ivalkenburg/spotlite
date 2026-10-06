@@ -241,7 +241,7 @@ private struct Lossy<T: Decodable>: Decodable {
     init(from decoder: Decoder) throws { value = try? T(from: decoder) }
 }
 
-/// Reads and writes the two on-disk files. Preferences and frecency live together in
+/// Reads and writes persistent state. Preferences and frecency live together in
 /// Application Support; the app index lives in Caches because it is regenerable.
 public enum Storage {
 

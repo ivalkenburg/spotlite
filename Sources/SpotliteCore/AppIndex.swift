@@ -54,11 +54,13 @@ public enum AppIndex {
         sortedByName(collect(directories) + SettingsPaneIndex.installed)
     }
 
-    /// Newest modification time across the indexed directories. Comparing this on show
-    /// costs a handful of syscalls and catches anything FSEvents missed while asleep.
+    /// Modification times of the indexed roots, checked on show as a fallback for
+    /// missed FSEvents. Changes inside existing subfolders still rely on the watcher.
     public static func directoriesFingerprint(directories: [URL] = searchDirectories) -> [String: Date] {
         var result: [String: Date] = [:]
-        for dir in directories {
+        for var dir in directories {
+            // URLs cache resource values; reusing a root must still read today's mtime.
+            dir.removeCachedResourceValue(forKey: .contentModificationDateKey)
             if let date = (try? dir.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate {
                 result[dir.path] = date
             }
@@ -111,7 +113,7 @@ public enum AppIndex {
         for child in children {
             if child.pathExtension == "app" {
                 found.append(child)
-            } else if !child.lastPathComponent.hasPrefix("."),
+            } else if depth > 1, !child.lastPathComponent.hasPrefix("."),
                       (try? child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
                 found.append(contentsOf: bundles(in: child, depth: depth - 1))
             }

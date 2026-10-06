@@ -4,6 +4,17 @@ import Testing
 
 @Suite("App index")
 struct AppIndexTests {
+    @Test func fingerprintRereadsModificationDates() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = AppIndex.directoriesFingerprint(directories: [root])
+        let changed = Date(timeIntervalSince1970: 1_000)
+        try FileManager.default.setAttributes([.modificationDate: changed], ofItemAtPath: root.path)
+        let second = AppIndex.directoriesFingerprint(directories: [root])
+        #expect(second != first)
+        #expect(second[root.path] == changed)
+    }
+
     private func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("SpotliteTests-\(UUID().uuidString)", isDirectory: true)
