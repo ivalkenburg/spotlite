@@ -60,6 +60,8 @@ For layout bugs, compare `SPOTLITE_DEV_FRAMES` output against what the layout co
 
 Releases are not notarized (no Developer ID). `make release` needs a Developer ID and is unused until one exists.
 
+Use `vX.X.X` for release titles and tags. Release notes contain only concise changelog bullets and a `Full Changelog: vX.X.X...vX.X.X` link comparing the previous and new releases.
+
 1. Bump `CFBundleShortVersionString` and `CFBundleVersion` in `Resources/Info.plist`.
 2. `make dmg IDENTITY="<Apple Development identity>" SIGN_FLAGS="--options runtime --timestamp"`. Always pass `IDENTITY` explicitly; the default picks the first Apple Development cert, which may be the wrong one.
 3. `gh release create v<version> build/Spotlite-<version>.dmg`
