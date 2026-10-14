@@ -24,7 +24,8 @@ struct AppIndexTests {
 
     @discardableResult
     private func makeApp(in directory: URL, name: String, bundleID: String,
-                         metadataName: String? = nil, background: Bool = false) throws -> URL {
+                         metadataName: String? = nil, background: Bool = false,
+                         backgroundOnly: Bool = false) throws -> URL {
         let app = directory.appendingPathComponent("\(name).app", isDirectory: true)
         let contents = app.appendingPathComponent("Contents", isDirectory: true)
         try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
@@ -35,6 +36,7 @@ struct AppIndexTests {
             "CFBundlePackageType": "APPL",
         ]
         if background { info["LSUIElement"] = true }
+        if backgroundOnly { info["LSBackgroundOnly"] = true }
         let data = try PropertyListSerialization.data(fromPropertyList: info,
                                                       format: .xml, options: 0)
         try data.write(to: contents.appendingPathComponent("Info.plist"))
@@ -70,6 +72,64 @@ struct AppIndexTests {
         #expect(Set(apps.map(\.id)) == ["test.shared"])
         #expect(Set(apps.map(\.instanceID)).count == 2)
         #expect(AppEntry(cached: apps[0].cached) == apps[0])
+    }
+
+    @Test func discoversDirectEmbeddedAppsWithoutTraversingBundleInternals() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let host = try makeApp(in: root, name: "Host", bundleID: "test.host")
+        let applications = host.appendingPathComponent("Contents/Applications", isDirectory: true)
+        let tool = try makeApp(in: applications, name: "Device Hub", bundleID: "test.devices")
+        try makeApp(in: applications, name: "UI Agent", bundleID: "test.uiagent", background: true)
+        try makeApp(in: applications, name: "Background Agent", bundleID: "test.background",
+                    backgroundOnly: true)
+        let helper = try makeApp(in: host.appendingPathComponent("Contents/Frameworks"),
+                                 name: "Internal Helper", bundleID: "test.helper")
+        let nested = try makeApp(in: tool.appendingPathComponent("Contents/Applications"),
+                                 name: "Nested Tool", bundleID: "test.nestedtool")
+        let subfolder = try makeApp(in: applications.appendingPathComponent("Vendor"),
+                                    name: "Subfolder Tool", bundleID: "test.subfoldertool")
+
+        #expect(AppIndex.scan(directories: [root]).map(\.name) == ["Device Hub", "Host"])
+        #expect(AppIndex.includesApplication(at: tool, directories: [root]))
+        for excluded in [helper, nested, subfolder] {
+            #expect(!AppIndex.includesApplication(at: excluded, directories: [root]))
+        }
+        #expect(!AppIndex.includesApplication(at: tool, directories: []))
+        #expect(!AppIndex.includesApplication(at: tool, directories: [root.appendingPathComponent("Other")]))
+    }
+
+    @Test func discoversEmbeddedAppsInVendorFoldersButNotBeyondSearchDepth() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let vendor = root.appendingPathComponent("Vendor")
+        let host = try makeApp(in: vendor, name: "Host", bundleID: "test.host")
+        let tool = try makeApp(in: host.appendingPathComponent("Contents/Applications"),
+                               name: "Instruments", bundleID: "test.instruments")
+        let deep = try makeApp(in: vendor.appendingPathComponent("Deep"),
+                               name: "Deep Host", bundleID: "test.deephost")
+        let deepTool = try makeApp(in: deep.appendingPathComponent("Contents/Applications"),
+                                   name: "Deep Tool", bundleID: "test.deeptool")
+
+        #expect(AppIndex.scan(directories: [root]).map(\.name) == ["Host", "Instruments"])
+        #expect(AppIndex.includesApplication(at: tool, directories: [root]))
+        #expect(!AppIndex.includesApplication(at: deepTool, directories: [root]))
+    }
+
+    @Test func overlappingRootsDoNotDuplicateEmbeddedApps() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let host = try makeApp(in: root, name: "Host", bundleID: "test.host")
+        let applications = host.appendingPathComponent("Contents/Applications", isDirectory: true)
+        let tool = try makeApp(in: applications, name: "Device Hub", bundleID: "test.devices")
+
+        for directories in [[root, applications], [applications, root]] {
+            #expect(AppIndex.scan(directories: directories).map(\.name) == ["Device Hub", "Host"])
+        }
+        // Removing the host's root retains a tool covered by an explicit root.
+        #expect(AppIndex.scan(directories: [applications]).map(\.name) == ["Device Hub"])
+        #expect(AppIndex.includesApplication(at: tool, directories: [applications]))
+        #expect(!AppIndex.includesApplication(at: host, directories: [applications]))
     }
 
     @Test func finderVisibleNameWinsOverInternalBundleName() throws {

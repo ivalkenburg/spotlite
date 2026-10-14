@@ -1,6 +1,6 @@
 import Foundation
 
-/// Scans well-known application directories. Depth 2, never inside `Contents/`.
+/// Scans application directories to depth 2, plus direct apps in each bundle's `Contents/Applications`.
 public enum AppIndex {
 
     public static var searchDirectories: [URL] {
@@ -24,9 +24,21 @@ public enum AppIndex {
         }
     }
 
-    /// The same depth-2 rule as a scan, used to drop removed roots without blanking the list.
+    /// The same discovery rules as a scan, used to drop removed roots without blanking the list.
     public static func includesApplication(at url: URL, directories: [URL]) -> Bool {
-        let parent = url.standardizedFileURL.deletingLastPathComponent()
+        let app = url.standardizedFileURL
+        if isAtSearchDepth(app, directories: directories) { return true }
+
+        let applications = app.deletingLastPathComponent()
+        let contents = applications.deletingLastPathComponent()
+        let host = contents.deletingLastPathComponent()
+        guard applications.lastPathComponent == "Applications",
+              contents.lastPathComponent == "Contents", host.pathExtension == "app" else { return false }
+        return isAtSearchDepth(host, directories: directories)
+    }
+
+    private static func isAtSearchDepth(_ url: URL, directories: [URL]) -> Bool {
+        let parent = url.deletingLastPathComponent()
         let grandparent = parent.deletingLastPathComponent()
         return directories.contains(parent) || directories.contains(grandparent)
     }
@@ -79,11 +91,16 @@ public enum AppIndex {
         var results: [AppEntry] = []
 
         for dir in directories {
-            for url in bundles(in: dir, depth: 2) {
-                let path = url.standardizedFileURL.path
-                guard !seen.contains(path), let entry = makeEntry(for: url) else { continue }
-                seen.insert(path)
-                results.append(entry)
+            for host in bundles(in: dir, depth: 2) {
+                // Developer tools such as Device Hub live here. Inspect only direct
+                // children: arbitrary bundle traversal would expose internal helpers.
+                let applications = host.appendingPathComponent("Contents/Applications", isDirectory: true)
+                for url in [host] + bundles(in: applications, depth: 1) {
+                    let path = url.standardizedFileURL.path
+                    guard !seen.contains(path), let entry = makeEntry(for: url) else { continue }
+                    seen.insert(path)
+                    results.append(entry)
+                }
             }
         }
         return results
