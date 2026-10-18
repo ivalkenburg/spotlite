@@ -5,9 +5,9 @@ struct ToastMessage: Equatable {
     let text: String
     let symbol: String
 
-    static func copied(_ label: String, succeeded: Bool) -> ToastMessage {
+    static func copied(succeeded: Bool) -> ToastMessage {
         succeeded
-            ? ToastMessage(text: "\(label) copied", symbol: "doc.on.clipboard")
+            ? ToastMessage(text: "Copied to clipboard", symbol: "doc.on.clipboard")
             : ToastMessage(text: "Couldn’t copy to clipboard", symbol: "exclamationmark.triangle")
     }
 
@@ -77,11 +77,11 @@ final class ToastPresenter {
         }
     }
 
-    func copy(_ value: String, label: String, position: ToastPosition, on screen: NSScreen?,
+    func copy(_ value: String, position: ToastPosition, on screen: NSScreen?,
               to pasteboard: NSPasteboard = .general) {
         pasteboard.clearContents()
         let succeeded = pasteboard.setString(value, forType: .string)
-        show(.copied(label, succeeded: succeeded), position: position, on: screen)
+        show(.copied(succeeded: succeeded), position: position, on: screen)
     }
 
     /// Called only by explicit controls, never by the background assertion refresh.
@@ -243,7 +243,7 @@ extension ToastPresenter {
 
         for display in NSScreen.screens {
             for position in ToastPosition.allCases {
-                show(.copied("UUID", succeeded: true), position: position, on: display)
+                show(.copied(succeeded: true), position: position, on: display)
                 let window = panel!
                 let content = window.contentView as! ToastView
                 try check(display.visibleFrame.contains(window.frame), "Toast escaped display")
@@ -270,7 +270,7 @@ extension ToastPresenter {
                   "Enable failure was reported as success")
         try check(ToastMessage.caffeine(succeeded: false, state: CaffeineState(spotlite: true)).text == "Couldn’t disable Caffeinate",
                   "Disable failure was reported as success")
-        try check(ToastMessage.copied("UUID", succeeded: false).text == "Couldn’t copy to clipboard",
+        try check(ToastMessage.copied(succeeded: false).text == "Couldn’t copy to clipboard",
                   "Clipboard failure was reported as success")
         let originalState = caffeine.state.spotlite
         defer { if caffeine.state.spotlite != originalState { caffeine.toggle() } }
@@ -286,8 +286,8 @@ extension ToastPresenter {
 
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
-        copy("private clipboard fixture", label: "UUID", position: .bottomCenter, on: screen, to: pasteboard)
-        checkDevMessage("UUID copied")
+        copy("private clipboard fixture", position: .bottomCenter, on: screen, to: pasteboard)
+        checkDevMessage("Copied to clipboard")
         try check(pasteboard.string(forType: .string) == "private clipboard fixture",
                   "Clipboard contents changed")
 
@@ -331,18 +331,18 @@ extension ToastPresenter {
         show(.visibility("Fixture", hidden: true), position: .bottomCenter, on: screen)
         let reusedWindow = panel
         try await Task.sleep(for: .milliseconds(1200))
-        show(.copied("UUID", succeeded: true), position: .topRight, on: screen)
+        show(.copied(succeeded: true), position: .topRight, on: screen)
         try check(panel === reusedWindow, "Messages stacked instead of replacing")
         try await Task.sleep(for: .milliseconds(1100))
-        checkDevMessage("UUID copied")
+        checkDevMessage("Copied to clipboard")
         try await Task.sleep(for: .milliseconds(1200))
         try check(panel == nil && dismissal == nil, "Toast did not dismiss and release its resources")
 
-        show(.copied("UUID", succeeded: true), position: .bottomCenter, on: screen)
+        show(.copied(succeeded: true), position: .bottomCenter, on: screen)
         try await Task.sleep(for: .milliseconds(2040))
-        show(.copied("UUID", succeeded: true), position: .bottomCenter, on: screen)
+        show(.copied(succeeded: true), position: .bottomCenter, on: screen)
         try await Task.sleep(for: .milliseconds(250))
-        checkDevMessage("UUID copied")
+        checkDevMessage("Copied to clipboard")
         let layer = panel!.contentView!.layer!
         let opacity = layer.presentation()?.opacity ?? layer.opacity
         try check(opacity > 0.99, "A stale fade dimmed the replacement: opacity=\(opacity)")

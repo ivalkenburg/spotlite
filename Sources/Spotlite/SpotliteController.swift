@@ -694,11 +694,11 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         switch items[index] {
         case .calculation(_, let value):
             let text = Calculator.format(value)
-            toasts.copy(text, label: "Result", position: preferences.toastPosition, on: panel.screen)
+            toasts.copy(text, position: preferences.toastPosition, on: panel.screen)
             hide()
 
         case .conversion(_, let result):
-            toasts.copy(result, label: "Result", position: preferences.toastPosition, on: panel.screen)
+            toasts.copy(result, position: preferences.toastPosition, on: panel.screen)
             hide()
 
         case .generateUUID:
@@ -718,7 +718,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                 case .toggleCaffeinate:
                     toasts.toggleCaffeinate(caffeine, position: preferences.toastPosition, on: panel.screen)
                 case .generateUUID(let version):
-                    toasts.copy(UUIDGenerator.generate(version), label: "UUID",
+                    toasts.copy(UUIDGenerator.generate(version),
                                 position: preferences.toastPosition, on: panel.screen)
                 }
             } else if let submenu = item.submenu {
@@ -914,7 +914,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             url = match.entry.url
         }
         toasts.copy(url.isFileURL ? url.path : url.absoluteString,
-                    label: url.isFileURL ? "Path" : "URL",
                     position: preferences.toastPosition, on: panel.screen)
         hide()
     }
@@ -1231,9 +1230,9 @@ extension SpotliteController {
             }
             launch(at: 0)
             try checkUtility(pasteboard.string(forType: .string) == expected && isDismissing)
-            toasts.checkDevMessage("Result copied")
+            toasts.checkDevMessage("Copied to clipboard")
             try? await Task.sleep(for: .milliseconds(300))
-            toasts.checkDevMessage("Result copied")
+            toasts.checkDevMessage("Copied to clipboard")
         }
         for version in UUIDVersion.allCases {
             show()
@@ -1257,7 +1256,7 @@ extension SpotliteController {
             let parsed = UUID(uuidString: generated)!
             try checkUtility(parsed.uuid.6 >> 4 == (version == .v4 ? 4 : 7))
             try checkUtility(generated == generated.lowercased() && isDismissing)
-            toasts.checkDevMessage("UUID copied")
+            toasts.checkDevMessage("Copied to clipboard")
             try? await Task.sleep(for: .milliseconds(300))
         }
         try runDevSettingsChecks()
