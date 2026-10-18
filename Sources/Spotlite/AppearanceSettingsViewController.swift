@@ -106,6 +106,7 @@ final class AppearanceSettingsViewController: SettingsPaneController {
         let positions = ToastPosition.allCases
         guard positions.indices.contains(sender.indexOfSelectedItem) else { return }
         model.set(\.toastPosition, positions[sender.indexOfSelectedItem])
+        model.onToast?(ToastMessage(text: "Messages will appear here", symbol: "bubble.left"))
     }
 
     /// The way back from a panel dragged somewhere unusable. Without it the only
