@@ -38,6 +38,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// per keystroke.
     private var corpus = SearchCorpus.empty
     private let caffeine: CaffeineAssertion
+    private let toasts: ToastPresenter
     private var cursor = 0
     /// Bundle paths of running apps, taken when the panel opens rather than per row
     /// render. The panel lives for seconds, so launches while it is open don't matter.
@@ -86,10 +87,11 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// Called when the user picks the Settings entry, or hides an app.
     var onOpenSettings: (() -> Void)?
     var onPreferencesChanged: ((Preferences) -> Void)?
-    init(library: AppLibrary, caffeine: CaffeineAssertion, preferences: Preferences) {
+    init(library: AppLibrary, caffeine: CaffeineAssertion, preferences: Preferences, toasts: ToastPresenter) {
         self.library = library
         self.caffeine = caffeine
         self.preferences = preferences
+        self.toasts = toasts
         super.init()
         placement = PanelPlacement(panel: panel) { [unowned self] in self.preferences }
         buildUI()
@@ -692,13 +694,11 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         switch items[index] {
         case .calculation(_, let value):
             let text = Calculator.format(value)
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
+            toasts.copy(text, label: "Result", position: preferences.toastPosition, on: panel.screen)
             hide()
 
         case .conversion(_, let result):
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(result, forType: .string)
+            toasts.copy(result, label: "Result", position: preferences.toastPosition, on: panel.screen)
             hide()
 
         case .generateUUID:
@@ -715,10 +715,11 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             if let action = item.action {
                 if item.closesPanelOnAction { hide() }
                 switch action {
-                case .toggleCaffeinate: caffeine.toggle()
+                case .toggleCaffeinate:
+                    toasts.toggleCaffeinate(caffeine, position: preferences.toastPosition, on: panel.screen)
                 case .generateUUID(let version):
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(UUIDGenerator.generate(version), forType: .string)
+                    toasts.copy(UUIDGenerator.generate(version), label: "UUID",
+                                position: preferences.toastPosition, on: panel.screen)
                 }
             } else if let submenu = item.submenu {
                 enterScope(.menu(submenu))
@@ -912,8 +913,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             guard let match = appUnderCursor(allowingLinks: true) else { return }
             url = match.entry.url
         }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(url.isFileURL ? url.path : url.absoluteString, forType: .string)
+        toasts.copy(url.isFileURL ? url.path : url.absoluteString,
+                    label: url.isFileURL ? "Path" : "URL",
+                    position: preferences.toastPosition, on: panel.screen)
         hide()
     }
 
@@ -948,11 +950,14 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         Storage.save(preferences)
         onPreferencesChanged?(preferences)
         updateMatches(for: field.stringValue)
+        toasts.show(.visibility(match.entry.name, hidden: true),
+                    position: preferences.toastPosition, on: panel.screen)
     }
 
     /// Consume Command-Z only while hides remain newer than the last query edit.
     private func undoHide() -> Bool {
         guard let bundleID = hideUndo.pop(hiddenBundleIDs: preferences.hiddenBundleIDs) else { return false }
+        let name = library.entries.first { $0.bundleID == bundleID }?.name ?? bundleID
         preferences.hiddenBundleIDs.remove(bundleID)
         Storage.save(preferences)
         onPreferencesChanged?(preferences)
@@ -963,6 +968,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         }) {
             select(row, as: .navigated)
         }
+        toasts.show(.visibility(name, hidden: false), position: preferences.toastPosition, on: panel.screen)
         return true
     }
 
@@ -1225,7 +1231,9 @@ extension SpotliteController {
             }
             launch(at: 0)
             try checkUtility(pasteboard.string(forType: .string) == expected && isDismissing)
+            toasts.checkDevMessage("Result copied")
             try? await Task.sleep(for: .milliseconds(300))
+            toasts.checkDevMessage("Result copied")
         }
         for version in UUIDVersion.allCases {
             show()
@@ -1249,6 +1257,7 @@ extension SpotliteController {
             let parsed = UUID(uuidString: generated)!
             try checkUtility(parsed.uuid.6 >> 4 == (version == .v4 ? 4 : 7))
             try checkUtility(generated == generated.lowercased() && isDismissing)
+            toasts.checkDevMessage("UUID copied")
             try? await Task.sleep(for: .milliseconds(300))
         }
         try runDevSettingsChecks()

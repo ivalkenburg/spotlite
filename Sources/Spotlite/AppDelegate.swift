@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// lazily-created controller lets the status items reflect caffeine without paying
     /// the cost of constructing the panel and its views at launch.
     private let caffeine = CaffeineAssertion()
+    private let toasts = ToastPresenter()
     private var libraryInstance: AppLibrary?
     /// Opening Settings needs the index, but an idle agent need not load launch history
     /// or start the directory watcher before either Settings or search is used.
@@ -31,7 +32,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var controller: SpotliteController {
         if let controllerInstance { return controllerInstance }
 
-        let controller = SpotliteController(library: library, caffeine: caffeine, preferences: preferences)
+        let controller = SpotliteController(library: library, caffeine: caffeine,
+                                            preferences: preferences, toasts: toasts)
         controller.onOpenSettings = { [weak self] in self?.openSettings() }
         controller.onPreferencesChanged = { [weak self] prefs in
             self?.adoptPreferences(prefs) { self?.settings?.preferencesDidChange($0) }
@@ -113,10 +115,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 exit(0)
             }
         }
+        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_TOAST"] == "1" {
+            Task { @MainActor in
+                let previousController = self.controllerInstance
+                let previousLibrary = self.libraryInstance
+                do {
+                    try await self.toasts.runDevChecks(caffeine: self.caffeine)
+                    precondition(self.controllerInstance === previousController)
+                    precondition(self.libraryInstance === previousLibrary)
+                    print("DEV toast: launcher and library remained lazy")
+                    exit(0)
+                } catch {
+                    print("DEV toast failed: \(error)")
+                    exit(1)
+                }
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         stopCaffeineRefreshTimer()
+        toasts.dismiss()
     }
 
     /// Launching the app again while it is already running opens Settings. This is the
@@ -267,7 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func turnOffCaffeine() {
         guard caffeine.state.spotlite else { return }
-        caffeine.toggle()
+        toasts.toggleCaffeinate(caffeine, position: preferences.toastPosition)
     }
 
     @objc private func openSettingsMenuItem() { openSettings() }
@@ -284,6 +303,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             controller.onHotKeyChange = { [weak self] code, modifiers in
                 self?.rebindHotKey(code: code, modifiers: modifiers) ?? false
+            }
+            controller.onToast = { [weak self] message in
+                guard let self else { return }
+                self.toasts.show(message, position: self.preferences.toastPosition)
             }
             settings = controller
         }

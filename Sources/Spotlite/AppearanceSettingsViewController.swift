@@ -52,6 +52,12 @@ final class AppearanceSettingsViewController: SettingsPaneController {
         screenPicker.target = self
         screenPicker.action = #selector(screenChoiceChanged)
 
+        let toastPicker = NSPopUpButton()
+        toastPicker.addItems(withTitles: ToastPosition.allCases.map(\.title))
+        toastPicker.selectItem(at: ToastPosition.allCases.firstIndex(of: prefs.toastPosition) ?? 4)
+        toastPicker.target = self
+        toastPicker.action = #selector(toastPositionChanged)
+
         let resetButton = NSButton(title: "Reset Size & Position", target: self,
                                    action: #selector(resetGeometry))
         resetButton.bezelStyle = .rounded
@@ -64,6 +70,7 @@ final class AppearanceSettingsViewController: SettingsPaneController {
             ("Rows shown:", rowsPicker),
             ("Open on:", screenPicker),
             ("Panel:", resetButton),
+            ("Message position:", toastPicker),
         ])
         view = SettingsForm.page(grid)
     }
@@ -93,6 +100,12 @@ final class AppearanceSettingsViewController: SettingsPaneController {
 
     @objc private func screenChoiceChanged(_ sender: NSPopUpButton) {
         model.set(\.panelScreen, sender.indexOfSelectedItem == 1 ? .primary : .followPointer)
+    }
+
+    @objc private func toastPositionChanged(_ sender: NSPopUpButton) {
+        let positions = ToastPosition.allCases
+        guard positions.indices.contains(sender.indexOfSelectedItem) else { return }
+        model.set(\.toastPosition, positions[sender.indexOfSelectedItem])
     }
 
     /// The way back from a panel dragged somewhere unusable. Without it the only

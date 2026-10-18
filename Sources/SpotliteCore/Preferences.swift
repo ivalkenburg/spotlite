@@ -32,7 +32,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         case hotKeyCode, hotKeyModifiers, showMenuBarIcon, hasCompletedFirstRun
         case queryRetention, backNavigationBehavior, showSystemSettings
         case showSystemCommands, showRecentApps, showRunningIndicator, showWebSearch, webSearchEngine, links
-        case visibleRows, applicationDirectories, appNameCompletion, hiddenUtilities
+        case visibleRows, applicationDirectories, appNameCompletion, hiddenUtilities, toastPosition
     }
 
     /// Ordered search roots. Empty means no application locations; panes remain independent.
@@ -44,6 +44,7 @@ public struct Preferences: Codable, Sendable, Equatable {
     /// Bundle ID to a short name the user types instead, e.g. "ps" for Photoshop.
     public var aliases: [String: String]
     public var panelScreen: PanelScreen
+    public var toastPosition: ToastPosition
     /// Width and vertical position, adjusted by dragging the panel's edges and header.
     public var panelGeometry: PanelGeometry
     public var themeMode: ThemeMode
@@ -107,6 +108,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         hiddenBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .hiddenBundleIDs) ?? []
         aliases = try c.decodeIfPresent([String: String].self, forKey: .aliases) ?? [:]
         panelScreen = try c.decodeIfPresent(PanelScreen.self, forKey: .panelScreen) ?? .followPointer
+        toastPosition = (try? c.decodeIfPresent(ToastPosition.self, forKey: .toastPosition)) ?? .bottomCenter
         panelGeometry = try c.decodeIfPresent(PanelGeometry.self, forKey: .panelGeometry) ?? .default
         // Only an untouched panel moves: a width or position the user dragged to on
         // purpose is kept.
@@ -144,6 +146,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         try c.encode(hiddenBundleIDs, forKey: .hiddenBundleIDs)
         try c.encode(aliases, forKey: .aliases)
         try c.encode(panelScreen, forKey: .panelScreen)
+        try c.encode(toastPosition, forKey: .toastPosition)
         try c.encode(panelGeometry, forKey: .panelGeometry)
         try c.encode(themeMode, forKey: .themeMode)
         try c.encode(glassTint, forKey: .glassTint)
@@ -170,6 +173,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         hiddenUtilities: Set<SearchUtility> = [],
         aliases: [String: String] = [:],
         panelScreen: PanelScreen = .followPointer,
+        toastPosition: ToastPosition = .bottomCenter,
         panelGeometry: PanelGeometry = .default,
         themeMode: ThemeMode = .system,
         glassTint: Double = 0,
@@ -194,6 +198,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         self.hiddenUtilities = hiddenUtilities
         self.aliases = aliases
         self.panelScreen = panelScreen
+        self.toastPosition = toastPosition
         self.panelGeometry = panelGeometry
         self.themeMode = themeMode
         self.glassTint = Preferences.clampedTint(glassTint)

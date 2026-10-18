@@ -284,6 +284,7 @@ final class ItemsSettingsViewController: SettingsPaneController, NSTableViewData
                 else { self.model.preferences.hiddenUtilities.remove(utility) }
                 self.model.persist()
                 self.table.reloadData()
+                self.model.onToast?(.visibility(utility.name, hidden: hidden))
             }
             view.configure(with: utility, hidden: model.preferences.hiddenUtilities.contains(utility),
                            showsKind: kindPicker.selectedSegment == 0)
@@ -296,6 +297,7 @@ final class ItemsSettingsViewController: SettingsPaneController, NSTableViewData
             else { self.model.preferences.hiddenBundleIDs.remove(id) }
             self.model.persist()
             self.table.reloadData()
+            self.model.onToast?(.visibility(entry.name, hidden: hidden))
         }
         view.onAliasEdited = { [weak self] entry, alias in
             self?.model.aliasWarning(for: alias, excluding: entry.id)

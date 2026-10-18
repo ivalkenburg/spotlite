@@ -11,6 +11,7 @@ final class SettingsModel {
 
     var onChange: ((Preferences) -> Void)?
     var onHotKeyChange: ((UInt32, UInt32) -> Bool)?
+    var onToast: ((ToastMessage) -> Void)?
 
     init(preferences: Preferences, library: AppLibrary,
          savePreferences: @escaping (Preferences) -> Void = { Storage.save($0) }) {

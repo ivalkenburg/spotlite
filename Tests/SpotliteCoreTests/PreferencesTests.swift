@@ -19,6 +19,7 @@ struct PreferencesTests {
         prefs.hiddenBundleIDs = ["com.example.one", "com.example.two"]
         prefs.aliases = ["com.adobe.Photoshop": "ps"]
         prefs.panelScreen = .primary
+        prefs.toastPosition = .topRight
         prefs.themeMode = .dark
         prefs.glassTint = 0.4
         prefs.showMenuBarIcon = false
@@ -51,6 +52,7 @@ struct PreferencesTests {
         #expect(decoded.hasCompletedFirstRun)
         #expect(decoded.aliases.isEmpty)
         #expect(decoded.panelScreen == .followPointer)
+        #expect(decoded.toastPosition == .bottomCenter)
         #expect(decoded.themeMode == .system)
         #expect(decoded.glassTint == 0)
         #expect(decoded.queryRetention == 0)
@@ -88,6 +90,13 @@ struct PreferencesTests {
         let data = Data(#"{"webSearchEngine":"kagi","showMenuBarIcon":false}"#.utf8)
         let decoded = try JSONDecoder().decode(Preferences.self, from: data)
         #expect(decoded.webSearchEngine == .duckDuckGo)
+        #expect(!decoded.showMenuBarIcon)
+    }
+
+    @Test func unknownToastPositionPreservesOtherPreferences() throws {
+        let data = Data(#"{"toastPosition":"futurePosition","showMenuBarIcon":false}"#.utf8)
+        let decoded = try JSONDecoder().decode(Preferences.self, from: data)
+        #expect(decoded.toastPosition == .bottomCenter)
         #expect(!decoded.showMenuBarIcon)
     }
 

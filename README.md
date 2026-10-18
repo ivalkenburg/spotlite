@@ -56,6 +56,9 @@ make install
 This builds the app and copies it to `/Applications`. "Start at login" only
 works from there.
 
+After building, run `SPOTLITE_DEV_TOAST=1 build/Spotlite.app/Contents/MacOS/Spotlite`
+to check toast layout, replacement, dismissal and the placement control.
+
 ## Usage
 
 | Key | Action |
@@ -76,6 +79,10 @@ Open Settings from the menu bar icon, or search for `settings` in Spotlite.
 Drag the panel's edges to resize it, or drag an empty part of the search bar to
 move it up or down. Spotlite respects the macOS Reduce Motion setting by skipping
 panel scaling and animated resizing.
+
+Spotlite briefly confirms result copies, Caffeinate toggles, and hiding or restoring
+items with a translucent message. Messages default to the bottom center of the
+screen; choose another position in Settings → Appearance → Message position.
 
 ## Permissions
 

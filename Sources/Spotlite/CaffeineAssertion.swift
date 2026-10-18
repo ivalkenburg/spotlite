@@ -26,8 +26,11 @@ final class CaffeineAssertion {
 
     /// Turns Spotlite's own assertion on or off. A failed create leaves it off, so the
     /// row never shows a switch claiming the display is being held awake when it isn't.
-    func toggle() {
+    @discardableResult
+    func toggle() -> Bool {
+        let previous = state.spotlite
         if state.spotlite { release() } else { acquire() }
+        return state.spotlite != previous
     }
 
     /// Refreshes assertions owned by other processes. This is intentionally called only

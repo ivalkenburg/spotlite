@@ -52,6 +52,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
         set { model.onHotKeyChange = newValue }
     }
 
+    var onToast: ((ToastMessage) -> Void)? {
+        get { model.onToast }
+        set { model.onToast = newValue }
+    }
+
     init(preferences: Preferences, library: AppLibrary) {
         model = SettingsModel(preferences: preferences, library: library)
         general = GeneralSettingsViewController(model: model)
