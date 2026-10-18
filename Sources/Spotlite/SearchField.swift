@@ -7,6 +7,7 @@ final class SearchField: NSTextField {
     var onCommandDigit: ((Int) -> Void)?
     var onCommandReturn: (() -> Void)?
     var onCommandQ: (() -> Void)?
+    var onUndoHide: (() -> Bool)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -50,6 +51,7 @@ final class SearchField: NSTextField {
             onCommandQ?()
             return true
         }
+        if chars == "z", onUndoHide?() == true { return true }
         if let action = SearchField.editingActions[chars], currentEditor() != nil {
             return NSApp.sendAction(action, to: nil, from: self)
         }

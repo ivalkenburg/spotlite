@@ -59,6 +59,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private var lastQuery = ""
     /// The query at the last close, offered back on a quick reopen.
     private var queryMemory = QueryMemory()
+    private var hideUndo = HideUndoHistory()
     /// The calculator's `ans`: the result on screen when the panel last closed.
     private var previousResult: Double?
     /// Modifiers currently held, which swap the selected row's detail for action hints.
@@ -128,6 +129,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         field.onCommandDigit = { [weak self] index in self?.launch(at: index) }
         field.onCommandReturn = { [weak self] in self?.revealInFinder() }
         field.onCommandQ = { [weak self] in self?.quitApp() }
+        field.onUndoHide = { [weak self] in self?.undoHide() ?? false }
 
         divider.isHidden = true
 
@@ -287,6 +289,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     func show() {
+        hideUndo.clear()
         isDismissing = false
         modifiers = NSEvent.modifierFlags
         applyResolvedAppearance()
@@ -404,6 +407,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     private func finishHide() {
+        hideUndo.clear()
         panel.orderOut(nil)
         glass.layer?.removeAnimation(forKey: "hide")
         resetNavigation()
@@ -441,6 +445,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     // MARK: - Query
 
     func controlTextDidChange(_ obj: Notification) {
+        hideUndo.clear()
         let query = field.stringValue
         // Typing brings the completion back. Deleting after Backspace dismissed it does
         // not, so a run of Backspaces keeps the bare query, as in Spotlight.
@@ -801,6 +806,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     private func setQuery(_ query: String) {
+        hideUndo.clear()
         field.stringValue = query
         lastQuery = query
         field.currentEditor()?.selectedRange = NSRange(location: (query as NSString).length, length: 0)
@@ -932,10 +938,27 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         guard items.indices.contains(cursor), case .app(let match) = items[cursor],
               let bundleID = match.entry.bundleID else { return }
 
-        preferences.hiddenBundleIDs.insert(bundleID)
+        guard preferences.hiddenBundleIDs.insert(bundleID).inserted else { return }
+        hideUndo.record(bundleID)
         Storage.save(preferences)
         onPreferencesChanged?(preferences)
         updateMatches(for: field.stringValue)
+    }
+
+    /// Consume Command-Z only while hides remain newer than the last query edit.
+    private func undoHide() -> Bool {
+        guard let bundleID = hideUndo.pop(hiddenBundleIDs: preferences.hiddenBundleIDs) else { return false }
+        preferences.hiddenBundleIDs.remove(bundleID)
+        Storage.save(preferences)
+        onPreferencesChanged?(preferences)
+        updateMatches(for: field.stringValue)
+        if let row = items.firstIndex(where: {
+            if case .app(let match) = $0 { return match.entry.bundleID == bundleID }
+            return false
+        }) {
+            select(row, as: .navigated)
+        }
+        return true
     }
 
     /// Re-reads preferences after the Settings window changes them, so hiding or
@@ -1007,8 +1030,36 @@ extension SpotliteController {
         view.subviews.flatMap { [$0] + devDescendants(of: $0) }
     }
 
+    /// Check key-equivalent routing without changing preferences or the live editor.
+    private func runDevUndoShortcutChecks() {
+        let search = SearchField(frame: .zero)
+        var pendingHide = true
+        var attempts = 0
+        search.onUndoHide = {
+            attempts += 1
+            return pendingHide
+        }
+        func undoEvent(_ modifiers: NSEvent.ModifierFlags) -> NSEvent {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                             timestamp: 0, windowNumber: 0, context: nil,
+                             characters: "z", charactersIgnoringModifiers: "z",
+                             isARepeat: false, keyCode: 6)!
+        }
+        precondition(search.performKeyEquivalent(with: undoEvent(.command)))
+        precondition(attempts == 1)
+        pendingHide = false
+        // No editor in this fixture: an unconsumed undo must fall through.
+        precondition(!search.performKeyEquivalent(with: undoEvent(.command)))
+        precondition(attempts == 2)
+        _ = search.performKeyEquivalent(with: undoEvent([.command, .shift]))
+        _ = search.performKeyEquivalent(with: undoEvent([.command, .option]))
+        precondition(attempts == 2)
+        print("DEV undo: Command-Z dispatch, fallback and modifier filtering passed")
+    }
+
     /// Exercise completion visibility and real field-editor deletion without saving preferences.
     func runDevCompletionChecks() async {
+        runDevUndoShortcutChecks()
         let savedPreferences = preferences
         defer { preferencesDidChange(savedPreferences) }
         show()

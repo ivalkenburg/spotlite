@@ -69,6 +69,7 @@ works from there.
 | `Option-Return` | Copy the selected app's path or link's address |
 | `Command-Q` | Quit the selected app if it is running |
 | `Command-Delete` | Hide the selected app from results |
+| `Command-Z` | Undo hiding an app, before editing the query or closing the panel |
 | `Escape` | Close |
 
 Open Settings from the menu bar icon, or search for `settings` in Spotlite.
