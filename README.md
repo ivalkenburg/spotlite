@@ -74,7 +74,8 @@ works from there.
 
 Open Settings from the menu bar icon, or search for `settings` in Spotlite.
 Drag the panel's edges to resize it, or drag an empty part of the search bar to
-move it up or down.
+move it up or down. Spotlite respects the macOS Reduce Motion setting by skipping
+panel scaling and animated resizing.
 
 ## Permissions
 

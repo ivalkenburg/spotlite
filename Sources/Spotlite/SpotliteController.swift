@@ -340,6 +340,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             panel.animator().alphaValue = 1
         }
         glass.layer?.removeAnimation(forKey: "hide")
+        glass.layer?.removeAnimation(forKey: "show")
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
         let settle = scaleAnimation(from: Metrics.showStartScale, to: 1,
                                     duration: Metrics.showScaleDuration)
         glass.layer?.add(settle, forKey: "show")
@@ -387,11 +389,13 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         // already see this query.
         queryMemory.remember(navigation.rootQuery ?? field.stringValue)
         if case .calculation(_, let value) = items.first { previousResult = value }
-        // Holds the shrunk transform until the window is ordered out; removed on show.
-        let shrink = scaleAnimation(from: 1, to: Metrics.hideEndScale, duration: Metrics.hideDuration)
-        shrink.fillMode = .forwards
-        shrink.isRemovedOnCompletion = false
-        glass.layer?.add(shrink, forKey: "hide")
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            // Holds the shrunk transform until the window is ordered out; removed on show.
+            let shrink = scaleAnimation(from: 1, to: Metrics.hideEndScale, duration: Metrics.hideDuration)
+            shrink.fillMode = .forwards
+            shrink.isRemovedOnCompletion = false
+            glass.layer?.add(shrink, forKey: "hide")
+        }
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = Metrics.hideDuration
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
@@ -557,7 +561,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// shrinking empty panel only delays the next keystroke's feedback.
     private func resizeGlass(to target: CGFloat, animated: Bool) {
         let collapsing = target == Metrics.inputHeight
-        guard animated, !collapsing, panel.isVisible, !isDismissing, !placement.isDragging else {
+        guard animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              !collapsing, panel.isVisible, !isDismissing, !placement.isDragging else {
             // Cancel even when the current height already equals the target: an older
             // grow animation may still be waiting to run after a quick navigation.
             animator.cancel()
