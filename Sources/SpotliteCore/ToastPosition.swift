@@ -22,7 +22,7 @@ public enum ToastPosition: String, Codable, Sendable, CaseIterable {
         let width = min(max(0, size.width), visibleFrame.width)
         let height = min(max(0, size.height), visibleFrame.height)
         let insetX = min(48, (visibleFrame.width - width) / 2)
-        let insetY = min(48, (visibleFrame.height - height) / 2)
+        let insetY = min(self == .bottomCenter ? 160 : 48, (visibleFrame.height - height) / 2)
         let x: CGFloat
         switch self {
         case .topLeft, .bottomLeft: x = visibleFrame.minX + insetX

@@ -13,7 +13,7 @@ struct ToastPositionTests {
             (.topCenter, CGPoint(x: -1110, y: 723)),
             (.topRight, CGPoint(x: -348, y: 723)),
             (.bottomLeft, CGPoint(x: -1872, y: -192)),
-            (.bottomCenter, CGPoint(x: -1110, y: -192)),
+            (.bottomCenter, CGPoint(x: -1110, y: -80)),
             (.bottomRight, CGPoint(x: -348, y: -192)),
         ]
         for (position, origin) in expected {
