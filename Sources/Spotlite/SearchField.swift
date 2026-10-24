@@ -8,6 +8,7 @@ final class SearchField: NSTextField {
     var onCommandReturn: (() -> Void)?
     var onCommandQ: (() -> Void)?
     var onUndoHide: (() -> Bool)?
+    var onPluginShortcut: ((NSEvent) -> Bool)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -34,6 +35,7 @@ final class SearchField: NSTextField {
     ]
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if onPluginShortcut?(event) == true { return true }
         // Only the user-facing modifiers: keypad Enter also carries .numericPad.
         guard event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command
         else { return super.performKeyEquivalent(with: event) }

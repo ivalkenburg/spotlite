@@ -11,19 +11,22 @@ enum ResultItem {
     case conversion(expression: String, result: String)
     case generateUUID
     case settings
-    case caffeinate(state: CaffeineState)
-    case menuItem(SearchMenuItem, state: CaffeineState)
+    case menuItem(SearchMenuItem)
     case webSearch(query: String, engine: WebSearchEngine)
+    case pluginCommand(PluginCommandReference)
+    case pluginResult(PluginCommandReference, PluginResult)
+    case pluginAction(PluginCommandReference, PluginResult?, PluginAction)
+    case pluginNotice(title: String, message: String, symbol: String)
 
-    init(_ result: SearchResult, caffeine: CaffeineState) {
+    init(_ result: SearchResult) {
         switch result {
         case .app(let match): self = .app(match)
         case .calculation(let expression, let value): self = .calculation(expression: expression, value: value)
         case .conversion(let expression, let result): self = .conversion(expression: expression, result: result)
         case .generateUUID: self = .generateUUID
         case .settings: self = .settings
-        case .caffeinate: self = .caffeinate(state: caffeine)
         case .webSearch(let query, let engine): self = .webSearch(query: query, engine: engine)
+        case .pluginCommand(let reference): self = .pluginCommand(reference)
         }
     }
 
@@ -36,9 +39,12 @@ enum ResultItem {
         case .conversion: return "conversion"
         case .generateUUID: return "generateUUID"
         case .settings: return "settings"
-        case .caffeinate: return "caffeinate"
-        case .menuItem(let item, _): return item.id
+        case .menuItem(let item): return item.id
         case .webSearch: return "webSearch"
+        case .pluginCommand(let reference): return reference.id
+        case .pluginResult(let reference, let result): return reference.id + ":" + result.id
+        case .pluginAction(let reference, _, let action): return reference.id + ":action:" + action.id
+        case .pluginNotice: return "pluginNotice"
         }
     }
 
@@ -49,9 +55,22 @@ enum ResultItem {
         case .conversion(_, let result): return result
         case .generateUUID: return "Generate UUID"
         case .settings: return "Spotlite Settings"
-        case .caffeinate: return "Caffeinate"
-        case .menuItem(let item, _): return item.title
+        case .menuItem(let item): return item.title
         case .webSearch(let query, let engine): return "Search \(engine.name) for “\(query)”"
+        case .pluginCommand(let reference): return reference.command.title
+        case .pluginResult(_, let result): return result.title
+        case .pluginAction(_, _, let action): return action.title
+        case .pluginNotice(let title, _, _): return title
+        }
+    }
+
+    var subtitle: String? {
+        switch self {
+        case .pluginCommand(let reference):
+            reference.command.subtitle ?? (reference.command.title == reference.plugin.manifest.name ? nil : reference.plugin.manifest.name)
+        case .pluginResult(_, let result): result.subtitle
+        case .pluginNotice(_, let message, _): message
+        default: nil
         }
     }
 
@@ -70,21 +89,16 @@ enum ResultItem {
         }
     }
 
-    /// Rows that carry a switch. The switch is the state, so the row needs no words to
-    /// say whether it is on. For Caffeinate it is Spotlite's own assertion only: exactly
-    /// what Return toggles.
+    /// Optional state provided by a plugin result.
     var switchState: Bool? {
-        if case .menuItem(let item, let state) = self, item.action == .toggleCaffeinate {
-            return state.spotlite
-        }
+        if case .pluginResult(_, let result) = self { return result.state }
         return nil
     }
 
     var submenu: SearchMenu? {
         switch self {
-        case .caffeinate: return .caffeinate
         case .generateUUID: return .generateUUID
-        case .menuItem(let item, _): return item.submenu
+        case .menuItem(let item): return item.submenu
         default: return nil
         }
     }
@@ -92,8 +106,8 @@ enum ResultItem {
     /// The verb the completion pill names.
     private var action: String {
         switch self {
-        case .menuItem(let item, let state):
-            if item.action == .toggleCaffeinate { return state.spotlite ? "Turn Off" : "Turn On" }
+        case .pluginAction(_, _, let action): return action.title
+        case .menuItem(let item):
             if case .generateUUID = item.action { return "Copy" }
             return item.action == nil ? "Open" : "Run"
         case .app(let match) where match.entry.kind == .command: return "Run"
@@ -104,6 +118,7 @@ enum ResultItem {
     /// What the pill after the query says while this row is selected.
     func completion(for query: String, appNameCompletion: AppNameCompletion) -> String {
         switch self {
+        case .pluginNotice: return ""
         case .calculation(_, let value): return " = " + Calculator.format(value)
         case .conversion(_, let result): return " = " + result
         // The title repeats the query, so the pill names only the engine.
@@ -125,19 +140,17 @@ enum ResultItem {
     /// Holding a modifier swaps the path for what that modifier does, so the alternate
     /// actions are discoverable without a legend.
     ///
-    /// The Caffeinate toggle says when another process is also keeping the display
-    /// awake, since its switch shows only Spotlite's own assertion.
     /// `running` says whether the app has an instance to quit, from the panel's snapshot:
     /// asking NSWorkspace here would enumerate every process on each render while ⌘ is held.
     func hints(modifiers: NSEvent.ModifierFlags, running: Bool) -> [Hint] {
+        if case .pluginCommand = self { return [Hint(text: "Open", key: "⇥")] }
+        if case .pluginResult(_, let result) = self, (result.actions?.count ?? 0) > 1 {
+            return [Hint(text: "Actions", key: "⇥")]
+        }
         if submenu != nil {
             return [Hint(text: "Actions", key: "⇥")]
         }
-        if case .menuItem(let item, let state) = self,
-           item.action == .toggleCaffeinate, state.external {
-            return [Hint(text: "Also active in another app", key: nil)]
-        }
-        if case .menuItem(let item, _) = self, case .generateUUID = item.action {
+        if case .menuItem(let item) = self, case .generateUUID = item.action {
             return [Hint(text: "Copy UUID", key: "↩")]
         }
         guard case .app(let match) = self else { return [] }
@@ -197,6 +210,8 @@ enum ResultItem {
     /// Shortcuts for a `shortcuts:` link.
     var iconURL: URL? {
         switch self {
+        case .pluginCommand(let reference): return Self.pluginIconURL(reference.command.icon ?? reference.plugin.manifest.icon, reference: reference)
+        case .pluginResult(let reference, let result): return Self.pluginIconURL(result.icon ?? reference.command.icon, reference: reference)
         case .app(let match): return ResultItem.iconURL(for: match.entry)
         case .webSearch: return ResultItem.handler(for: ResultItem.webURL)
         default: return nil
@@ -216,6 +231,11 @@ enum ResultItem {
     /// The icon when it needs no loading: a fixed symbol, or an already-cached app icon.
     var immediateIcon: NSImage? {
         switch self {
+        case .pluginCommand(let reference):
+            return pluginIcon(reference.command.icon ?? reference.plugin.manifest.icon)
+        case .pluginResult(let reference, let result): return pluginIcon(result.icon ?? reference.command.icon)
+        case .pluginAction(_, _, let action): return Self.symbol(action.icon ?? "arrow.right")
+        case .pluginNotice(_, _, let symbol): return Self.symbol(symbol)
         case .app(let match) where match.entry.kind == .command:
             return ResultItem.commandIcon(match.entry)
         case .app:
@@ -226,14 +246,19 @@ enum ResultItem {
         case .calculation, .conversion: return ResultItem.calculatorIcon
         case .generateUUID: return ResultItem.symbol("number")
         case .settings: return ResultItem.settingsIcon
-        case .caffeinate(let state):
-            return state.spotlite ? ResultItem.caffeineOnIcon : ResultItem.caffeineOffIcon
-        case .menuItem(let item, let state):
-            if item.action == .toggleCaffeinate {
-                return state.spotlite ? ResultItem.caffeineOnIcon : ResultItem.caffeineOffIcon
-            }
+        case .menuItem(let item):
             return ResultItem.symbol(item.symbolName)
         }
+    }
+
+    private func pluginIcon(_ name: String?) -> NSImage? {
+        if let iconURL { return IconCache.shared.cached(for: iconURL) }
+        return Self.symbol(name ?? "puzzlepiece.extension") ?? Self.symbol("puzzlepiece.extension")
+    }
+
+    private static func pluginIconURL(_ name: String?, reference: PluginCommandReference) -> URL? {
+        guard let name, ["png", "jpg", "jpeg", "icns", "pdf", "tiff"].contains((name as NSString).pathExtension.lowercased()) else { return nil }
+        return reference.packageURL.appendingPathComponent(name)
     }
 
     /// The icon at the bar's right end. Spotlight shows the app a result belongs to,
@@ -259,8 +284,6 @@ enum ResultItem {
     private static let calculatorIcon = NSWorkspace.shared.icon(forFile: "/System/Applications/Calculator.app")
     private static let settingsIcon = symbol("gearshape")
     private static let systemSettingsIcon = NSWorkspace.shared.icon(forFile: SettingsPaneIndex.systemSettingsApp.path)
-    private static let caffeineOffIcon = symbol("cup.and.saucer")
-    private static let caffeineOnIcon = symbol("cup.and.saucer.fill")
     /// Shared with the Settings list, for a link no app opens.
     static let linkIcon = symbol("link")
     private static let webURL = URL(string: "https:")!

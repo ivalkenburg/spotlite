@@ -1,14 +1,14 @@
 import AppKit
 import SpotliteCore
 
-/// Settings, in toolbar tabs: General, Appearance, Search, and Items (the full list of
-/// apps, panes, commands and links). All changes apply live — macOS settings behave that
+/// Settings, in toolbar tabs, including installed plugins and indexed items.
+/// Preference changes apply live — macOS settings behave that
 /// way everywhere, and an OK button would just add a state to get wrong.
 @MainActor
 final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
     private enum Tab: String, CaseIterable {
-        case general, appearance, search, items
+        case general, appearance, search, items, plugins
 
         var title: String {
             switch self {
@@ -16,6 +16,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
             case .appearance: "Appearance"
             case .search: "Search"
             case .items: "Items"
+            case .plugins: "Plugins"
             }
         }
 
@@ -25,6 +26,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
             case .appearance: "paintbrush"
             case .search: "magnifyingglass"
             case .items: "list.bullet"
+            case .plugins: "puzzlepiece.extension"
             }
         }
 
@@ -41,6 +43,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
     private let appearance: AppearanceSettingsViewController
     private let search: SearchSettingsViewController
     private let items: ItemsSettingsViewController
+    private let plugins: PluginsSettingsViewController
 
     var onChange: ((Preferences) -> Void)? {
         get { model.onChange }
@@ -57,12 +60,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
         set { model.onToast = newValue }
     }
 
-    init(preferences: Preferences, library: AppLibrary) {
+    init(preferences: Preferences, library: AppLibrary, plugins: PluginManager) {
         model = SettingsModel(preferences: preferences, library: library)
         general = GeneralSettingsViewController(model: model)
         appearance = AppearanceSettingsViewController(model: model)
         search = SearchSettingsViewController(model: model)
         items = ItemsSettingsViewController(model: model)
+        self.plugins = PluginsSettingsViewController(manager: plugins)
         super.init()
         general.onLayoutChange = { [weak self] in
             if self?.currentTab == .general { self?.fitWindow(animated: true) }
@@ -122,6 +126,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
         case .appearance: appearance
         case .search: search
         case .items: items
+        case .plugins: plugins
         }
     }
 
@@ -142,6 +147,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
         switch tab {
         case .general: general.updateLoginItemState()
         case .search: search.updateHistoryState()
+        case .plugins: plugins.reload()
         case .appearance, .items: break
         }
 

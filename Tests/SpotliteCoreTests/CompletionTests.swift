@@ -46,7 +46,7 @@ struct CompletionTests {
 
     @Test func keepsActionsOtherThanOpen() {
         #expect(Completion.suffix(query: "sl", title: "Sleep", action: "Run") == "eep – Run")
-        #expect(Completion.suffix(query: "Caffeinate", title: "Caffeinate", action: "Turn On") == " – Turn On")
+        #expect(Completion.suffix(query: "Example", title: "Example", action: "Turn On") == " – Turn On")
     }
 
     @Test func emptyQueryHasNoCompletion() {

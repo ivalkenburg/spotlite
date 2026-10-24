@@ -14,6 +14,8 @@ final class ResultRowView: HoverResultCellView {
 
     private let icon = NSImageView()
     private let label = NSTextField(labelWithString: "")
+    private let subtitle = NSTextField(labelWithString: "")
+    private var titleCenter: NSLayoutConstraint!
     private let hintStack = NSStackView()
     private let highlight = NSView()
     private let stateSwitch = NSSwitch()
@@ -37,6 +39,9 @@ final class ResultRowView: HoverResultCellView {
         label.font = .systemFont(ofSize: Metrics.titleFontSize, weight: .regular)
         label.lineBreakMode = .byTruncatingTail
         label.setContentCompressionResistancePriority(.required, for: .horizontal)
+        subtitle.font = .systemFont(ofSize: 11)
+        subtitle.lineBreakMode = .byTruncatingTail
+        subtitle.isHidden = true
 
         hintStack.orientation = .horizontal
         hintStack.alignment = .centerY
@@ -54,7 +59,7 @@ final class ResultRowView: HoverResultCellView {
         runningDot.layer?.cornerRadius = Metrics.runningDotSize / 2
         runningDot.isHidden = true
 
-        for v in [highlight, icon, label, hintStack, stateSwitch, runningDot] {
+        for v in [highlight, icon, label, subtitle, hintStack, stateSwitch, runningDot] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -73,7 +78,9 @@ final class ResultRowView: HoverResultCellView {
             icon.heightAnchor.constraint(equalToConstant: Metrics.iconSize),
 
             label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: Metrics.rowIconGap),
-            label.centerYAnchor.constraint(equalTo: highlight.centerYAnchor),
+            subtitle.leadingAnchor.constraint(equalTo: label.leadingAnchor),
+            subtitle.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -Metrics.horizontalInset),
+            subtitle.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 1),
 
             hintStack.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 12),
             hintStack.centerYAnchor.constraint(equalTo: highlight.centerYAnchor),
@@ -87,6 +94,8 @@ final class ResultRowView: HoverResultCellView {
             runningDot.widthAnchor.constraint(equalToConstant: Metrics.runningDotSize),
             runningDot.heightAnchor.constraint(equalToConstant: Metrics.runningDotSize),
         ])
+        titleCenter = label.centerYAnchor.constraint(equalTo: highlight.centerYAnchor)
+        titleCenter.isActive = true
         hintsBeforeEdge = hintStack.trailingAnchor.constraint(equalTo: trailingAnchor,
                                                               constant: -Metrics.horizontalInset)
         hintsBeforeSwitch = hintStack.trailingAnchor.constraint(equalTo: stateSwitch.leadingAnchor,
@@ -125,6 +134,11 @@ final class ResultRowView: HoverResultCellView {
         let mode = Vibrancy.mode(for: effectiveAppearance)
 
         label.stringValue = item.title
+        let detail = item.subtitle ?? ""
+        subtitle.stringValue = detail
+        subtitle.isHidden = detail.isEmpty
+        titleCenter.constant = detail.isEmpty ? 0 : -8
+        subtitle.textColor = selection == .navigated ? .white : .secondaryLabelColor
         // Spotlight's titles are full white or black, not the slightly translucent label colour.
         label.textColor = selection == .navigated || mode == .lighten ? .white : .black
 

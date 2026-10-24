@@ -3,8 +3,12 @@ import SpotliteCore
 
 /// A borderless panel that can take key focus without the app owning the Dock.
 final class SpotlitePanel: NSPanel {
+    var onNavigateBack: (() -> Bool)?
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+    override func cancelOperation(_ sender: Any?) {
+        if onNavigateBack?() != true { super.cancelOperation(sender) }
+    }
 
     init() {
         super.init(

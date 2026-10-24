@@ -2,7 +2,6 @@ import Foundation
 
 /// Actions are dispatched by the AppKit layer; menu definitions stay headless.
 public enum SearchMenuAction: Sendable, Equatable {
-    case toggleCaffeinate
     case generateUUID(UUIDVersion)
 }
 
@@ -68,10 +67,4 @@ public struct SearchMenu: Sendable {
         ]
     )
 
-    public static let caffeinate = SearchMenu(
-        id: "caffeinate", title: "Caffeinate", symbolName: "cup.and.saucer",
-        items: [SearchMenuItem(id: "caffeinate.toggle", title: "Toggle Caffeinate",
-                               symbolName: "cup.and.saucer", action: .toggleCaffeinate,
-                               closesPanelOnAction: false)]
-    )
 }

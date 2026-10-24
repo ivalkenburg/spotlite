@@ -98,7 +98,7 @@ final class ItemsSettingsViewController: SettingsPaneController, NSTableViewData
     func reload() {
         guard isViewLoaded else { return }
         caption.stringValue = showsUtilitiesOnly
-            ? "Uncheck to hide from results. Hiding Caffeinate does not stop an active session."
+            ? "Uncheck to hide a built-in utility from results."
             : "Uncheck to hide from results, or give an item a short alias. Right-click to forget launch history or edit a link."
         applyFilter()
         table.reloadData()

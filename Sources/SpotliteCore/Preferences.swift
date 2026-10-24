@@ -40,6 +40,7 @@ public struct Preferences: Codable, Sendable, Equatable {
 
     /// Utilities hidden from search; independent of indexed apps and running activity.
     public var hiddenUtilities: Set<SearchUtility>
+    public var legacyHiddenUtilityIDs: Set<String> = []
     public var hiddenBundleIDs: Set<String>
     /// Bundle ID to a short name the user types instead, e.g. "ps" for Photoshop.
     public var aliases: [String: String]
@@ -105,6 +106,8 @@ public struct Preferences: Codable, Sendable, Equatable {
         ).map(\.path)
         hiddenUtilities = Set((try? c.decodeIfPresent([Lossy<SearchUtility>].self,
                                                       forKey: .hiddenUtilities))?.compactMap(\.value) ?? [])
+        let rawHidden = Set((try? c.decodeIfPresent([Lossy<String>].self, forKey: .hiddenUtilities))?.compactMap(\.value) ?? [])
+        legacyHiddenUtilityIDs = rawHidden.subtracting(hiddenUtilities.map(\.rawValue))
         hiddenBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .hiddenBundleIDs) ?? []
         aliases = try c.decodeIfPresent([String: String].self, forKey: .aliases) ?? [:]
         panelScreen = try c.decodeIfPresent(PanelScreen.self, forKey: .panelScreen) ?? .followPointer
@@ -142,7 +145,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(Preferences.currentFormatVersion, forKey: .formatVersion)
         try c.encode(applicationDirectories, forKey: .applicationDirectories)
-        try c.encode(hiddenUtilities, forKey: .hiddenUtilities)
+        try c.encode(Set(hiddenUtilities.map(\.rawValue)).union(legacyHiddenUtilityIDs), forKey: .hiddenUtilities)
         try c.encode(hiddenBundleIDs, forKey: .hiddenBundleIDs)
         try c.encode(aliases, forKey: .aliases)
         try c.encode(panelScreen, forKey: .panelScreen)

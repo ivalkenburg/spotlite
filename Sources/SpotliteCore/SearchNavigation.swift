@@ -3,6 +3,20 @@ public enum SearchScope: Sendable {
     case root
     case menu(SearchMenu)
     case argument(AppEntry)
+    case plugin(PluginLocation)
+}
+
+public struct PluginLocation: Sendable {
+    public var pluginID: String
+    public var commandID: String
+    public var view: PluginView
+    public var actionsFor: PluginResult?
+    public var isActionMenu: Bool
+    public init(pluginID: String, commandID: String, view: PluginView,
+                actionsFor: PluginResult? = nil, isActionMenu: Bool = false) {
+        self.pluginID = pluginID; self.commandID = commandID; self.view = view
+        self.actionsFor = actionsFor; self.isActionMenu = isActionMenu
+    }
 }
 
 public enum SearchSelection: Sendable {
@@ -51,4 +65,6 @@ public struct SearchNavigation {
         scope = .root
         parents.removeAll(keepingCapacity: true)
     }
+
+    public mutating func replaceScope(_ scope: SearchScope) { self.scope = scope }
 }

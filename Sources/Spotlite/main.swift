@@ -26,13 +26,22 @@ if CommandLine.arguments.contains("--bench") {
                               includeSettingsPanes: preferences.showSystemSettings,
                               includeCommands: preferences.showSystemCommands)
     let frecency = Storage.loadFrecency()
+    let pluginRoot = PluginStore.defaultRoot
+    var installed = (try? PluginStore.snapshot(root: pluginRoot)) ?? []
+    if !FileManager.default.fileExists(atPath: pluginRoot.appendingPathComponent("registry.json").path) {
+        let resources = Bundle.main.bundleURL.pathExtension == "app" ? Bundle.main.resourceURL! :
+            URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources")
+        let packages = (try? FileManager.default.contentsOfDirectory(at: resources.appendingPathComponent("Plugins"), includingPropertiesForKeys: nil)) ?? []
+        installed = packages.compactMap { try? InstalledPlugin(manifest: PluginStore.inspect($0), bundled: true) }
+    }
+    let pluginCommands = PluginCommandIndex(plugins: installed)
     let queries = ["s", "sa", "saf", "safa", "safar", "safari", "gc", "term", "a", "cal", "xyz"]
     var sink = 0
     // The same call each keystroke makes: calculator, matcher, ranking and built-ins.
     func search(_ q: String) -> Int {
         SearchResults.build(for: q, corpus: corpus, matcher: matcher, frecency: frecency,
                             webSearch: preferences.showWebSearch ? preferences.webSearchEngine : nil,
-                            hiddenUtilities: preferences.hiddenUtilities).count
+                            hiddenUtilities: preferences.hiddenUtilities, pluginCommands: pluginCommands).count
     }
     // Warm up, then time enough iterations to escape timer granularity.
     for q in queries { sink &+= search(q) }
@@ -45,6 +54,7 @@ if CommandLine.arguments.contains("--bench") {
     let elapsed = DispatchTime.now().uptimeNanoseconds - start
     let perSearch = Double(elapsed) / Double(iterations * queries.count) / 1000.0
     print("apps indexed: \(entries.count)")
+    print("plugin commands: \(pluginCommands.commands.count)")
     print(String(format: "per keystroke: %.1f µs  (%d searches, sink %d)",
                  perSearch, iterations * queries.count, sink))
     exit(0)

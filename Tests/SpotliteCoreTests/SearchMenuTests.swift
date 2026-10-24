@@ -5,7 +5,7 @@ import Testing
 @Suite("Scoped menus")
 struct SearchMenuTests {
     private let menu = SearchMenu(id: "test", title: "Test", items: [
-        SearchMenuItem(id: "toggle", title: "Toggle Caffeinate", action: .toggleCaffeinate),
+        SearchMenuItem(id: "toggle", title: "Toggle Example", action: .generateUUID(.v4), closesPanelOnAction: false),
         SearchMenuItem(id: "settings", title: "Open Settings"),
         SearchMenuItem(id: "stop", title: "Stop"),
     ])
@@ -18,7 +18,7 @@ struct SearchMenuTests {
 
     @Test func fuzzySearchStaysWithinTheMenu() {
         let matcher = Matcher()
-        #expect(menu.search("tgc", matcher: matcher).map(\.id) == ["toggle"])
+        #expect(menu.search("tge", matcher: matcher).map(\.id) == ["toggle"])
         #expect(menu.search("OS", matcher: matcher).map(\.id) == ["settings"])
         #expect(menu.search("2+2", matcher: matcher).isEmpty)
         #expect(menu.search("Safari", matcher: matcher).isEmpty)
@@ -30,11 +30,9 @@ struct SearchMenuTests {
         #expect(menu.search("st", matcher: matcher).first?.id == "stop")
     }
 
-    @Test func caffeineMenuHasOnlyTheToggleAndStaysOpen() throws {
-        let item = try #require(SearchMenu.caffeinate.items.first)
-        #expect(SearchMenu.caffeinate.items.count == 1)
-        #expect(item.title == "Toggle Caffeinate")
-        #expect(item.action == .toggleCaffeinate)
+    @Test func aDirectActionCanKeepItsPanelOpen() throws {
+        let item = try #require(menu.items.first)
+        #expect(item.action == .generateUUID(.v4))
         #expect(!item.closesPanelOnAction)
         #expect(item.submenu == nil)
     }
@@ -87,7 +85,7 @@ struct SearchMenuTests {
     @Test func clearingAtEachLevelDropsItsQueryAndSelection() throws {
         var navigation = SearchNavigation()
         navigation.enter(.menu(menu), query: "test", selectedID: "test", selection: .navigated)
-        navigation.enter(.menu(.caffeinate), query: "tgc", selectedID: "toggle", selection: .dismissed)
+        navigation.enter(.menu(.generateUUID), query: "tge", selectedID: "toggle", selection: .dismissed)
 
         let menuLocation = navigation.back(behavior: .clearQuery)
         let restoredMenu = try #require(menuLocation)
@@ -112,7 +110,7 @@ struct SearchMenuTests {
     @Test func behaviorIsChosenWhenReturningRatherThanEntering() throws {
         var navigation = SearchNavigation()
         navigation.enter(.menu(menu), query: "test", selectedID: "test", selection: .navigated)
-        navigation.enter(.menu(.caffeinate), query: "tog", selectedID: "toggle", selection: .dismissed)
+        navigation.enter(.menu(.generateUUID), query: "tog", selectedID: "toggle", selection: .dismissed)
         let menuLocation = navigation.back(behavior: .clearQuery)
         #expect(try #require(menuLocation).query.isEmpty)
         // Clearing one level leaves its ancestors available if the preference changes.
@@ -138,7 +136,7 @@ struct SearchMenuTests {
 
     @Test func closingDropsTheWholeNavigationStack() {
         var navigation = SearchNavigation()
-        navigation.enter(.menu(menu), query: "caf", selectedID: "caffeinate", selection: .navigated)
+        navigation.enter(.menu(menu), query: "test", selectedID: "example", selection: .navigated)
         navigation.enter(.menu(menu), query: "tog", selectedID: "toggle", selection: .topHit)
         navigation.reset()
         guard case .root = navigation.scope else { Issue.record("Expected root"); return }

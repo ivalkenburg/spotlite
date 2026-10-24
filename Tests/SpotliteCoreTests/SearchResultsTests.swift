@@ -25,8 +25,8 @@ struct SearchResultsTests {
             case .conversion(_, let result): return result
             case .generateUUID: return "generateUUID"
             case .settings: return "settings"
-            case .caffeinate: return "caffeinate"
             case .webSearch(let query, let engine): return "\(engine.name): \(query)"
+            case .pluginCommand(let reference): return reference.command.title
             }
         }
     }
@@ -50,8 +50,7 @@ struct SearchResultsTests {
 
     @Test func builtInEntriesNeedThreeCharacters() {
         #expect(!describe(build("se")).contains("settings"))
-        #expect(!describe(build("ca")).contains("caffeinate"))
-        #expect(describe(build("caf")).last == "caffeinate")
+        #expect(build("caf").isEmpty)
     }
 
     @Test func hiddenAppsAreLeftOut() {
@@ -106,7 +105,6 @@ struct SearchResultsTests {
     @Test(arguments: SearchUtility.allCases)
     func utilityVisibilityIsIndependent(_ utility: SearchUtility) {
         let query = switch utility {
-        case .caffeinate: "caf"
         case .generateUUID: "uuid"
         case .calculator: "2+2"
         case .unitConversion: "10 km to miles"
@@ -131,8 +129,4 @@ struct SearchResultsTests {
         }
     }
 
-    @Test func offersCaffeinateIgnoresSurroundingSpaces() {
-        #expect(SearchResults.offersCaffeinate("  caffeine "))
-        #expect(!SearchResults.offersCaffeinate("cof"))
-    }
 }

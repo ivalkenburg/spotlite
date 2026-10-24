@@ -52,7 +52,9 @@ final class IconCache {
         queue.async {
             // Resolved first: an app in /Applications that is a symlink (Safari, into its
             // cryptex) would otherwise carry Finder's alias arrow, which Spotlight omits.
-            let icon = NSWorkspace.shared.icon(forFile: (key as NSString).resolvingSymlinksInPath)
+            let imageExtension = ["png", "jpg", "jpeg", "icns", "pdf", "tiff"].contains(url.pathExtension.lowercased())
+            let icon = (imageExtension ? NSImage(contentsOf: url) : nil)
+                ?? NSWorkspace.shared.icon(forFile: (key as NSString).resolvingSymlinksInPath)
             let flattened = IconCache.rasterize(icon, to: Metrics.iconSize)
             Task { @MainActor in
                 guard self.generation == requestedGeneration else { return }

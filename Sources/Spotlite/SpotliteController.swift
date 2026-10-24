@@ -17,6 +17,21 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private let table = NSTableView()
     private let scroll = NSScrollView()
     private let matcher = Matcher()
+    private let plugins: PluginManager
+    private let pluginContent = PluginContentView(frame: .zero)
+    private var pluginContentHeight: NSLayoutConstraint!
+    private var pluginSearchTask: Task<Void, Never>?
+    private var pluginActionTask: Task<Void, Never>?
+    private var pluginActionReference: PluginCommandReference?
+    private var pluginActionID: String?
+    private var globalSearchTask: Task<Void, Never>?
+    private var pluginSearchGeneration = 0
+    private var pluginLoading = false
+    private var pluginProblem: String?
+    private var submittedPluginQuery: String?
+    private var globalQuery: String?
+    private var globalResults: [String: [PluginResult]] = [:]
+    private var suppressPrefixOnce = false
 
     /// Owned by the app delegate and shared with Settings.
     let library: AppLibrary
@@ -37,7 +52,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// Rebuilt when the index, aliases, hidden apps, links or kind settings change, never
     /// per keystroke.
     private var corpus = SearchCorpus.empty
-    private let caffeine: CaffeineAssertion
     private let toasts: ToastPresenter
     private var cursor = 0
     /// Bundle paths of running apps, taken when the panel opens rather than per row
@@ -87,11 +101,12 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// Called when the user picks the Settings entry, or hides an app.
     var onOpenSettings: (() -> Void)?
     var onPreferencesChanged: ((Preferences) -> Void)?
-    init(library: AppLibrary, caffeine: CaffeineAssertion, preferences: Preferences, toasts: ToastPresenter) {
+    init(library: AppLibrary, preferences: Preferences, toasts: ToastPresenter,
+         plugins: PluginManager) {
         self.library = library
-        self.caffeine = caffeine
         self.preferences = preferences
         self.toasts = toasts
+        self.plugins = plugins
         super.init()
         placement = PanelPlacement(panel: panel) { [unowned self] in self.preferences }
         buildUI()
@@ -118,11 +133,17 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             self?.modifiersChanged(event.modifierFlags)
             return event
         }
+        plugins.onUI = { [weak self] id, method, args, context in self?.handlePluginUI(id, method: method, args: args, context: context) }
+        NotificationCenter.default.addObserver(self, selector: #selector(pluginsDidChange), name: .spotlitePluginsChanged, object: plugins)
     }
 
     // MARK: - Construction
 
     private func buildUI() {
+        panel.onNavigateBack = { [weak self] in
+            guard let self, self.pluginLocation != nil else { return false }
+            self.leaveScope(); return true
+        }
         glass.cornerRadius = Metrics.cornerRadius
         glass.style = .regular
         applyResolvedAppearance()
@@ -132,6 +153,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         field.onCommandReturn = { [weak self] in self?.revealInFinder() }
         field.onCommandQ = { [weak self] in self?.quitApp() }
         field.onUndoHide = { [weak self] in self?.undoHide() ?? false }
+        field.onPluginShortcut = { [weak self] event in self?.pluginShortcut(event) ?? false }
 
         divider.isHidden = true
 
@@ -145,7 +167,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         table.delegate = self
         table.target = self
         table.action = #selector(tableClicked)
-        // A click must not take focus from the field: Caffeinate and a template link keep
+        // A click must not take focus from the field: Plugin actions and a template link keep
         // the panel open, and typing has to keep reaching the query.
         table.refusesFirstResponder = true
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("main"))
@@ -160,12 +182,19 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         scroll.autohidesScrollers = true
         scroll.automaticallyAdjustsContentInsets = false
 
-        for v in [scroll, divider] {
+        pluginContent.isHidden = true
+        pluginContent.onAction = { [weak self] action, values in
+            guard let self, let location = self.pluginLocation, let reference = self.pluginReference(location) else { return }
+            self.runPluginAction(reference, item: nil, action: action, values: values)
+        }
+        pluginContent.onBack = { [weak self] in self?.leaveScope() }
+        for v in [scroll, divider, pluginContent] {
             v.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(v)
         }
 
         listHeight = scroll.heightAnchor.constraint(equalToConstant: 0)
+        pluginContentHeight = pluginContent.heightAnchor.constraint(equalToConstant: 0)
         // The list padding sits outside the scroll view rather than in its content
         // insets, so rows are clipped at the padding instead of showing slivers in it.
         listTop = scroll.topAnchor.constraint(equalTo: content.topAnchor, constant: Metrics.inputHeight)
@@ -175,6 +204,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             listTop,
             listHeight,
+            pluginContent.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            pluginContent.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            pluginContent.topAnchor.constraint(equalTo: content.topAnchor, constant: Metrics.inputHeight),
+            pluginContentHeight,
 
             divider.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: Metrics.horizontalInset),
             divider.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -Metrics.horizontalInset),
@@ -295,7 +328,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         isDismissing = false
         modifiers = NSEvent.modifierFlags
         applyResolvedAppearance()
-        caffeine.refresh()
         loadLibrary()
         runningPaths = Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL?.standardizedFileURL.path })
         // A show during the close fade can still find a submenu or argument open.
@@ -387,6 +419,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     func hide() {
         guard panel.isVisible, !isDismissing else { return }
         isDismissing = true
+        cancelPluginSearch()
+        cancelPluginAction()
+        globalSearchTask?.cancel(); globalSearchTask = nil
         // Taken now rather than when the fade ends: a show() during the fade must
         // already see this query.
         queryMemory.remember(navigation.rootQuery ?? field.stringValue)
@@ -461,6 +496,17 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     func updateMatches(for query: String) {
+        if case .root = navigation.scope, !suppressPrefixOnce,
+           let (reference, argument) = plugins.prefixMatch(query) {
+            enterPlugin(reference, query: argument)
+            return
+        }
+        suppressPrefixOnce = false
+        if let location = pluginLocation, !location.isActionMenu, (location.view.type ?? "list") == "list" {
+            schedulePluginSearch(query)
+        } else if case .root = navigation.scope {
+            scheduleGlobalSearch(query)
+        }
         items = buildItems(for: query)
         cursor = 0
         // A new result list starts from the top hit again; a dismissed completion stays
@@ -472,8 +518,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     /// Rebuilds the list for an unchanged query when something beneath it changes: the
-    /// index, or caffeine's state. A row the user arrowed to stays selected, so toggling
-    /// Caffeinate does not leave Return aimed at whatever now sits at the top.
+    /// index or plugin state. Preserve a row the user explicitly selected.
     private func refreshMatches() {
         let navigatedTo = selection == .navigated && items.indices.contains(cursor)
             ? items[cursor].identity : nil
@@ -492,23 +537,31 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     private func buildItems(for query: String) -> [ResultItem] {
-        let state = caffeine.state
         switch navigation.scope {
+        case .plugin(let location): return pluginItems(location, query: query)
         case .argument: return []
         case .menu(let menu):
             if let utility = SearchUtility(rawValue: menu.id), preferences.hiddenUtilities.contains(utility) {
                 return []
             }
-            return menu.search(query, matcher: matcher).map { .menuItem($0, state: state) }
+            return menu.search(query, matcher: matcher).map { .menuItem($0) }
         case .root: break
         }
-        return SearchResults.build(for: query, corpus: corpus, matcher: matcher,
+        var built = SearchResults.build(for: query, corpus: corpus, matcher: matcher,
                                    frecency: library.frecency,
                                    previousResult: previousResult,
                                    recents: preferences.showRecentApps ? preferences.visibleRows : 0,
                                    webSearch: preferences.showWebSearch ? preferences.webSearchEngine : nil,
-                                   hiddenUtilities: preferences.hiddenUtilities)
-            .map { ResultItem($0, caffeine: state) }
+                                   hiddenUtilities: preferences.hiddenUtilities,
+                                   pluginCommands: plugins.commandIndex)
+            .map { ResultItem($0) }
+        let web = built.last.flatMap { item -> ResultItem? in if case .webSearch = item { return item }; return nil }
+        if web != nil { built.removeLast() }
+        for reference in plugins.globalCommands {
+            built.append(contentsOf: (globalResults[reference.id] ?? []).map { .pluginResult(reference, $0) })
+        }
+        if let web { built.append(web) }
+        return built
     }
 
     private var cardFirst: Bool {
@@ -531,6 +584,15 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// Lays the list out at its final size, then resizes the glass to reveal it. The
     /// list shows whole rows only, up to the Rows Shown setting.
     private func layoutList(animated: Bool) {
+        if let location = pluginLocation, !location.isActionMenu, ["detail", "form"].contains(location.view.type ?? "") {
+            scroll.isHidden = true; divider.isHidden = false; pluginContent.isHidden = false
+            let height = max(180, min(340, Metrics.maxPanelHeight(visibleRows: preferences.visibleRows) - Metrics.inputHeight))
+            pluginContentHeight.constant = height
+            listHeight.constant = 0
+            resizeGlass(to: Metrics.inputHeight + height, animated: animated)
+            return
+        }
+        pluginContent.isHidden = true
         // Contents vanish at once when the list empties; only the glass animates away.
         scroll.isHidden = items.isEmpty
         divider.isHidden = items.isEmpty || cardFirst
@@ -610,6 +672,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         case #selector(NSResponder.moveUp(_:)):
             moveCursor(by: -1); return true
         case #selector(NSResponder.insertTab(_:)):
+            if pluginLocation?.view.type == "form" { return pluginContent.focusForm() }
+            if openPluginActions() { return true }
             if argument != nil { return true }
             guard items.indices.contains(cursor) else { return true }
             if let submenu = items[cursor].submenu {
@@ -621,13 +685,19 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         case #selector(NSResponder.insertBacktab(_:)):
             leaveScope(); return true
         case #selector(NSResponder.insertNewline(_:)):
+            if let location = pluginLocation, !location.isActionMenu {
+                if location.view.type == "form" || location.view.type == "detail" { pluginContent.submit(); return true }
+                if pluginSearchMode(location) == "enter", submittedPluginQuery != field.stringValue {
+                    schedulePluginSearch(field.stringValue, force: true); renderPluginItems(); return true
+                }
+            }
             if argument != nil { openArgument() } else { launch(at: cursor) }
             return true
         case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
             // Option-Return arrives as this, not as insertNewline.
             copyPath(); return true
         case #selector(NSResponder.cancelOperation(_:)):
-            hide(); return true
+            if pluginLocation != nil { leaveScope() } else { hide() }; return true
         case #selector(NSResponder.deleteBackward(_:)):
             if navigation.canGoBack, field.stringValue.isEmpty {
                 leaveScope(); return true
@@ -692,6 +762,13 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         guard items.indices.contains(index) else { return }
 
         switch items[index] {
+        case .pluginCommand(let reference): enterPlugin(reference)
+        case .pluginResult(let reference, let result):
+            if let action = result.actions?.first { runPluginAction(reference, item: result, action: action) }
+        case .pluginAction(let reference, let result, let action):
+            leaveScope()
+            runPluginAction(reference, item: result, action: action)
+        case .pluginNotice: break
         case .calculation(_, let value):
             let text = Calculator.format(value)
             toasts.copy(text, position: preferences.toastPosition, on: panel.screen)
@@ -708,15 +785,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             hide()
             onOpenSettings?()
 
-        case .caffeinate:
-            enterScope(.menu(.caffeinate))
-
-        case .menuItem(let item, _):
+        case .menuItem(let item):
             if let action = item.action {
                 if item.closesPanelOnAction { hide() }
                 switch action {
-                case .toggleCaffeinate:
-                    toasts.toggleCaffeinate(caffeine, position: preferences.toastPosition, on: panel.screen)
                 case .generateUUID(let version):
                     toasts.copy(UUIDGenerator.generate(version),
                                 position: preferences.toastPosition, on: panel.screen)
@@ -790,21 +862,39 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     // MARK: - Scoped navigation
 
-    private func enterScope(_ scope: SearchScope) {
+    private func enterScope(_ scope: SearchScope, fromPlugin: Bool = false) {
+        if !fromPlugin { cancelPluginAction() }
+        globalSearchTask?.cancel(); globalSearchTask = nil
+        globalQuery = nil
+        if var location = pluginLocation, location.view.type == "form", let values = try? pluginContent.formValues() {
+            location.view.values = values
+            navigation.replaceScope(.plugin(location))
+        }
+        cancelPluginSearch()
         navigation.enter(scope, query: field.stringValue,
                          selectedID: items.indices.contains(cursor) ? items[cursor].identity : nil,
                          selection: selection)
         updateScopeChip()
+        panel.makeFirstResponder(field)
         setQuery("")
         selection = .topHit
         updateMatches(for: "")
     }
 
-    private func leaveScope() {
+    private func leaveScope(cancelAction: Bool = true) {
+        if cancelAction { cancelPluginAction() }
+        let oldPlugin = pluginLocation?.pluginID
+        cancelPluginSearch()
         guard let parent = navigation.back(behavior: preferences.backNavigationBehavior) else { return }
+        if oldPlugin != pluginLocation?.pluginID, let oldPlugin {
+            plugins.release(oldPlugin)
+        }
+        if let location = pluginLocation { pluginContent.configure(location.view) }
         updateScopeChip()
+        panel.makeFirstResponder(field)
         setQuery(parent.query)
         selection = .topHit
+        suppressPrefixOnce = true
         updateMatches(for: parent.query)
         if let row = items.firstIndex(where: { $0.identity == parent.selectedID }) {
             select(row, as: parent.selection)
@@ -820,6 +910,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     private func updateScopeChip() {
         switch navigation.scope {
+        case .plugin(let location):
+            bar.showChip(title: location.isActionMenu ? "Actions" : location.view.title,
+                         icon: ResultItem.symbol(pluginReference(location)?.command.icon ?? "puzzlepiece.extension"))
+            field.placeholderString = location.view.placeholder
         case .root: bar.hideChip()
         case .menu(let menu):
             bar.showChip(title: menu.title, icon: ResultItem.symbol(menu.symbolName))
@@ -830,6 +924,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     private func resetNavigation() {
+        cancelPluginAction()
+        cancelPluginSearch()
+        if let id = pluginLocation?.pluginID { plugins.release(id) }
+        globalSearchTask?.cancel(); globalSearchTask = nil; globalQuery = nil; globalResults.removeAll()
         navigation.reset()
         bar.hideChip()
     }
@@ -983,17 +1081,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         placement.reapply(screenChanged: screenChanged)
     }
 
-    func caffeineStateDidChange() {
-        guard panel.isVisible else { return }
-        if case .menu = navigation.scope {
-            refreshMatches()
-            return
-        }
-        guard argument == nil, !preferences.hiddenUtilities.contains(.caffeinate),
-              SearchResults.offersCaffeinate(field.stringValue) else { return }
-        refreshMatches()
-    }
-
     // MARK: - Table
 
     func numberOfRows(in tableView: NSTableView) -> Int { items.count }
@@ -1032,6 +1119,257 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// Hover must never move the cursor: an incidental mouse position silently
     /// changing what Enter does is a genuinely dangerous interaction in a launcher.
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { false }
+}
+
+// Plugin navigation shares the launcher's cursor and its saved parent contexts.
+extension SpotliteController {
+    private var pluginLocation: PluginLocation? {
+        if case .plugin(let location) = navigation.scope { return location }
+        return nil
+    }
+
+    private func pluginReference(_ location: PluginLocation) -> PluginCommandReference? {
+        guard let plugin = plugins.plugins.first(where: { $0.id == location.pluginID && $0.enabled }),
+              let command = plugin.manifest.commands.first(where: { $0.id == location.commandID }) else { return nil }
+        return PluginCommandReference(plugin: plugin, command: command, packageURL: plugins.store.packageURL(plugin))
+    }
+
+    private func enterPlugin(_ reference: PluginCommandReference, query: String = "") {
+        plugins.acquire(reference.plugin.id)
+        let view = PluginView(id: reference.command.id, title: reference.command.title)
+        enterScope(.plugin(PluginLocation(pluginID: reference.plugin.id, commandID: reference.command.id, view: view)))
+        if !query.isEmpty { setQuery(query); updateMatches(for: query) }
+    }
+
+    @objc private func pluginsDidChange(_ notification: Notification) {
+        guard notification.userInfo?["commandsChanged"] as? Bool == true else { return }
+        if notification.userInfo?["commandOwner"] != nil {
+            // Command metadata belongs to root search. Scoped views update through
+            // the plugin UI API, without another query or a temporary loading row.
+            if panel.isVisible, !isDismissing, case .root = navigation.scope { renderPluginItems() }
+            return
+        }
+        if let location = pluginLocation, pluginReference(location) == nil {
+            while pluginLocation != nil { leaveScope() }
+        }
+        guard panel.isVisible, !isDismissing else { return }
+        globalQuery = nil
+        refreshMatches()
+    }
+
+    private func cancelPluginSearch() {
+        pluginSearchGeneration &+= 1
+        pluginSearchTask?.cancel(); pluginSearchTask = nil
+        pluginLoading = false
+        pluginProblem = nil
+    }
+
+    private func cancelPluginAction() {
+        pluginActionID = nil; pluginActionReference = nil
+        pluginActionTask?.cancel(); pluginActionTask = nil
+    }
+
+    private func pluginSearchMode(_ location: PluginLocation) -> String {
+        location.view.searchMode ?? pluginReference(location)?.command.searchMode ?? "automatic"
+    }
+
+    private func schedulePluginSearch(_ query: String, force: Bool = false) {
+        guard let location = pluginLocation, !location.isActionMenu,
+              let reference = pluginReference(location) else { return }
+        cancelPluginSearch()
+        if !reference.plugin.showCommands { return }
+        if pluginSearchMode(location) == "enter", !force, !query.isEmpty { return }
+        submittedPluginQuery = query
+        pluginLoading = true
+        let generation = pluginSearchGeneration
+        let delay = force ? 0 : min(max(reference.command.debounceMilliseconds ?? 150, 0), 2000)
+        pluginSearchTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                if delay > 0 { try await Task.sleep(for: .milliseconds(delay)) }
+                let view = try await self.plugins.search(reference, query: query, view: location.view, context: "search:\(generation)")
+                try Task.checkCancellation()
+                guard generation == self.pluginSearchGeneration,
+                      self.pluginLocation?.pluginID == location.pluginID,
+                      self.pluginLocation?.view.id == location.view.id else { return }
+                self.pluginLoading = false
+                self.applyPluginView(view)
+            } catch is CancellationError {} catch {
+                guard generation == self.pluginSearchGeneration else { return }
+                self.pluginLoading = false
+                self.pluginProblem = error.localizedDescription
+                self.renderPluginItems()
+            }
+        }
+    }
+
+    private func applyPluginView(_ view: PluginView) {
+        guard var location = pluginLocation else { return }
+        location.view = view
+        navigation.replaceScope(.plugin(location))
+        pluginContent.configure(view)
+        updateScopeChip()
+        renderPluginItems()
+    }
+
+    private func pluginItems(_ location: PluginLocation, query: String) -> [ResultItem] {
+        guard let reference = pluginReference(location) else { return [] }
+        if location.isActionMenu {
+            return (location.actionsFor?.actions ?? location.view.actions ?? [])
+                .filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }
+                .map { .pluginAction(reference, location.actionsFor, $0) }
+        }
+        var result = (location.view.items ?? []).map { ResultItem.pluginResult(reference, $0) }
+        if let problem = pluginProblem {
+            result.append(.pluginNotice(title: "Plugin could not complete the request", message: problem, symbol: "exclamationmark.triangle"))
+        } else if pluginLoading {
+            result.append(.pluginNotice(title: "Searching…", message: location.view.title, symbol: "ellipsis"))
+        } else if result.isEmpty && (location.view.type ?? "list") == "list" {
+            let enter = pluginSearchMode(location) == "enter" && submittedPluginQuery != query
+            result.append(.pluginNotice(title: enter ? "Press Return to search" : query.isEmpty ? "Type to search" : "No results",
+                                        message: location.view.title, symbol: "magnifyingglass"))
+        }
+        return result
+    }
+
+    private func renderPluginItems() {
+        let selectedID = selection == .navigated && items.indices.contains(cursor) ? items[cursor].identity : nil
+        items = buildItems(for: field.stringValue)
+        if let selectedID, let index = items.firstIndex(where: { $0.identity == selectedID }) { cursor = index }
+        else { cursor = 0; if selection == .navigated { selection = .topHit } }
+        table.reloadData()
+        layoutList(animated: true)
+        if selection == .navigated { scrollCursorIntoView() }
+        updateChrome()
+    }
+
+    private func scheduleGlobalSearch(_ query: String) {
+        guard globalQuery != query else { return }
+        globalSearchTask?.cancel(); globalSearchTask = nil
+        globalQuery = query; globalResults.removeAll(keepingCapacity: true)
+        let providers = plugins.globalCommands.filter { $0.command.searchMode != "enter" }
+        guard !providers.isEmpty, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let manager = plugins
+        globalSearchTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+            await withTaskGroup(of: (PluginCommandReference, [PluginResult]).self) { group in
+                for reference in providers {
+                    group.addTask {
+                        do {
+                            let view = try await manager.search(reference, query: query, global: true)
+                            return (reference, view.items ?? [])
+                        } catch { return (reference, []) }
+                    }
+                }
+                for await (reference, results) in group {
+                    guard !Task.isCancelled, let self, self.globalQuery == query,
+                          case .root = self.navigation.scope else { group.cancelAll(); continue }
+                    self.globalResults[reference.id] = results
+                    self.renderPluginItems()
+                }
+            }
+        }
+    }
+
+    private func openPluginActions() -> Bool {
+        guard items.indices.contains(cursor) else { return false }
+        switch items[cursor] {
+        case .pluginCommand(let reference): enterPlugin(reference); return true
+        case .pluginResult(let reference, let result):
+            guard !(result.actions ?? []).isEmpty else { return true }
+            plugins.acquire(reference.plugin.id)
+            let view = pluginLocation?.view ?? PluginView(id: reference.command.id, title: reference.command.title)
+            enterScope(.plugin(PluginLocation(pluginID: reference.plugin.id, commandID: reference.command.id,
+                view: view, actionsFor: result, isActionMenu: true)))
+            return true
+        default: return false
+        }
+    }
+
+    private func runPluginAction(_ reference: PluginCommandReference, item: PluginResult?, action: PluginAction,
+                                 values: [String: PluginValue] = [:]) {
+        pluginActionTask?.cancel()
+        pluginActionReference = reference
+        let actionID = UUID().uuidString
+        pluginActionID = actionID
+        plugins.acquire(reference.plugin.id)
+        let view = pluginLocation?.view
+        let query = field.stringValue
+        pluginActionTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.pluginActionID == actionID {
+                    self.pluginActionReference = nil; self.pluginActionID = nil
+                }
+                if self.pluginLocation?.pluginID != reference.plugin.id && self.pluginActionReference?.plugin.id != reference.plugin.id {
+                    self.plugins.release(reference.plugin.id)
+                }
+            }
+            do {
+                var args: [String: PluginValue] = ["command": .string(reference.command.id), "query": .string(query),
+                    "action": try .encode(action), "values": .object(values)]
+                if let item { args["item"] = try .encode(item) }
+                if let view { args["view"] = try .encode(view) }
+                _ = try await self.plugins.request(reference.plugin.id, method: "action", params: .object(args), context: "action:\(actionID)")
+                try Task.checkCancellation()
+                if action.close == true { self.hide() }
+            } catch is CancellationError {} catch {
+                guard self.pluginActionID == actionID else { return }
+                self.pluginProblem = error.localizedDescription
+                if self.pluginLocation != nil {
+                    self.pluginContent.showError(error.localizedDescription)
+                    self.renderPluginItems()
+                }
+                else { NSLog("Spotlite plugin action: %@", error.localizedDescription) }
+            }
+        }
+    }
+
+    private func handlePluginUI(_ id: String, method: String, args: PluginValue, context: String?) {
+        guard !isDismissing, panel.isVisible,
+              pluginLocation?.pluginID == id || pluginActionReference?.plugin.id == id else { return }
+        let currentSearch = context == "search:\(pluginSearchGeneration)" && pluginLocation?.pluginID == id
+        let currentAction = pluginActionID.map { context == "action:\($0)" } == true && pluginActionReference?.plugin.id == id
+        let backgroundUpdate = context == nil && method == "ui.update" && pluginLocation?.pluginID == id
+        guard currentSearch || currentAction || backgroundUpdate else { return }
+        switch method {
+        case "ui.close": hide()
+        case "ui.pop": if pluginLocation != nil { leaveScope(cancelAction: false) }
+        case "ui.push", "ui.replace", "ui.update":
+            guard let view = try? args.decode(PluginView.self) else { return }
+            if method == "ui.update" {
+                guard pluginLocation?.view.id == view.id else { return }
+                applyPluginView(view)
+            } else if method == "ui.replace", pluginLocation != nil {
+                cancelPluginSearch(); applyPluginView(view)
+            } else {
+                guard let reference = pluginLocation.flatMap(pluginReference) ?? pluginActionReference else { return }
+                plugins.acquire(id)
+                enterScope(.plugin(PluginLocation(pluginID: id, commandID: reference.command.id, view: view)), fromPlugin: true)
+                pluginContent.configure(view)
+            }
+        default: break
+        }
+    }
+
+    private func pluginShortcut(_ event: NSEvent) -> Bool {
+        guard (field.currentEditor()?.selectedRange.length ?? 0) == 0,
+              items.indices.contains(cursor), case .pluginResult(let reference, let item) = items[cursor] else { return false }
+        let actual = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        for action in item.actions ?? [] {
+            guard let key = action.key?.lowercased() else { continue }
+            let parts = key.split(separator: "+").map(String.init)
+            var expected: NSEvent.ModifierFlags = []
+            if parts.contains("cmd") { expected.insert(.command) }
+            if parts.contains("alt") { expected.insert(.option) }
+            if parts.contains("ctrl") { expected.insert(.control) }
+            if parts.contains("shift") { expected.insert(.shift) }
+            if !expected.isEmpty, expected == actual, parts.last == event.charactersIgnoringModifiers?.lowercased() {
+                runPluginAction(reference, item: item, action: action); return true
+            }
+        }
+        return false
+    }
 }
 
 /// Development checks live apart from the launcher behavior without widening access.
@@ -1146,60 +1484,285 @@ extension SpotliteController {
     /// Exercise scoped keyboard navigation through the real field editor and dump
     /// frames after the glass animation settles. Only invoked by the dev hook.
     func runDevMenuFrames() async {
-        let savedPreferences = preferences
-        defer { preferencesDidChange(savedPreferences) }
-        preferences.backNavigationBehavior = .restoreQuery
-        preferences.hiddenUtilities.remove(.caffeinate)
-        show()
-        setQuery("caf")
-        updateMatches(for: "caf")
-        guard let row = items.firstIndex(where: { $0.identity == "caffeinate" }),
-              let editor = field.currentEditor() as? NSTextView else {
-            print("DEV menu: missing Caffeinate or field editor")
-            exit(1)
+        let pasteboard = NSPasteboard.general
+        let saved = pasteboard.pasteboardItems?.map { item in item.types.compactMap { type in item.data(forType: type).map { (type, $0) } } } ?? []
+        defer {
+            pasteboard.clearContents()
+            let restored = saved.map { representations in
+                let item = NSPasteboardItem()
+                for (type, data) in representations { item.setData(data, forType: type) }
+                return item
+            }
+            if !restored.isEmpty { pasteboard.writeObjects(restored) }
         }
-        select(row, as: .navigated)
-        precondition(items[row].switchState == nil)
-        try? await Task.sleep(for: .milliseconds(400))
-        dumpFrames("menu-parent")
-        let originalState = caffeine.state.spotlite
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
-        precondition(caffeine.state.spotlite == originalState)
-        try? await Task.sleep(for: .milliseconds(400))
-        precondition(items.count == 1 && items[0].title == "Toggle Caffeinate")
-        dumpFrames("submenu")
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
-        precondition(caffeine.state.spotlite != originalState && items[0].switchState == caffeine.state.spotlite)
-        dumpFrames("submenu-toggled")
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
-        precondition(caffeine.state.spotlite == originalState)
-        setQuery("tgc")
-        updateMatches(for: "tgc")
-        precondition(items.count == 1)
-        dumpFrames("submenu-filtered")
-        setQuery("safari")
-        updateMatches(for: "safari")
-        precondition(items.isEmpty)
-        dumpFrames("submenu-no-match")
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertBacktab(_:)))
-        precondition(field.stringValue == "caf" && items[cursor].identity == "caffeinate" && selection == .navigated)
-        try? await Task.sleep(for: .milliseconds(400))
-        dumpFrames("submenu-backtab")
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:)))
-        precondition(items.count == 1 && items[0].title == "Toggle Caffeinate" && caffeine.state.spotlite == originalState)
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.deleteBackward(_:)))
-        precondition(field.stringValue == "caf" && items[cursor].identity == "caffeinate")
-        print("DEV menu: Return/Tab entry, toggle, filtering, Shift+Tab and empty Backspace passed")
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.cancelOperation(_:)))
-        show()
-        precondition(!navigation.canGoBack && argument == nil)
-        print("DEV menu: Escape and reopen reset passed")
+        do { try await runDevPluginMenuChecks() }
+        catch { print("DEV menu failed: \(error)"); exit(1) }
+        guard let editor = field.currentEditor() as? NSTextView else { exit(1) }
         await runDevNestedMenuChecks(editor)
         await runDevBackNavigationChecks(editor)
     }
 
+    func runDevPluginChecks() async throws {
+        guard ProcessInfo.processInfo.environment["SPOTLITE_DEV_PLUGIN_ROOT"] != nil else {
+            throw PluginError.invalid("Set SPOTLITE_DEV_PLUGIN_ROOT to a temporary directory for isolated plugin checks.")
+        }
+        try await runDevPluginMenuChecks()
+        try await plugins.waitUntilLoaded()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SpotlitePluginFixture-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root); plugins.shutdown() }
+        let id = "dev.spotlite.fixture"
+        let manifest = #"{"id":"dev.spotlite.fixture","name":"Plugin Fixture","version":"1.0.0","apiVersion":1,"background":true,"commands":[{"id":"fixture","title":"Plugin Fixture","prefix":"fixture","global":true,"debounceMilliseconds":0}]}"#
+        try Data(manifest.utf8).write(to: root.appendingPathComponent("manifest.json"))
+        let source = #"""
+        local s = require("spotlite")
+        return {
+          search = function(args)
+            if args.query == "slow" then s.timers.sleep({seconds=0.35}) end
+            if args.query == "metadata" then s.timers.sleep({seconds=0.15}) end
+            if args.query == "crash" then os.exit(7) end
+            if args.query == "hang" then while true do end end
+            if args.query == "error" then error("fixture search error") end
+            return {id="fixture", title="Plugin Fixture", items={
+              {id=args.query == "" and "root" or args.query, title=args.query == "" and "Open Form" or args.query,
+               actions={{id="form", title="Open Form"},{id="background",title="Background task"},{id="metadata",title="Update Command Icon"}}}
+            }}
+          end,
+          action = function(args)
+            if args.action.id == "metadata" then
+              s.commands.update({id="fixture",icon="bolt"})
+              s.timers.sleep({seconds=0.2})
+            elseif args.action.id == "form" then
+              local process = s.process.run({executable="/usr/bin/printf", arguments={"%s", "plugin process"}})
+              assert(process.stdout == "plugin process" and process.status == 0, "process API failed")
+              s.storage.set({key="process", value=process.stdout})
+              s.ui.push({id="form",title="Fixture Form",type="form", fields={
+                {id="name",title="Name",required=true}, {id="count",title="Count",type="number",defaultValue=2}
+              }, actions={{id="submit",title="Show Details"}}})
+            elseif args.action.id == "submit" then
+              s.storage.set({key="submitted",value=args.values})
+              s.ui.push({id="detail",title="Fixture Details",type="detail",markdown="Hello **" .. args.values.name .. "**",
+                actions={{id="back",title="Back"}}})
+            elseif args.action.id == "background" then
+              s.background(function() s.timers.sleep({seconds=0.15}); s.storage.set({key="background",value=true}) end)
+            elseif args.action.id == "resources" then
+              s.power.create({id="fixture",type="PreventUserIdleDisplaySleep",name="Plugin resource fixture"})
+              s.status.set({id="fixture",icon="puzzlepiece.extension",tooltip="Plugin resource fixture",menu={}})
+            elseif args.action.id == "back" then s.ui.pop() end
+          end
+        }
+        """#
+        try Data(source.utf8).write(to: root.appendingPathComponent("main.lua"))
+        try await plugins.install(root, development: true)
+        guard let reference = plugins.commandIndex.commands.first(where: { $0.plugin.id == id }) else { throw PluginError.failed("Fixture command missing.") }
+        show()
+        try await plugins.setGlobalSearch(id, true)
+        setQuery("fast"); updateMatches(for: "fast")
+        await globalSearchTask?.value
+        try checkUtility(items.contains { if case .pluginResult(let owner, let result) = $0 { return owner.plugin.id == id && result.title == "fast" }; return false })
+        setQuery("slow"); updateMatches(for: "slow")
+        try await Task.sleep(for: .milliseconds(180))
+        enterScope(.menu(.generateUUID))
+        leaveScope()
+        await globalSearchTask?.value
+        try checkUtility(items.contains { if case .pluginResult(let owner, let result) = $0 { return owner.plugin.id == id && result.title == "slow" }; return false })
+        print("DEV plugins: Back resumes a cancelled global search for the restored query")
+        try await plugins.setGlobalSearch(id, false)
+        setQuery("fixture initial"); updateMatches(for: "fixture initial")
+        await pluginSearchTask?.value
+        try checkUtility(pluginLocation?.pluginID == id && field.stringValue == "initial")
+        leaveScope()
+        try checkUtility(pluginLocation == nil && field.stringValue == "fixture initial")
+        print("DEV plugins: global opt-in and direct command prefixes passed")
+        show(); enterPlugin(reference)
+        await pluginSearchTask?.value
+        setQuery("slow"); updateMatches(for: "slow")
+        try await Task.sleep(for: .milliseconds(30))
+        setQuery("fast"); updateMatches(for: "fast")
+        await pluginSearchTask?.value
+        try await Task.sleep(for: .milliseconds(400))
+        try checkUtility(items.first?.title == "fast")
+        print("DEV plugins: cancelled/stale searches cannot replace newer results")
+        setQuery("metadata"); updateMatches(for: "metadata")
+        await pluginSearchTask?.value
+        try await Task.sleep(for: .milliseconds(180))
+        let stableHeight = glassHeight.constant
+        let metadataItem = pluginLocation!.view.items![0]
+        runPluginAction(reference, item: metadataItem, action: metadataItem.actions![2])
+        var maximumHeight = stableHeight
+        for _ in 0..<25 {
+            try await Task.sleep(for: .milliseconds(10))
+            maximumHeight = max(maximumHeight, glassHeight.constant)
+        }
+        await pluginActionTask?.value
+        print("DEV plugin metadata: resting=\(stableHeight) max=\(maximumHeight)")
+        try checkUtility(maximumHeight <= stableHeight + 0.5 && !pluginLoading)
+        setQuery(""); updateMatches(for: "")
+        await pluginSearchTask?.value
+        try checkUtility(openPluginActions())
+        try checkUtility(pluginLocation?.isActionMenu == true && items.count == 3)
+        leaveScope()
+        await pluginSearchTask?.value
+        launch(at: 0)
+        await pluginActionTask?.value
+        try checkUtility(pluginLocation?.view.type == "form")
+        guard let text = devDescendants(of: pluginContent).compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable && !($0 is NSSecureTextField) }),
+              let queryEditor = field.currentEditor() as? NSTextView else { throw PluginError.failed("Native form field or query editor missing.") }
+        _ = control(field, textView: queryEditor, doCommandBy: #selector(NSResponder.insertTab(_:)))
+        try checkUtility(text.currentEditor() != nil)
+        let processValue = try await plugins.store.storedValue(id, key: "process")
+        try checkUtility(processValue == .string("plugin process"))
+        try await Task.sleep(for: .milliseconds(170))
+        dumpFrames("plugin-form")
+        devCapture("plugin-form", view: glass)
+        let savedGeometry = preferences.panelGeometry
+        var narrow = preferences
+        narrow.panelGeometry = PanelGeometry(width: PanelGeometry.minWidth, verticalFraction: savedGeometry.verticalFraction)
+        preferencesDidChange(narrow)
+        try await Task.sleep(for: .milliseconds(170))
+        dumpFrames("plugin-form-min")
+        devCapture("plugin-form-min", view: glass)
+        narrow.panelGeometry = savedGeometry
+        preferencesDidChange(narrow)
+        text.stringValue = "Spotlite"
+        text.currentEditor()?.string = "Spotlite"
+        pluginContent.submit()
+        await pluginActionTask?.value
+        try checkUtility(pluginLocation?.view.type == "detail")
+        try await Task.sleep(for: .milliseconds(170))
+        dumpFrames("plugin-detail")
+        devCapture("plugin-detail", view: glass)
+        leaveScope()
+        try checkUtility(pluginLocation?.view.type == "form")
+        leaveScope()
+        await pluginSearchTask?.value
+        try checkUtility(pluginLocation?.view.id == "fixture" && field.stringValue.isEmpty)
+        setQuery("error"); updateMatches(for: "error")
+        await pluginSearchTask?.value
+        try checkUtility(pluginProblem?.contains("fixture search error") == true)
+        setQuery("fast"); updateMatches(for: "fast")
+        await pluginSearchTask?.value
+        try checkUtility(items.first?.title == "fast")
+        let action = pluginLocation!.view.items![0].actions![1]
+        runPluginAction(reference, item: pluginLocation!.view.items![0], action: action)
+        await pluginActionTask?.value
+        leaveScope()
+        try await Task.sleep(for: .milliseconds(300))
+        let backgroundValue = try await plugins.store.storedValue(id, key: "background")
+        try checkUtility(backgroundValue == .bool(true))
+        try checkUtility(plugins.status(id) == "Ready")
+        print("DEV plugins: native form/detail stack, process/storage APIs, errors, background lifetime and idle release passed")
+        plugins.acquire(id)
+        _ = try await plugins.request(id, method: "search", params: .object(["query": .string("warm")]))
+        let hanging = Task { try await self.plugins.request(id, method: "search", params: .object(["query": .string("hang")])) }
+        try await Task.sleep(for: .milliseconds(60))
+        plugins.stop(id, force: true)
+        var interrupted = false
+        do { _ = try await hanging.value } catch { interrupted = true }
+        try checkUtility(interrupted)
+        try await plugins.restart(id)
+        do { _ = try await plugins.request(id, method: "search", params: .object(["query": .string("crash")])) }
+        catch {}
+        try checkUtility(plugins.status(id) == "Failed")
+        try await plugins.restart(id)
+        plugins.release(id)
+        try checkUtility(plugins.status(id) == "Ready")
+        print("DEV plugins: infinite loop Force Stop, crash reporting and explicit restart passed")
+        plugins.acquire(id)
+        _ = try await plugins.request(id, method: "action", params: .object(["action": .object(["id": .string("resources")])]))
+        try checkUtility(plugins.host.hasResources(id))
+        plugins.stop(id, force: true)
+        try checkUtility(!plugins.host.hasResources(id))
+        try await plugins.restart(id)
+        plugins.release(id)
+        print("DEV plugins: Stop releases native power assertions and menu bar resources")
+        for (owner, pid) in plugins.runningProcessIDs {
+            print("DEV plugin helper: \(owner) pid=\(pid)")
+            let metrics = Process()
+            metrics.executableURL = URL(fileURLWithPath: "/bin/ps")
+            metrics.arguments = ["-p", String(pid), "-o", "pid=,%cpu=,rss=,time="]
+            try metrics.run(); metrics.waitUntilExit()
+        }
+        let page = PluginsSettingsViewController(manager: plugins)
+        page.view.setFrameSize(page.view.fittingSize)
+        page.view.layoutSubtreeIfNeeded()
+        let settingsWindow = NSWindow(contentRect: NSRect(origin: .zero, size: page.view.fittingSize), styleMask: [.titled], backing: .buffered, defer: false)
+        settingsWindow.contentView = page.view
+        settingsWindow.center(); settingsWindow.orderFront(nil)
+        if let table = devDescendants(of: page.view).compactMap({ $0 as? NSTableView }).first { table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false) }
+        try await Task.sleep(for: .milliseconds(200))
+        page.view.layoutSubtreeIfNeeded()
+        devCapture("plugin-settings", view: page.view)
+        print("DEV plugins: settings frame=\(page.view.frame)")
+        settingsWindow.orderOut(nil)
+        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_GITHUB"] == "1",
+           let github = plugins.commandIndex.commands.first(where: { $0.plugin.id == "com.spotlite.github" }) {
+            plugins.acquire(github.plugin.id)
+            let result = try await plugins.search(github, query: "repo:swiftlang/swift")
+            try checkUtility(result.items?.isEmpty == false)
+            plugins.release(github.plugin.id)
+            print("DEV plugins: live GitHub repository search returned \(result.items?.count ?? 0) results")
+        }
+        try await plugins.uninstall(id, removeData: true)
+        print("DEV plugins: all checks passed")
+    }
+
+    private func devCapture(_ name: String, view: NSView) {
+        guard let directory = ProcessInfo.processInfo.environment["SPOTLITE_DEV_CAPTURE_DIR"] else { return }
+        view.layoutSubtreeIfNeeded()
+        let output = URL(fileURLWithPath: directory).appendingPathComponent(name + ".png")
+        try? FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let window = view.window {
+            let capture = Process()
+            capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            capture.arguments = ["-x", "-o", "-l", String(window.windowNumber), output.path]
+            do {
+                try capture.run(); capture.waitUntilExit()
+                if capture.terminationStatus == 0 { return }
+            } catch { print("DEV screenshot: \(error)") }
+        }
+        print("DEV screenshot: using view-cache fallback for \(name)")
+        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        if let png = bitmap.representation(using: .png, properties: [:]) { try? png.write(to: output) }
+    }
+
+    private func runDevPluginMenuChecks() async throws {
+        try await plugins.waitUntilLoaded()
+        show()
+        for plugin in plugins.plugins where plugin.enabled && plugin.manifest.testEntry != nil {
+            guard let reference = plugins.commandIndex.commands.first(where: { $0.plugin.id == plugin.id }) else { continue }
+            enterPlugin(reference)
+            await pluginSearchTask?.value
+            try await Task.sleep(for: .milliseconds(180))
+            let height = glassHeight.constant
+            var minimum = height, maximum = height, completed = false
+            let check = Task {
+                defer { completed = true }
+                return try await self.plugins.request(plugin.id, method: "test", params: .object([:]))
+            }
+            for _ in 0..<1000 {
+                if completed { break }
+                try await Task.sleep(for: .milliseconds(10))
+                minimum = min(minimum, glassHeight.constant)
+                maximum = max(maximum, glassHeight.constant)
+            }
+            guard completed else {
+                check.cancel(); plugins.stop(plugin.id, force: true)
+                throw PluginError.failed("Reference plugin checks timed out.")
+            }
+            _ = try await check.value
+            print("DEV plugin reference geometry: \(plugin.manifest.name) height=\(height) min=\(minimum) max=\(maximum)")
+            try checkUtility(minimum >= height - 0.5 && maximum <= height + 0.5)
+            leaveScope()
+            print("DEV plugin reference: \(plugin.manifest.name) tests passed")
+        }
+        show()
+    }
+
     /// Real AppKit conversion and generation checks; preserve every clipboard representation.
     func runDevUtilityChecks() async throws {
+        try await plugins.waitUntilLoaded()
         let savedPreferences = preferences
         defer { preferencesDidChange(savedPreferences) }
         preferences.hiddenUtilities = []
@@ -1340,10 +1903,10 @@ extension SpotliteController {
             picker.sendAction(picker.action, to: picker.target)
             page.layoutSubtreeIfNeeded()
         }
-        try checkUtility(picker.label(forSegment: 5) == "Utility" && table.numberOfRows == 5)
+        try checkUtility(picker.label(forSegment: 5) == "Utility" && table.numberOfRows == SearchUtility.allCases.count + 1)
         select(5)
-        try checkUtility(table.numberOfRows == 4)
-        for index in 0..<4 {
+        try checkUtility(table.numberOfRows == SearchUtility.allCases.count)
+        for index in 0..<SearchUtility.allCases.count {
             let row = table.view(atColumn: 0, row: index, makeIfNecessary: true) as! SettingsRowView
             let fields = devDescendants(of: row).compactMap { $0 as? NSTextField }
             let alias = fields.first { $0.placeholderString == "alias" }!
@@ -1358,9 +1921,9 @@ extension SpotliteController {
             try checkUtility(!model.preferences.hiddenUtilities.contains(utility))
             print("DEV settings: Utility row=\(row.frame) name=\(name) aliasHidden=\(alias.isHidden)")
         }
-        try checkUtility(saves == 8 && model.preferences.hiddenBundleIDs.isEmpty && model.preferences.aliases.isEmpty)
+        try checkUtility(saves == SearchUtility.allCases.count * 2 && model.preferences.hiddenBundleIDs.isEmpty && model.preferences.aliases.isEmpty)
         select(0)
-        try checkUtility(table.numberOfRows == 5)
+        try checkUtility(table.numberOfRows == SearchUtility.allCases.count + 1)
         select(1)
         try checkUtility(table.numberOfRows == 1)
         let appRow = table.view(atColumn: 0, row: 0, makeIfNecessary: true) as! SettingsRowView
@@ -1380,30 +1943,20 @@ extension SpotliteController {
 
     private func runDevUtilityVisibilityChecks() throws {
         let savedPreferences = preferences
-        let wasActive = caffeine.state.spotlite
-        defer {
-            if caffeine.state.spotlite != wasActive { caffeine.toggle() }
-            preferencesDidChange(savedPreferences)
-        }
-        for utility in [SearchUtility.caffeinate, .generateUUID] {
-            preferences.hiddenUtilities = []
-            show()
-            let query = utility == .caffeinate ? "caf" : "uuid"
-            setQuery(query)
-            updateMatches(for: query)
-            let index = items.firstIndex { $0.identity == utility.rawValue }!
-            launch(at: index)
-            try checkUtility(!items.isEmpty)
-            if utility == .caffeinate && !caffeine.state.spotlite { caffeine.toggle() }
-            var hidden = preferences
-            hidden.hiddenUtilities.insert(utility)
-            preferencesDidChange(hidden)
-            try checkUtility(items.isEmpty)
-            if utility == .caffeinate { try checkUtility(caffeine.state.spotlite) }
-            leaveScope()
-            try checkUtility(!items.contains { $0.identity == utility.rawValue })
-        }
-        print("DEV utilities: hiding open submenus removes their actions; active Caffeinate stays on")
+        defer { preferencesDidChange(savedPreferences) }
+        let utility = SearchUtility.generateUUID
+        preferences.hiddenUtilities = []
+        show(); setQuery("uuid"); updateMatches(for: "uuid")
+        let index = items.firstIndex { $0.identity == utility.rawValue }!
+        launch(at: index)
+        try checkUtility(!items.isEmpty)
+        var hidden = preferences
+        hidden.hiddenUtilities.insert(utility)
+        preferencesDidChange(hidden)
+        try checkUtility(items.isEmpty)
+        leaveScope()
+        try checkUtility(!items.contains { $0.identity == utility.rawValue })
+        print("DEV utilities: hiding an open submenu removes its actions")
     }
 
     private func checkUtility(_ condition: @autoclosure () -> Bool, line: Int = #line) throws {
@@ -1411,22 +1964,23 @@ extension SpotliteController {
     }
 
     private func runDevNestedMenuChecks(_ editor: NSTextView) async {
+        let child = SearchMenu(id: "dev.child", title: "Child", items: [
+            SearchMenuItem(id: "dev.child.action", title: "Copy UUID", action: .generateUUID(.v4))
+        ])
         let fixture = SearchMenu(id: "dev.menu", title: "Menu fixture", items: [
-            SearchMenuItem(id: "dev.first", title: "First", action: .toggleCaffeinate,
+            SearchMenuItem(id: "dev.first", title: "First", action: .generateUUID(.v4),
                            closesPanelOnAction: false),
-            SearchMenuItem(id: "dev.both", title: "Both", action: .toggleCaffeinate,
-                           closesPanelOnAction: false, submenu: .caffeinate),
-            SearchMenuItem(id: "dev.nested", title: "Nested", submenu: .caffeinate),
+            SearchMenuItem(id: "dev.both", title: "Both", action: .generateUUID(.v4),
+                           closesPanelOnAction: false, submenu: child),
+            SearchMenuItem(id: "dev.nested", title: "Nested", submenu: child),
         ])
         preferences.visibleRows = max(preferences.visibleRows, fixture.items.count)
         enterScope(.menu(fixture))
         select(1, as: .navigated)
-        let originalState = caffeine.state.spotlite
         _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
         guard case .menu(let current) = navigation.scope else { preconditionFailure("Expected fixture") }
-        precondition(current.id == fixture.id && caffeine.state.spotlite != originalState && cursor == 1)
+        precondition(current.id == fixture.id && cursor == 1)
         _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
-        precondition(caffeine.state.spotlite == originalState)
         var updated = preferences
         updated.backNavigationBehavior = .clearQuery
         preferencesDidChange(updated)
@@ -1450,7 +2004,7 @@ extension SpotliteController {
                      + Metrics.listBottomPadding > childHeight)
         _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:)))
         try? await Task.sleep(for: .milliseconds(400))
-        precondition(items.count == 1 && items[0].identity == "caffeinate.toggle"
+        precondition(items.count == 1 && items[0].identity == "dev.child.action"
                      && glassHeight.constant == childHeight)
         dumpFrames("nested-rapid-roundtrip")
         _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertBacktab(_:)))
@@ -1463,7 +2017,7 @@ extension SpotliteController {
                 updateMatches(for: "bo")
                 select(0, as: .navigated)
                 _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:)))
-                precondition(items.count == 1 && items[0].identity == "caffeinate.toggle")
+                precondition(items.count == 1 && items[0].identity == "dev.child.action")
                 _ = control(field, textView: editor, doCommandBy: key)
                 switch behavior {
                 case .restoreQuery:
@@ -1488,11 +2042,11 @@ extension SpotliteController {
         for behavior in BackNavigationBehavior.allCases {
             for key in backKeys {
                 for isArgument in [false, true] {
-                    setQuery("caf")
-                    updateMatches(for: "caf")
-                    let row = items.firstIndex(where: { $0.identity == "caffeinate" })!
+                    setQuery("uuid")
+                    updateMatches(for: "uuid")
+                    let row = items.firstIndex(where: { $0.identity == "generateUUID" })!
                     select(row, as: .navigated)
-                    enterScope(isArgument ? .argument(link) : .menu(.caffeinate))
+                    enterScope(isArgument ? .argument(link) : .menu(.generateUUID))
                     // Change the preference after entry: the next back action must use it.
                     var updated = preferences
                     updated.backNavigationBehavior = behavior
@@ -1506,7 +2060,7 @@ extension SpotliteController {
                     precondition(!navigation.canGoBack && argument == nil)
                     switch behavior {
                     case .restoreQuery:
-                        precondition(field.stringValue == "caf" && items[cursor].identity == "caffeinate"
+                        precondition(field.stringValue == "uuid" && items[cursor].identity == "generateUUID"
                                      && selection == .navigated)
                     case .clearQuery:
                         precondition(field.stringValue.isEmpty && items.isEmpty && cursor == 0 && selection == .topHit)

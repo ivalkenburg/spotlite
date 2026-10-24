@@ -23,7 +23,7 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Spotlite sends commands to loginwindow, Finder and System Events to restart, shut down, log out, empty the Trash and switch dark mode.</string>
+	<string>Spotlite sends system commands and lets installed plugins control applications through Apple events.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSSupportsAutomaticTermination</key>

@@ -1,6 +1,7 @@
 APP      := Spotlite
 BUNDLE   := build/$(APP).app
 BIN      := .build/release/$(APP)
+RUNNER   := .build/release/SpotlitePluginRunner
 # The first Apple Development certificate by its full name: the bare prefix is
 # ambiguous when the keychain holds more than one. Ad-hoc ("-") when there is none.
 # Override with `make IDENTITY="..."`.
@@ -14,7 +15,7 @@ DMG      := build/$(APP)-$(VERSION).dmg
 DEVELOPER_ID   ?= $(shell security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application/ {print $$2; exit}')
 NOTARY_PROFILE ?= spotlite
 
-.PHONY: all build bundle run clean install test dmg release cask
+.PHONY: all build bundle run clean install test test-plugins dmg release cask
 
 all: bundle
 
@@ -23,10 +24,13 @@ build:
 
 bundle: build
 	@rm -rf $(BUNDLE)
-	@mkdir -p $(BUNDLE)/Contents/MacOS $(BUNDLE)/Contents/Resources
+	@mkdir -p $(BUNDLE)/Contents/MacOS $(BUNDLE)/Contents/Resources $(BUNDLE)/Contents/Helpers
 	@cp $(BIN) $(BUNDLE)/Contents/MacOS/$(APP)
+	@cp $(RUNNER) $(BUNDLE)/Contents/Helpers/SpotlitePluginRunner
+	@cp -R Resources/PluginRuntime Resources/Plugins $(BUNDLE)/Contents/Resources/
 	@cp Resources/Info.plist $(BUNDLE)/Contents/Info.plist
 	@cp Resources/AppIcon.icns $(BUNDLE)/Contents/Resources/AppIcon.icns
+	@codesign --force --sign "$(IDENTITY)" $(SIGN_FLAGS) $(BUNDLE)/Contents/Helpers/SpotlitePluginRunner
 	@codesign --force --sign "$(IDENTITY)" $(SIGN_FLAGS) --entitlements Resources/Spotlite.entitlements $(BUNDLE)
 	@echo "built $(BUNDLE)"
 
@@ -43,6 +47,12 @@ install: bundle
 
 test:
 	swift test
+
+test-plugins: bundle
+	@plugin_root=$$(mktemp -d /tmp/spotlite-plugins.XXXXXX); \
+	trap 'rm -rf "$$plugin_root"' EXIT; \
+	SPOTLITE_DEV_PLUGIN_ROOT="$$plugin_root" SPOTLITE_DEV_PLUGINS=1 SPOTLITE_DEV_PIN=1 \
+	  $(BUNDLE)/Contents/MacOS/$(APP)
 
 # A disk image with an Applications link to drag onto. Signed however `bundle` signs,
 # so this alone is only fit for local testing; `release` produces the one to publish.

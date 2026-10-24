@@ -16,21 +16,7 @@ struct ToastMessage: Equatable {
                      symbol: hidden ? "eye.slash" : "eye")
     }
 
-    static func caffeine(succeeded: Bool, state: CaffeineState) -> ToastMessage {
-        guard succeeded else {
-            return ToastMessage(text: "Couldn’t \(state.spotlite ? "disable" : "enable") Caffeinate",
-                                symbol: "exclamationmark.triangle")
-        }
-        let text: String
-        if state.spotlite {
-            text = "Caffeinate enabled"
-        } else if state.external {
-            text = "Spotlite Caffeinate disabled; another app is keeping the display awake"
-        } else {
-            text = "Caffeinate disabled"
-        }
-        return ToastMessage(text: text, symbol: state.spotlite ? "cup.and.saucer.fill" : "cup.and.saucer")
-    }
+
 }
 
 /// Shared by launcher, menu bar and Settings. No views or scheduled work exist while
@@ -82,12 +68,6 @@ final class ToastPresenter {
         pasteboard.clearContents()
         let succeeded = pasteboard.setString(value, forType: .string)
         show(.copied(succeeded: succeeded), position: position, on: screen)
-    }
-
-    /// Called only by explicit controls, never by the background assertion refresh.
-    func toggleCaffeinate(_ caffeine: CaffeineAssertion, position: ToastPosition, on screen: NSScreen? = nil) {
-        let succeeded = caffeine.toggle()
-        show(.caffeine(succeeded: succeeded, state: caffeine.state), position: position, on: screen)
     }
 
     func dismiss() {
@@ -228,7 +208,7 @@ private final class ToastView: NSView {
 extension ToastPresenter {
     /// SPOTLITE_DEV_TOAST=1: exercise native windows and controls without saving prefs
     /// or touching the general clipboard. Frame assertions catch clipped/wrapped labels.
-    func runDevChecks(caffeine: CaffeineAssertion) async throws {
+    func runDevChecks() async throws {
         func check(_ condition: @autoclosure () -> Bool, _ description: String) throws {
             guard condition() else {
                 throw NSError(domain: "ToastChecks", code: 1,
@@ -258,31 +238,12 @@ extension ToastPresenter {
             }
         }
 
-        let external = ToastMessage.caffeine(succeeded: true,
-                                             state: CaffeineState(spotlite: false, external: true))
-        show(external, position: .bottomCenter, on: screen)
+        let long = ToastMessage(text: "A longer plugin message wraps onto another line while keeping the whole message visible.", symbol: "info.circle")
+        show(long, position: .bottomCenter, on: screen)
         let content = panel!.contentView as! ToastView
         let labelFrame = content.label.convert(content.label.bounds, to: content)
-        try check(content.bounds.contains(labelFrame) && labelFrame.height > 20,
-                  "External caffeine message must wrap within the toast")
-        print("DEV toast: wrapped window=\(panel!.frame) label=\(labelFrame)")
-        try check(ToastMessage.caffeine(succeeded: false, state: CaffeineState()).text == "Couldn’t enable Caffeinate",
-                  "Enable failure was reported as success")
-        try check(ToastMessage.caffeine(succeeded: false, state: CaffeineState(spotlite: true)).text == "Couldn’t disable Caffeinate",
-                  "Disable failure was reported as success")
-        try check(ToastMessage.copied(succeeded: false).text == "Couldn’t copy to clipboard",
-                  "Clipboard failure was reported as success")
-        let originalState = caffeine.state.spotlite
-        defer { if caffeine.state.spotlite != originalState { caffeine.toggle() } }
-        toggleCaffeinate(caffeine, position: .bottomCenter, on: screen)
-        checkDevMessage(ToastMessage.caffeine(succeeded: caffeine.state.spotlite != originalState,
-                                              state: caffeine.state).text)
-        let beforeRefresh = panel?.contentView
-        caffeine.refresh()
-        try check(panel?.contentView === beforeRefresh, "Background refresh generated a toast")
-        if caffeine.state.spotlite != originalState {
-            toggleCaffeinate(caffeine, position: .bottomCenter, on: screen)
-        }
+        try check(content.bounds.contains(labelFrame) && labelFrame.height > 20, "Long messages must wrap within the toast")
+        try check(ToastMessage.copied(succeeded: false).text == "Couldn’t copy to clipboard", "Clipboard failure was reported as success")
 
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
@@ -349,7 +310,7 @@ extension ToastPresenter {
         dismiss()
         try await Task.sleep(for: .milliseconds(170))
         try check(panel == nil && dismissal == nil, "Explicit dismissal left work behind")
-        print("DEV toast: focus, placement, wrapping, copy, caffeine, Settings, replacement, fades and cleanup passed")
+        print("DEV toast: focus, placement, wrapping, copy, plugin messages, Settings, replacement, fades and cleanup passed")
     }
 
     func checkDevMessage(_ text: String) {

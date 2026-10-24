@@ -27,8 +27,15 @@ keystroke.
 - Choose which folders to search for apps.
 - Hide apps you never launch with Command-Delete.
 - Optional recent apps list before you type, and a dot under apps that are running.
-- A Caffeinate switch that keeps the display awake.
+- A bundled Caffeinate plugin that keeps the display awake, with a menu bar indicator and duration choices.
+- A bundled GitHub plugin with search results and details inside Spotlite.
 - The look of macOS 26 Spotlight, Liquid Glass included, in light and dark mode.
+
+## Plugins
+
+Plugin support uses bundled Lua with native search views and a versioned host API.
+Add a plugin folder or ZIP in **Settings → Plugins**. Caffeinate and GitHub are included.
+See the [plugin author guide](docs/plugins.md) for packages, APIs, examples and development checks.
 
 ## Install
 
@@ -66,14 +73,14 @@ to check toast layout, replacement, dismissal and the placement control.
 | `Option-Space` | Show or hide the launcher (configurable) |
 | `Up` / `Down` | Move the selection |
 | `Return` | Open the selected result, or copy a calculator result |
-| `Tab` | Type input for the selected `{query}` link |
+| `Tab` | Enter a plugin command, show result actions, or type input for a `{query}` link |
 | `Command-1` to `Command-9` | Open the nth result |
 | `Command-Return` | Reveal the selected app or file in Finder |
 | `Option-Return` | Copy the selected app's path or link's address |
 | `Command-Q` | Quit the selected app if it is running |
 | `Command-Delete` | Hide the selected app from results |
 | `Command-Z` | Undo hiding an app, before editing the query or closing the panel |
-| `Escape` | Close |
+| `Escape` | Go back within a plugin, or close the launcher |
 
 Open Settings from the menu bar icon, or search for `settings` in Spotlite.
 Drag the panel's edges to resize it, or drag an empty part of the search bar to

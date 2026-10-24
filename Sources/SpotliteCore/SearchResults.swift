@@ -8,8 +8,8 @@ public enum SearchResult {
     case generateUUID
     case app(MatchResult)
     case settings
-    case caffeinate
     case webSearch(query: String, engine: WebSearchEngine)
+    case pluginCommand(PluginCommandReference)
 }
 
 /// Assembles the result list for a query: a calculation pinned on top when the query is
@@ -20,7 +20,6 @@ public enum SearchResults {
     /// Queries that offer built-in entries alongside any app matches.
     static let settingsKeywords = ["settings", "preferences", "spotlite"]
     static let uuidKeywords = ["uuid", "generate uuid"]
-    static let caffeineKeywords = ["caffeinate", "caffeine"]
 
     public static func build(
         for query: String,
@@ -31,6 +30,7 @@ public enum SearchResults {
         recents: Int = 0,
         webSearch: WebSearchEngine? = nil,
         hiddenUtilities: Set<SearchUtility> = [],
+        pluginCommands: PluginCommandIndex? = nil,
         now: Date = Date()
     ) -> [SearchResult] {
         if query.allSatisfy(\.isWhitespace) {
@@ -59,11 +59,11 @@ public enum SearchResults {
 
         // The self-indexed escape hatch: reachable even with the menu bar icon hidden.
         if mentions(trimmed, keywords: settingsKeywords) { result.append(.settings) }
-        if !hiddenUtilities.contains(.caffeinate), mentions(trimmed, keywords: caffeineKeywords) {
-            result.append(.caffeinate)
-        }
         if !hiddenUtilities.contains(.generateUUID), mentions(trimmed, keywords: uuidKeywords) {
             result.append(.generateUUID)
+        }
+        if let pluginCommands {
+            result.append(contentsOf: pluginCommands.search(trimmed, matcher: matcher).map(SearchResult.pluginCommand))
         }
         // Last, so it only becomes the top hit when nothing on this Mac matches. Not
         // under a calculation: arithmetic is already answered, and the card would lose
@@ -99,13 +99,6 @@ public enum SearchResults {
             .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.tieBreaksBefore($1.0) }
             .prefix(limit)
             .map { MatchResult(entry: $0.0, score: 0, positions: []) }
-    }
-
-    /// Whether `query` shows the Caffeinate row, so a caffeine change elsewhere only
-    /// rebuilds the list when that row is on screen.
-    public static func offersCaffeinate(_ query: String) -> Bool {
-        guard let trimmed = bounded(query) else { return false }
-        return mentions(trimmed, keywords: caffeineKeywords)
     }
 
     /// The trimmed query, or nil when it is empty or too long to produce any row: the

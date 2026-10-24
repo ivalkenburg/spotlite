@@ -1,0 +1,16 @@
+{
+  "id": "com.spotlite.github",
+  "name": "GitHub",
+  "description": "Search repositories, issues and pull requests, including private content available to your token.",
+  "author": "Spotlite",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "icon": "chevron.left.forwardslash.chevron.right",
+  "commands": [
+    {"id": "github", "title": "GitHub", "subtitle": "Search GitHub", "prefix": "gh", "icon": "chevron.left.forwardslash.chevron.right", "debounceMilliseconds": 200}
+  ],
+  "settings": [
+    {"id": "token", "title": "Personal access token", "type": "secret", "description": "Optional for public search. Add a token with access to the private repositories you want to search."},
+    {"id": "category", "title": "Default search", "type": "select", "options": ["Repositories", "Issues", "Pull requests"], "defaultValue": "Repositories"}
+  ]
+}

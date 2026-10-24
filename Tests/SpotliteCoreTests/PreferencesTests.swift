@@ -15,7 +15,7 @@ struct PreferencesTests {
 
     @Test func roundTripsThroughJSON() throws {
         var prefs = Preferences()
-        prefs.hiddenUtilities = [.caffeinate, .unitConversion]
+        prefs.hiddenUtilities = [.generateUUID, .unitConversion]
         prefs.hiddenBundleIDs = ["com.example.one", "com.example.two"]
         prefs.aliases = ["com.adobe.Photoshop": "ps"]
         prefs.panelScreen = .primary
@@ -112,9 +112,9 @@ struct PreferencesTests {
     }
 
     @Test func unknownUtilityDoesNotLoseOtherPreferences() throws {
-        let data = Data(#"{"hiddenUtilities":["caffeinate","futureUtility",42,"calculator"],"showMenuBarIcon":false}"#.utf8)
+        let data = Data(#"{"hiddenUtilities":["formerUtility","futureUtility",42,"calculator"],"showMenuBarIcon":false}"#.utf8)
         let decoded = try JSONDecoder().decode(Preferences.self, from: data)
-        #expect(decoded.hiddenUtilities == [.caffeinate, .calculator])
+        #expect(decoded.hiddenUtilities == [.calculator])
         #expect(!decoded.showMenuBarIcon)
     }
 

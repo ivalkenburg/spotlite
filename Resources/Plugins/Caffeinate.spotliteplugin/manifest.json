@@ -1,0 +1,16 @@
+{
+  "id": "com.spotlite.caffeinate",
+  "name": "Caffeinate",
+  "description": "Keep the display awake until turned off or for a chosen duration.",
+  "author": "Spotlite",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "background": true,
+  "activation": "startup",
+  "legacyUtilityID": "caffeinate",
+  "testEntry": "test.lua",
+  "icon": "cup.and.saucer",
+  "commands": [
+    {"id": "caffeinate", "title": "Caffeinate", "icon": "cup.and.saucer", "keywords": ["caffeine", "awake"], "debounceMilliseconds": 0}
+  ]
+}
