@@ -1154,7 +1154,7 @@ extension SpotliteController {
         setQuery("caf")
         updateMatches(for: "caf")
         guard let row = items.firstIndex(where: { $0.identity == "caffeinate" }),
-              let editor = field.currentEditor() as? NSTextView else {
+              var editor = field.currentEditor() as? NSTextView else {
             print("DEV menu: missing Caffeinate or field editor")
             exit(1)
         }
@@ -1168,11 +1168,30 @@ extension SpotliteController {
         try? await Task.sleep(for: .milliseconds(400))
         precondition(items.count == 1 && items[0].title == "Toggle Caffeinate")
         dumpFrames("submenu")
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
-        precondition(caffeine.state.spotlite != originalState && items[0].switchState == caffeine.state.spotlite)
-        dumpFrames("submenu-toggled")
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
+        for useReturn in [true, false] {
+            let previousState = caffeine.state.spotlite
+            if useReturn {
+                _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
+            } else {
+                // Mouse clicks use the same row dispatcher.
+                launch(at: 0)
+            }
+            precondition(caffeine.state.spotlite != previousState && isDismissing)
+            let message = ToastMessage.caffeine(succeeded: true, state: caffeine.state).text
+            try? await Task.sleep(for: .milliseconds(300))
+            precondition(!panel.isVisible && !navigation.canGoBack)
+            toasts.checkDevMessage(message)
+
+            show()
+            setQuery("caf")
+            updateMatches(for: "caf")
+            select(items.firstIndex { $0.identity == "caffeinate" }!, as: .navigated)
+            editor = field.currentEditor() as! NSTextView
+            _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
+            precondition(items.count == 1 && items[0].title == "Toggle Caffeinate" && !isDismissing)
+        }
         precondition(caffeine.state.spotlite == originalState)
+        print("DEV menu: Return and row action toggles dismiss the panel and preserve the toast")
         setQuery("tgc")
         updateMatches(for: "tgc")
         precondition(items.count == 1)

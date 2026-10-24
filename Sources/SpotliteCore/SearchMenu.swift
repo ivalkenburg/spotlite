@@ -71,7 +71,6 @@ public struct SearchMenu: Sendable {
     public static let caffeinate = SearchMenu(
         id: "caffeinate", title: "Caffeinate", symbolName: "cup.and.saucer",
         items: [SearchMenuItem(id: "caffeinate.toggle", title: "Toggle Caffeinate",
-                               symbolName: "cup.and.saucer", action: .toggleCaffeinate,
-                               closesPanelOnAction: false)]
+                               symbolName: "cup.and.saucer", action: .toggleCaffeinate)]
     )
 }

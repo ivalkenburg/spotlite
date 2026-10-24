@@ -30,12 +30,12 @@ struct SearchMenuTests {
         #expect(menu.search("st", matcher: matcher).first?.id == "stop")
     }
 
-    @Test func caffeineMenuHasOnlyTheToggleAndStaysOpen() throws {
+    @Test func caffeineMenuHasOnlyTheToggleAndClosesPanel() throws {
         let item = try #require(SearchMenu.caffeinate.items.first)
         #expect(SearchMenu.caffeinate.items.count == 1)
         #expect(item.title == "Toggle Caffeinate")
         #expect(item.action == .toggleCaffeinate)
-        #expect(!item.closesPanelOnAction)
+        #expect(item.closesPanelOnAction)
         #expect(item.submenu == nil)
     }
 
