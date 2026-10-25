@@ -33,6 +33,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         case queryRetention, backNavigationBehavior, showSystemSettings
         case showSystemCommands, showRecentApps, showRunningIndicator, showWebSearch, webSearchEngine, links
         case visibleRows, applicationDirectories, appNameCompletion, hiddenUtilities, toastPosition
+        case webSearchMode, showConfirmationMessages
     }
 
     /// Ordered search roots. Empty means no application locations; panes remain independent.
@@ -45,6 +46,8 @@ public struct Preferences: Codable, Sendable, Equatable {
     public var aliases: [String: String]
     public var panelScreen: PanelScreen
     public var toastPosition: ToastPosition
+    /// Routine successes can be hidden; failures, external-awake explanations and previews remain visible.
+    public var showConfirmationMessages: Bool
     /// Width and vertical position, adjusted by dragging the panel's edges and header.
     public var panelGeometry: PanelGeometry
     public var themeMode: ThemeMode
@@ -64,14 +67,14 @@ public struct Preferences: Codable, Sendable, Equatable {
     public var showSystemSettings: Bool
     /// Whether Lock Screen, Sleep, Restart and the other built-in commands appear.
     public var showSystemCommands: Bool
-    /// Whether an empty query lists the most-launched apps rather than nothing.
+    /// Whether an empty query lists frequently used apps rather than nothing.
     public var showRecentApps: Bool
     /// Whether a dot marks apps that are already running.
     public var showRunningIndicator: Bool
     /// How the selected app name is shown after the query.
     public var appNameCompletion: AppNameCompletion
-    /// Whether a last row offers the query to a web search engine.
-    public var showWebSearch: Bool
+    /// When a last row offers the query to a web search engine.
+    public var webSearchMode: WebSearchMode
     public var webSearchEngine: WebSearchEngine
     public var links: [Link]
     /// How many results the panel shows before the list scrolls.
@@ -109,6 +112,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         aliases = try c.decodeIfPresent([String: String].self, forKey: .aliases) ?? [:]
         panelScreen = try c.decodeIfPresent(PanelScreen.self, forKey: .panelScreen) ?? .followPointer
         toastPosition = (try? c.decodeIfPresent(ToastPosition.self, forKey: .toastPosition)) ?? .bottomCenter
+        showConfirmationMessages = try c.decodeIfPresent(Bool.self, forKey: .showConfirmationMessages) ?? true
         panelGeometry = try c.decodeIfPresent(PanelGeometry.self, forKey: .panelGeometry) ?? .default
         // Only an untouched panel moves: a width or position the user dragged to on
         // purpose is kept.
@@ -129,7 +133,14 @@ public struct Preferences: Codable, Sendable, Equatable {
         showRunningIndicator = try c.decodeIfPresent(Bool.self, forKey: .showRunningIndicator) ?? true
         appNameCompletion = (try? c.decodeIfPresent(AppNameCompletion.self,
                                                    forKey: .appNameCompletion)) ?? .allMatches
-        showWebSearch = try c.decodeIfPresent(Bool.self, forKey: .showWebSearch) ?? true
+        if c.contains(.webSearchMode) {
+            webSearchMode = (try? c.decode(WebSearchMode.self, forKey: .webSearchMode)) ?? .onlyWhenNoLocalResults
+        } else {
+            // Even older files without the Boolean used to default to enabled.
+            // A missing file uses init() instead, giving new installs fallback-only search.
+            let enabled = try c.decodeIfPresent(Bool.self, forKey: .showWebSearch) ?? true
+            webSearchMode = enabled ? .always : .off
+        }
         // An engine a later build removed falls back rather than resetting every setting.
         webSearchEngine = (try? c.decodeIfPresent(WebSearchEngine.self, forKey: .webSearchEngine)) ?? .default
         // Per element: one hand-edited link must not reset every other setting.
@@ -147,6 +158,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         try c.encode(aliases, forKey: .aliases)
         try c.encode(panelScreen, forKey: .panelScreen)
         try c.encode(toastPosition, forKey: .toastPosition)
+        try c.encode(showConfirmationMessages, forKey: .showConfirmationMessages)
         try c.encode(panelGeometry, forKey: .panelGeometry)
         try c.encode(themeMode, forKey: .themeMode)
         try c.encode(glassTint, forKey: .glassTint)
@@ -161,7 +173,9 @@ public struct Preferences: Codable, Sendable, Equatable {
         try c.encode(showRecentApps, forKey: .showRecentApps)
         try c.encode(showRunningIndicator, forKey: .showRunningIndicator)
         try c.encode(appNameCompletion, forKey: .appNameCompletion)
-        try c.encode(showWebSearch, forKey: .showWebSearch)
+        try c.encode(webSearchMode, forKey: .webSearchMode)
+        // Older builds cannot represent fallback-only search, but must still respect Off.
+        try c.encode(webSearchMode != .off, forKey: .showWebSearch)
         try c.encode(webSearchEngine, forKey: .webSearchEngine)
         try c.encode(links, forKey: .links)
         try c.encode(visibleRows, forKey: .visibleRows)
@@ -174,6 +188,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         aliases: [String: String] = [:],
         panelScreen: PanelScreen = .followPointer,
         toastPosition: ToastPosition = .bottomCenter,
+        showConfirmationMessages: Bool = true,
         panelGeometry: PanelGeometry = .default,
         themeMode: ThemeMode = .system,
         glassTint: Double = 0,
@@ -188,7 +203,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         showRecentApps: Bool = false,
         showRunningIndicator: Bool = true,
         appNameCompletion: AppNameCompletion = .allMatches,
-        showWebSearch: Bool = true,
+        webSearchMode: WebSearchMode = .onlyWhenNoLocalResults,
         webSearchEngine: WebSearchEngine = .default,
         links: [Link] = [],
         visibleRows: Int = Preferences.defaultVisibleRows
@@ -199,6 +214,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         self.aliases = aliases
         self.panelScreen = panelScreen
         self.toastPosition = toastPosition
+        self.showConfirmationMessages = showConfirmationMessages
         self.panelGeometry = panelGeometry
         self.themeMode = themeMode
         self.glassTint = Preferences.clampedTint(glassTint)
@@ -213,7 +229,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         self.showRecentApps = showRecentApps
         self.showRunningIndicator = showRunningIndicator
         self.appNameCompletion = appNameCompletion
-        self.showWebSearch = showWebSearch
+        self.webSearchMode = webSearchMode
         self.webSearchEngine = webSearchEngine
         self.links = links
         self.visibleRows = Preferences.clampedVisibleRows(visibleRows)

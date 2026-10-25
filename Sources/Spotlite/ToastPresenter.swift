@@ -4,11 +4,13 @@ import SpotliteCore
 struct ToastMessage: Equatable {
     let text: String
     let symbol: String
+    /// Failures, external-assertion explanations and explicit previews always show.
+    var isConfirmation = true
 
     static func copied(succeeded: Bool) -> ToastMessage {
         succeeded
             ? ToastMessage(text: "Copied to clipboard", symbol: "doc.on.clipboard")
-            : ToastMessage(text: "Couldn’t copy to clipboard", symbol: "exclamationmark.triangle")
+            : ToastMessage(text: "Couldn’t copy to clipboard", symbol: "exclamationmark.triangle", isConfirmation: false)
     }
 
     static func visibility(_ name: String, hidden: Bool) -> ToastMessage {
@@ -19,7 +21,7 @@ struct ToastMessage: Equatable {
     static func caffeine(succeeded: Bool, state: CaffeineState) -> ToastMessage {
         guard succeeded else {
             return ToastMessage(text: "Couldn’t \(state.spotlite ? "disable" : "enable") Caffeinate",
-                                symbol: "exclamationmark.triangle")
+                                symbol: "exclamationmark.triangle", isConfirmation: false)
         }
         let text: String
         if state.spotlite {
@@ -29,7 +31,19 @@ struct ToastMessage: Equatable {
         } else {
             text = "Caffeinate disabled"
         }
-        return ToastMessage(text: text, symbol: state.spotlite ? "cup.and.saucer.fill" : "cup.and.saucer")
+        return ToastMessage(text: text, symbol: state.spotlite ? "cup.and.saucer.fill" : "cup.and.saucer",
+                            isConfirmation: state.spotlite || !state.external)
+    }
+
+    static func caffeineFinished(succeeded: Bool, state: CaffeineState) -> ToastMessage {
+        guard succeeded else {
+            return ToastMessage(text: "Couldn’t stop Caffeinate", symbol: "exclamationmark.triangle",
+                                isConfirmation: false)
+        }
+        return ToastMessage(text: state.external
+                            ? "Caffeinate finished; another app is keeping the display awake"
+                            : "Caffeinate finished",
+                            symbol: "cup.and.saucer", isConfirmation: !state.external)
     }
 }
 
@@ -39,6 +53,12 @@ struct ToastMessage: Equatable {
 final class ToastPresenter {
     private var panel: ToastPanel?
     private var dismissal: Task<Void, Never>?
+    private var currentMessage: ToastMessage?
+    var showConfirmationMessages = true {
+        didSet {
+            if !showConfirmationMessages, currentMessage?.isConfirmation == true { dismiss() }
+        }
+    }
 
     static var pointerScreen: NSScreen? {
         let pointer = NSEvent.mouseLocation
@@ -46,10 +66,12 @@ final class ToastPresenter {
     }
 
     func show(_ message: ToastMessage, position: ToastPosition, on screen: NSScreen? = nil) {
+        guard showConfirmationMessages || !message.isConfirmation else { return }
         guard let screen = screen ?? Self.pointerScreen else { return }
         dismissal?.cancel()
         let window = panel ?? ToastPanel()
         panel = window
+        currentMessage = message
         let content = ToastView(message: message, maxWidth: min(480, max(80, screen.visibleFrame.width - 96)))
         window.contentView = content
         window.setFrame(position.frame(for: content.fittingSize, in: screen.visibleFrame), display: false)
@@ -74,6 +96,7 @@ final class ToastPresenter {
             window.orderOut(nil)
             self.panel = nil
             self.dismissal = nil
+            self.currentMessage = nil
         }
     }
 
@@ -84,9 +107,14 @@ final class ToastPresenter {
         show(.copied(succeeded: succeeded), position: position, on: screen)
     }
 
-    /// Called only by explicit controls, never by the background assertion refresh.
-    func toggleCaffeinate(_ caffeine: CaffeineAssertion, position: ToastPosition, on screen: NSScreen? = nil) {
-        let succeeded = caffeine.toggle()
+    func startCaffeinate(_ caffeine: CaffeineAssertion, duration: CaffeineDuration,
+                         position: ToastPosition, on screen: NSScreen? = nil) {
+        let succeeded = caffeine.start(duration)
+        show(.caffeine(succeeded: succeeded, state: caffeine.state), position: position, on: screen)
+    }
+
+    func stopCaffeinate(_ caffeine: CaffeineAssertion, position: ToastPosition, on screen: NSScreen? = nil) {
+        let succeeded = caffeine.stop()
         show(.caffeine(succeeded: succeeded, state: caffeine.state), position: position, on: screen)
     }
 
@@ -95,6 +123,7 @@ final class ToastPresenter {
         dismissal = nil
         panel?.orderOut(nil)
         panel = nil
+        currentMessage = nil
     }
 
     private static var fadeDuration: TimeInterval {
@@ -227,6 +256,11 @@ private final class ToastView: NSView {
 
 #if DEBUG
 extension ToastPresenter {
+    private func toggleCaffeinate(_ caffeine: CaffeineAssertion, position: ToastPosition, on screen: NSScreen? = nil) {
+        let succeeded = caffeine.toggle()
+        show(.caffeine(succeeded: succeeded, state: caffeine.state), position: position, on: screen)
+    }
+
     /// SPOTLITE_DEV_TOAST=1: exercise native windows and controls without saving prefs
     /// or touching the general clipboard. Frame assertions catch clipped/wrapped labels.
     func runDevChecks(caffeine: CaffeineAssertion) async throws {
@@ -236,7 +270,12 @@ extension ToastPresenter {
                               userInfo: [NSLocalizedDescriptionKey: description])
             }
         }
-        defer { dismiss() }
+        let savedConfirmations = showConfirmationMessages
+        showConfirmationMessages = true
+        defer {
+            dismiss()
+            showConfirmationMessages = savedConfirmations
+        }
         let keyWindow = NSApp.keyWindow
         let active = NSApp.isActive
         let screen = Self.pointerScreen!
@@ -260,7 +299,7 @@ extension ToastPresenter {
         }
 
         let external = ToastMessage.caffeine(succeeded: true,
-                                             state: CaffeineState(spotlite: false, external: true))
+                                             state: CaffeineState(external: true))
         show(external, position: .bottomCenter, on: screen)
         let content = panel!.contentView as! ToastView
         let labelFrame = content.label.convert(content.label.bounds, to: content)
@@ -269,7 +308,7 @@ extension ToastPresenter {
         print("DEV toast: wrapped window=\(panel!.frame) label=\(labelFrame)")
         try check(ToastMessage.caffeine(succeeded: false, state: CaffeineState()).text == "Couldn’t enable Caffeinate",
                   "Enable failure was reported as success")
-        try check(ToastMessage.caffeine(succeeded: false, state: CaffeineState(spotlite: true)).text == "Couldn’t disable Caffeinate",
+        try check(ToastMessage.caffeine(succeeded: false, state: CaffeineState(session: CaffeineSession(duration: .untilTurnedOff))).text == "Couldn’t disable Caffeinate",
                   "Disable failure was reported as success")
         try check(ToastMessage.copied(succeeded: false).text == "Couldn’t copy to clipboard",
                   "Clipboard failure was reported as success")
@@ -292,6 +331,59 @@ extension ToastPresenter {
         try check(pasteboard.string(forType: .string) == "private clipboard fixture",
                   "Clipboard contents changed")
 
+        showConfirmationMessages = false
+        try check(panel == nil && dismissal == nil, "Disabling confirmations kept a routine message alive")
+        for message in [ToastMessage.copied(succeeded: true), .visibility("Fixture", hidden: true),
+                        .caffeine(succeeded: true, state: CaffeineState()),
+                        .caffeineFinished(succeeded: true, state: CaffeineState())] {
+            show(message, position: .bottomCenter, on: screen)
+            try check(panel == nil && dismissal == nil, "A disabled confirmation created views or work")
+        }
+        copy("copy without confirmation", position: .bottomCenter, on: screen, to: pasteboard)
+        try check(panel == nil && pasteboard.string(forType: .string) == "copy without confirmation",
+                  "Suppressing confirmation changed clipboard behavior")
+        for message in [ToastMessage.copied(succeeded: false),
+                        .caffeine(succeeded: false, state: CaffeineState()),
+                        .caffeineFinished(succeeded: false, state: CaffeineState()), external,
+                        .caffeineFinished(succeeded: true, state: CaffeineState(external: true))] {
+            show(message, position: .bottomCenter, on: screen)
+            checkDevMessage(message.text)
+            dismiss()
+        }
+        showConfirmationMessages = true
+        print("DEV toast: routine confirmations suppressed; clipboard, failures and external explanations preserved")
+
+        // Real IOKit assertions plus a short wall-clock deadline exercise scheduling,
+        // renewal and cancellation without waiting for a full duration preset.
+        try check(caffeine.start(.fifteenMinutes, now: Date().addingTimeInterval(-899.8)), "Could not start timed session")
+        try check(caffeine.start(.thirtyMinutes), "Could not replace timed session")
+        let replacement = caffeine.state.session?.deadline
+        try await Task.sleep(for: .milliseconds(400))
+        try check(caffeine.state.spotlite && caffeine.state.session?.deadline == replacement,
+                  "An old deadline stopped its replacement")
+        try check(caffeine.start(.fifteenMinutes, now: Date().addingTimeInterval(-899.8)), "Could not shorten session")
+        try check(caffeine.start(.untilTurnedOff), "Could not remove deadline")
+        try await Task.sleep(for: .milliseconds(400))
+        try check(caffeine.state.spotlite && caffeine.state.session?.deadline == nil,
+                  "A canceled deadline stopped an indefinite session")
+        try check(caffeine.start(.fifteenMinutes, now: Date().addingTimeInterval(-899.8)), "Could not schedule expiry")
+        try await Task.sleep(for: .milliseconds(500))
+        try check(!caffeine.state.spotlite, "Timed assertion did not expire")
+        checkDevMessage(ToastMessage.caffeineFinished(succeeded: true, state: caffeine.state).text)
+        try check(caffeine.start(.fifteenMinutes, now: Date().addingTimeInterval(-901)), "Could not start expired fixture")
+        try check(!caffeine.state.spotlite, "Refresh did not handle an expired session")
+        checkDevMessage(ToastMessage.caffeineFinished(succeeded: true, state: caffeine.state).text)
+        let expirationContent = panel?.contentView
+        caffeine.refresh()
+        try check(panel?.contentView === expirationContent, "Refresh repeated the expiration message")
+        // A resume after the deadline must release immediately, without needing ticks.
+        let now = Date()
+        try check(caffeine.start(.fifteenMinutes, now: now), "Could not start wake fixture")
+        caffeine.expireIfNeeded(now: now.addingTimeInterval(2400))
+        try check(!caffeine.state.spotlite, "Sleep extended the session")
+        try check(NSApp.keyWindow === keyWindow && NSApp.isActive == active, "Expiry took focus")
+        print("DEV caffeine: deadline replacement, cancellation, timer/refresh expiry, single feedback and elapsed sleep passed")
+
         let model = SettingsModel(preferences: Preferences(), library: AppLibrary(directories: []),
                                   savePreferences: { _ in })
         let settings = AppearanceSettingsViewController(model: model)
@@ -304,14 +396,27 @@ extension ToastPresenter {
         let picker = descendants(page).compactMap { $0 as? NSPopUpButton }
             .first { $0.itemTitles == ToastPosition.allCases.map(\.title) }!
         try check(picker.titleOfSelectedItem == "Bottom Center", "Wrong placement default")
+        let confirmations = descendants(page).compactMap { $0 as? NSButton }
+            .first { $0.title == "Show confirmation messages" }!
+        try check(confirmations.state == .on, "Confirmations must default on")
+        confirmations.performClick(nil)
+        try check(!model.preferences.showConfirmationMessages, "Confirmation control did not persist")
+        model.onToast = { [weak self, weak model] message in
+            guard let model else { return }
+            self?.show(message, position: model.preferences.toastPosition)
+        }
+        showConfirmationMessages = false
         for (index, position) in ToastPosition.allCases.enumerated() {
             picker.selectItem(at: index)
             picker.sendAction(picker.action, to: picker.target)
             try check(model.preferences.toastPosition == position, "Placement control did not update preferences")
+            checkDevMessage("Messages will appear here")
         }
+        showConfirmationMessages = true
         let pickerFrame = picker.convert(picker.bounds, to: page)
         try check(page.bounds.contains(pickerFrame), "Placement control escaped Settings")
         print("DEV toast: Appearance page=\(page.frame) position picker=\(pickerFrame)")
+        try await SettingsForm.capture(page, name: "appearance")
 
         var visibilityMessages: [ToastMessage] = []
         model.onToast = { visibilityMessages.append($0) }

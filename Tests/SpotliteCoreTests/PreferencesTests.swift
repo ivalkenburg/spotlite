@@ -20,6 +20,7 @@ struct PreferencesTests {
         prefs.aliases = ["com.adobe.Photoshop": "ps"]
         prefs.panelScreen = .primary
         prefs.toastPosition = .topRight
+        prefs.showConfirmationMessages = false
         prefs.themeMode = .dark
         prefs.glassTint = 0.4
         prefs.showMenuBarIcon = false
@@ -30,7 +31,7 @@ struct PreferencesTests {
         prefs.showRecentApps = true
         prefs.showRunningIndicator = false
         prefs.appNameCompletion = .prefixOnly
-        prefs.showWebSearch = false
+        prefs.webSearchMode = .off
         prefs.webSearchEngine = .bing
         prefs.links = [Link(name: "Downloads", target: "~/Downloads")]
         prefs.visibleRows = 9
@@ -62,7 +63,8 @@ struct PreferencesTests {
         #expect(!decoded.showRecentApps)
         #expect(decoded.appNameCompletion == .allMatches)
         #expect(decoded.showRunningIndicator)
-        #expect(decoded.showWebSearch)
+        #expect(decoded.webSearchMode == .always)
+        #expect(decoded.showConfirmationMessages)
         #expect(decoded.webSearchEngine == .duckDuckGo)
         #expect(decoded.links.isEmpty)
         #expect(decoded.visibleRows == 7)
@@ -91,6 +93,36 @@ struct PreferencesTests {
         let decoded = try JSONDecoder().decode(Preferences.self, from: data)
         #expect(decoded.webSearchEngine == .duckDuckGo)
         #expect(!decoded.showMenuBarIcon)
+    }
+
+    @Test func newInstallsUseFallbackWebSearch() {
+        #expect(Preferences().webSearchMode == .onlyWhenNoLocalResults)
+        #expect(Preferences().showConfirmationMessages)
+    }
+
+    @Test func legacyWebSearchPreservesEnabledAndDisabledChoices() throws {
+        for (json, mode) in [(#"{"showWebSearch":true}"#, WebSearchMode.always),
+                             (#"{"showWebSearch":false}"#, .off), (#"{}"#, .always)] {
+            let decoded = try JSONDecoder().decode(Preferences.self, from: Data(json.utf8))
+            #expect(decoded.webSearchMode == mode)
+        }
+    }
+
+    @Test(arguments: WebSearchMode.allCases)
+    func webSearchModesPersistAndOverrideTheLegacyKey(_ mode: WebSearchMode) throws {
+        let prefs = Preferences(webSearchMode: mode)
+        let encoded = try JSONEncoder().encode(prefs)
+        #expect(try JSONDecoder().decode(Preferences.self, from: encoded).webSearchMode == mode)
+        let json = "{\"webSearchMode\":\"\(mode.rawValue)\",\"showWebSearch\":false}"
+        #expect(try JSONDecoder().decode(Preferences.self, from: Data(json.utf8)).webSearchMode == mode)
+    }
+
+    @Test func unknownWebSearchModePreservesOtherPreferences() throws {
+        let data = Data(#"{"webSearchMode":"futureMode","showMenuBarIcon":false,"showConfirmationMessages":false}"#.utf8)
+        let decoded = try JSONDecoder().decode(Preferences.self, from: data)
+        #expect(decoded.webSearchMode == .onlyWhenNoLocalResults)
+        #expect(!decoded.showMenuBarIcon)
+        #expect(!decoded.showConfirmationMessages)
     }
 
     @Test func unknownToastPositionPreservesOtherPreferences() throws {

@@ -126,4 +126,46 @@ enum SettingsForm {
         NSLayoutConstraint.activate(constraints)
         return root
     }
+
+    #if DEBUG
+    /// Optional native screenshots alongside frame checks, enabled only by the dev environment.
+    static func capture(_ page: NSView, name: String) async throws {
+        guard ProcessInfo.processInfo.environment["SPOTLITE_DEV_CAPTURE_DIR"] != nil else { return }
+        let window = NSWindow(contentRect: page.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.title = name.capitalized
+        window.contentView = page
+        window.center()
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+        page.layoutSubtreeIfNeeded()
+        for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+            window.appearance = NSAppearance(named: appearance)
+            window.orderFront(nil)
+            try await captureWindow(window, name: "\(name)-\(theme)")
+        }
+    }
+
+    static func captureWindow(_ window: NSWindow, name: String) async throws {
+        guard let directory = ProcessInfo.processInfo.environment["SPOTLITE_DEV_CAPTURE_DIR"] else { return }
+        guard CGPreflightScreenCaptureAccess() else {
+            throw NSError(domain: "SpotliteDevCapture", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Screen recording access is required for dev screenshots"])
+        }
+        let url = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        window.displayIfNeeded()
+        try await Task.sleep(for: .milliseconds(250))
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        process.arguments = ["-x", "-o", "-l", String(window.windowNumber), url.appendingPathComponent("\(name).png").path]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw NSError(domain: "SpotliteDevCapture", code: Int(process.terminationStatus))
+        }
+    }
+    #endif
 }

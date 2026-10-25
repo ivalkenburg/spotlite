@@ -11,9 +11,11 @@ struct SearchResultsTests {
 
     private func build(_ query: String, hidden: Set<String> = [], frecency: Frecency = Frecency(),
                        recents: Int = 0, web: WebSearchEngine? = nil,
+                       mode: WebSearchMode = .always,
                        hiddenUtilities: Set<SearchUtility> = []) -> [SearchResult] {
         SearchResults.build(for: query, corpus: SearchCorpus(entries: entries, hiddenBundleIDs: hidden),
                             matcher: Matcher(), frecency: frecency, recents: recents, webSearch: web,
+                            webSearchMode: mode,
                             hiddenUtilities: hiddenUtilities)
     }
 
@@ -101,6 +103,42 @@ struct SearchResultsTests {
         #expect(describe(build(" saf ", web: .google)) == ["Safari", "Google: saf"])
         #expect(describe(build("zzq", web: .bing)) == ["Bing: zzq"])
         #expect(build("", web: .google).isEmpty)
+    }
+
+    @Test func fallbackWebSearchWaitsUntilEveryLocalResultIsAbsent() {
+        for query in ["saf", "sett", "caf", "uuid", "2+2", "10 km to miles"] {
+            let results = build(query, web: .google, mode: .onlyWhenNoLocalResults)
+            #expect(!results.isEmpty)
+            #expect(!describe(results).contains { $0.hasPrefix("Google:") })
+        }
+        #expect(describe(build("zzq", web: .google, mode: .onlyWhenNoLocalResults)) == ["Google: zzq"])
+        #expect(describe(build("saf", hidden: ["app.safari"], web: .google,
+                               mode: .onlyWhenNoLocalResults)) == ["Google: saf"])
+        #expect(describe(build("uuid", web: .google, mode: .onlyWhenNoLocalResults,
+                               hiddenUtilities: [.generateUUID])) == ["Google: uuid"])
+    }
+
+    @Test(arguments: [EntryKind.app, .settingsPane, .command, .link])
+    func everyIndexedKindCountsAsLocal(_ kind: EntryKind) {
+        let entry = AppEntry(url: URL(fileURLWithPath: "/tmp/Local"), name: "Local", bundleID: "local", kind: kind)
+        let results = SearchResults.build(for: "loc", corpus: SearchCorpus(entries: [entry]),
+                                          matcher: Matcher(), frecency: Frecency(), webSearch: .google,
+                                          webSearchMode: .onlyWhenNoLocalResults)
+        #expect(describe(results) == ["Local"])
+    }
+
+    @Test(arguments: WebSearchMode.allCases)
+    func answersAndEmptyQueriesNeverOfferWebSearch(_ mode: WebSearchMode) {
+        #expect(describe(build("2+2", web: .google, mode: mode)) == ["= 4.0"])
+        #expect(describe(build("10 km to miles", web: .google, mode: mode)).count == 1)
+        #expect(build("  ", web: .google, mode: mode).isEmpty)
+    }
+
+    @Test func offSuppressesWebSearchIncludingOversizedQueries() {
+        #expect(build("zzq", web: .google, mode: .off).isEmpty)
+        let pasted = String(repeating: "error ", count: 100)
+        #expect(build(pasted, web: .google, mode: .off).isEmpty)
+        #expect(describe(build(pasted, web: .google, mode: .onlyWhenNoLocalResults)).count == 1)
     }
 
     @Test(arguments: SearchUtility.allCases)

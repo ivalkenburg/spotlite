@@ -5,7 +5,7 @@ import Testing
 @Suite("Scoped menus")
 struct SearchMenuTests {
     private let menu = SearchMenu(id: "test", title: "Test", items: [
-        SearchMenuItem(id: "toggle", title: "Toggle Caffeinate", action: .toggleCaffeinate),
+        SearchMenuItem(id: "toggle", title: "Toggle Caffeinate", action: .startCaffeinate(.untilTurnedOff)),
         SearchMenuItem(id: "settings", title: "Open Settings"),
         SearchMenuItem(id: "stop", title: "Stop"),
     ])
@@ -30,13 +30,16 @@ struct SearchMenuTests {
         #expect(menu.search("st", matcher: matcher).first?.id == "stop")
     }
 
-    @Test func caffeineMenuHasOnlyTheToggleAndClosesPanel() throws {
-        let item = try #require(SearchMenu.caffeinate.items.first)
-        #expect(SearchMenu.caffeinate.items.count == 1)
-        #expect(item.title == "Toggle Caffeinate")
-        #expect(item.action == .toggleCaffeinate)
-        #expect(item.closesPanelOnAction)
-        #expect(item.submenu == nil)
+    @Test func caffeineMenuOffersDurationsAndOnlyActiveSessionsCanStop() {
+        let inactive = SearchMenu.caffeinate(active: false)
+        #expect(inactive.items.map(\.title) == ["Until turned off", "15 minutes", "30 minutes", "1 hour", "2 hours"])
+        for duration in CaffeineDuration.allCases {
+            #expect(inactive.items.contains { $0.title == duration.title && $0.action == .startCaffeinate(duration) })
+        }
+        let active = SearchMenu.caffeinate(active: true)
+        #expect(active.items.first?.action == .stopCaffeinate)
+        #expect(active.items.dropFirst().map(\.id) == inactive.items.map(\.id))
+        #expect(active.items.allSatisfy { $0.closesPanelOnAction && $0.submenu == nil })
     }
 
     @Test func nestedNavigationRestoresEachParent() throws {

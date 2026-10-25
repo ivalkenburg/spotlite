@@ -30,6 +30,7 @@ public enum SearchResults {
         previousResult: Double? = nil,
         recents: Int = 0,
         webSearch: WebSearchEngine? = nil,
+        webSearchMode: WebSearchMode = .onlyWhenNoLocalResults,
         hiddenUtilities: Set<SearchUtility> = [],
         now: Date = Date()
     ) -> [SearchResult] {
@@ -39,7 +40,7 @@ public enum SearchResults {
         guard let trimmed = bounded(query) else {
             // Too long for the calculator and the matcher, but a pasted error message is
             // just what a web search is for.
-            guard let webSearch,
+            guard webSearchMode != .off, let webSearch,
                   let long = query.boundedTrimmedWhitespace(maximumCount: maxWebQuery) else { return [] }
             return [.webSearch(query: String(long), engine: webSearch)]
         }
@@ -68,7 +69,8 @@ public enum SearchResults {
         // Last, so it only becomes the top hit when nothing on this Mac matches. Not
         // under a calculation: arithmetic is already answered, and the card would lose
         // its standalone shape to a row nobody wants.
-        if let webSearch, !hasAnswer(result) {
+        if let webSearch, webSearchMode != .off, !hasAnswer(result),
+           webSearchMode == .always || result.isEmpty {
             result.append(.webSearch(query: trimmed, engine: webSearch))
         }
         return result
@@ -83,11 +85,11 @@ public enum SearchResults {
         return false
     }
 
-    /// The most-launched apps still in the corpus, strongest first. Built only for an
+    /// Frequently used apps still in the corpus, strongest first. Built only for an
     /// empty query, so the id lookup is not paid per keystroke.
     ///
     /// Apps only: with commands here, the shortcut and Return could lock or restart
-    /// the Mac, and panes or links are not what "recent apps" promises.
+    /// the Mac, and panes or links do not belong in the frequently used apps list.
     static func recentEntries(in corpus: SearchCorpus, frecency: Frecency, limit: Int,
                               now: Date = Date()) -> [MatchResult] {
         guard limit > 0, !frecency.records.isEmpty else { return [] }

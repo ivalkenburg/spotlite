@@ -50,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var preferences = Storage.loadPreferences()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        toasts.showConfirmationMessages = preferences.showConfirmationMessages
         #if DEBUG
         if ProcessInfo.processInfo.environment["SPOTLITE_DEV_FOCUS"] == "1" {
             let previousApplication = NSWorkspace.shared.frontmostApplication
@@ -73,6 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self else { return }
             self.refreshCaffeineStatusItem()
             self.controllerInstance?.caffeineStateDidChange()
+        }
+        caffeine.onExpiration = { [weak self] succeeded, state in
+            guard let self else { return }
+            self.toasts.show(.caffeineFinished(succeeded: succeeded, state: state),
+                             position: self.preferences.toastPosition)
         }
         registerHotKey()
         refreshStatusItem()
@@ -137,6 +143,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let previousLibrary = self.libraryInstance
                 do {
                     try await self.toasts.runDevChecks(caffeine: self.caffeine)
+                    precondition(self.caffeine.start(.oneHour))
+                    let description = self.caffeine.state.sessionDescription!
+                    precondition(self.caffeineStatusItem?.button?.toolTip?.contains(description) == true)
+                    precondition(self.caffeineStatusItem?.menu?.items.contains { $0.title == description } == true)
+                    precondition(self.caffeine.stop())
+                    if !self.caffeine.state.external { precondition(self.caffeineStatusItem == nil) }
+                    print("DEV caffeine: cup tooltip, menu deadline and Turn Off state passed")
                     precondition(self.controllerInstance === previousController)
                     precondition(self.libraryInstance === previousLibrary)
                     print("DEV toast: launcher and library remained lazy")
@@ -240,7 +253,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // One line per source, so turning Spotlite's off and seeing the cup stay makes sense.
         var lines: [String] = []
-        if state.spotlite { lines.append("Caffeinate active in Spotlite") }
+        if let description = state.sessionDescription { lines.append(description) }
         if state.external {
             lines.append(state.spotlite ? "Also active in another app" : "Caffeinate active in another app")
         }
@@ -303,7 +316,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func turnOffCaffeine() {
         guard caffeine.state.spotlite else { return }
-        toasts.toggleCaffeinate(caffeine, position: preferences.toastPosition)
+        toasts.stopCaffeinate(caffeine, position: preferences.toastPosition)
     }
 
     @objc private func openSettingsMenuItem() { openSettings() }
@@ -338,6 +351,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let directoriesChanged = preferences.applicationDirectories != prefs.applicationDirectories
         let linksChanged = preferences.links != prefs.links
         preferences = prefs
+        toasts.showConfirmationMessages = prefs.showConfirmationMessages
         if directoriesChanged { libraryInstance?.setDirectories(prefs.applicationDirectories) }
         if linksChanged { library.extras = prefs.extraEntries }
         applyTheme()

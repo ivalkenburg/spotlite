@@ -16,12 +16,8 @@ final class ResultRowView: HoverResultCellView {
     private let label = NSTextField(labelWithString: "")
     private let hintStack = NSStackView()
     private let highlight = NSView()
-    private let stateSwitch = NSSwitch()
     /// Under the icon, as the Dock marks a running app.
     private let runningDot = NSView()
-    /// Hints end at the row's edge, or just before the switch on rows that carry one.
-    private var hintsBeforeEdge: NSLayoutConstraint!
-    private var hintsBeforeSwitch: NSLayoutConstraint!
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -45,16 +41,11 @@ final class ResultRowView: HoverResultCellView {
         // thing being chosen, so the hints yield.
         hintStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        stateSwitch.controlSize = .mini
-        stateSwitch.isHidden = true
-        // The row owns the click; the switch only reports state.
-        stateSwitch.isEnabled = false
-
         runningDot.wantsLayer = true
         runningDot.layer?.cornerRadius = Metrics.runningDotSize / 2
         runningDot.isHidden = true
 
-        for v in [highlight, icon, label, hintStack, stateSwitch, runningDot] {
+        for v in [highlight, icon, label, hintStack, runningDot] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -77,29 +68,20 @@ final class ResultRowView: HoverResultCellView {
 
             hintStack.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 12),
             hintStack.centerYAnchor.constraint(equalTo: highlight.centerYAnchor),
-
-            stateSwitch.trailingAnchor.constraint(equalTo: trailingAnchor,
-                                                  constant: -Metrics.horizontalInset),
-            stateSwitch.centerYAnchor.constraint(equalTo: highlight.centerYAnchor),
+            hintStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.horizontalInset),
 
             runningDot.centerXAnchor.constraint(equalTo: icon.centerXAnchor),
             runningDot.centerYAnchor.constraint(equalTo: icon.bottomAnchor, constant: Metrics.runningDotDrop),
             runningDot.widthAnchor.constraint(equalToConstant: Metrics.runningDotSize),
             runningDot.heightAnchor.constraint(equalToConstant: Metrics.runningDotSize),
         ])
-        hintsBeforeEdge = hintStack.trailingAnchor.constraint(equalTo: trailingAnchor,
-                                                              constant: -Metrics.horizontalInset)
-        hintsBeforeSwitch = hintStack.trailingAnchor.constraint(equalTo: stateSwitch.leadingAnchor,
-                                                                constant: -Metrics.hintPairGap)
-        hintsBeforeEdge.isActive = true
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     #if DEBUG
     func dumpFrames(_ tag: String) {
-        print("[\(tag)] row=\(frame) label=\(label.frame) hints=\(hintStack.frame)")
-        print("[\(tag)] switch=\(stateSwitch.frame) switchHidden=\(stateSwitch.isHidden) state=\(stateSwitch.state.rawValue)")
+        print("[\(tag)] row=\(frame) label=\(label.frame) hints=\(hintStack.frame) title=\(label.stringValue)")
     }
     #endif
 
@@ -146,17 +128,6 @@ final class ResultRowView: HoverResultCellView {
         let hints = selection == .none ? [] : item.hints(modifiers: modifiers, running: running)
         // Over the blue, hints lighten in both themes: darkening would muddy the accent.
         buildHints(hints, mode: selection == .navigated ? .lighten : mode)
-
-        if let state = item.switchState {
-            stateSwitch.isHidden = false
-            stateSwitch.state = state ? .on : .off
-        } else {
-            stateSwitch.isHidden = true
-        }
-        // Deactivate before activating, so alternate trailing constraints never compete.
-        let showsSwitch = !stateSwitch.isHidden
-        NSLayoutConstraint.deactivate([showsSwitch ? hintsBeforeEdge : hintsBeforeSwitch])
-        NSLayoutConstraint.activate([showsSwitch ? hintsBeforeSwitch : hintsBeforeEdge])
 
         configureIcon(for: item)
     }

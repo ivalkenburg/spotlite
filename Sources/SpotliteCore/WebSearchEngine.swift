@@ -1,5 +1,21 @@
 import Foundation
 
+/// When the root result list offers a web search. Answers from the calculator and
+/// converter stay self-contained in every mode.
+public enum WebSearchMode: String, Codable, Sendable, CaseIterable {
+    case always
+    case onlyWhenNoLocalResults
+    case off
+
+    public var title: String {
+        switch self {
+        case .always: "Always"
+        case .onlyWhenNoLocalResults: "Only when no local results"
+        case .off: "Off"
+        }
+    }
+}
+
 /// Where the "Search the web" row sends the query.
 public enum WebSearchEngine: String, Codable, Sendable, CaseIterable {
     case google

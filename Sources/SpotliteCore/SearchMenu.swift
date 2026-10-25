@@ -2,7 +2,8 @@ import Foundation
 
 /// Actions are dispatched by the AppKit layer; menu definitions stay headless.
 public enum SearchMenuAction: Sendable, Equatable {
-    case toggleCaffeinate
+    case startCaffeinate(CaffeineDuration)
+    case stopCaffeinate
     case generateUUID(UUIDVersion)
 }
 
@@ -68,9 +69,25 @@ public struct SearchMenu: Sendable {
         ]
     )
 
+    private static let caffeineDurations = [CaffeineDuration.untilTurnedOff, .fifteenMinutes,
+                                           .thirtyMinutes, .oneHour, .twoHours].map { duration in
+        SearchMenuItem(id: "caffeinate.\(duration.rawValue)", title: duration.title,
+                       symbolName: duration == .untilTurnedOff ? "cup.and.saucer" : "clock",
+                       action: .startCaffeinate(duration))
+    }
+
     public static let caffeinate = SearchMenu(
         id: "caffeinate", title: "Caffeinate", symbolName: "cup.and.saucer",
-        items: [SearchMenuItem(id: "caffeinate.toggle", title: "Toggle Caffeinate",
-                               symbolName: "cup.and.saucer", action: .toggleCaffeinate)]
+        items: caffeineDurations
     )
+
+    private static let activeCaffeinate = SearchMenu(
+        id: "caffeinate", title: "Caffeinate", symbolName: "cup.and.saucer",
+        items: [SearchMenuItem(id: "caffeinate.stop", title: "Turn Off",
+                              symbolName: "cup.and.saucer.fill", action: .stopCaffeinate)] + caffeineDurations
+    )
+
+    public static func caffeinate(active: Bool) -> SearchMenu {
+        active ? activeCaffeinate : caffeinate
+    }
 }

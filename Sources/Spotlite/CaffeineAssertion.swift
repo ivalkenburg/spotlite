@@ -1,15 +1,24 @@
-import Foundation
+import AppKit
 import IOKit.pwr_mgt
+import SpotliteCore
 
-/// Who is keeping the display awake. The two are independent: Spotlite's own switch
-/// works regardless of what other processes hold.
+/// Spotlite's session and external assertions keep the display awake independently.
 struct CaffeineState: Equatable {
     /// Spotlite holds its own assertion.
-    var spotlite = false
+    var session: CaffeineSession?
+    var spotlite: Bool { session != nil }
     /// A `caffeinate` process is keeping the display awake.
     var external = false
 
     var isActive: Bool { spotlite || external }
+
+    var sessionDescription: String? {
+        guard let session else { return nil }
+        if let deadline = session.deadline {
+            return "Active until \(deadline.formatted(date: .omitted, time: .shortened))"
+        }
+        return "Active until turned off"
+    }
 }
 
 /// Keeps the display awake while active.
@@ -18,29 +27,64 @@ struct CaffeineState: Equatable {
 /// no child process to supervise or leak, and the assertion is released by the kernel if
 /// this process dies, so a crash cannot leave the machine permanently awake.
 @MainActor
-final class CaffeineAssertion {
+final class CaffeineAssertion: NSObject {
 
     private var assertionID: IOPMAssertionID = IOPMAssertionID(0)
+    private var expirationTimer: DispatchSourceTimer?
     private(set) var state = CaffeineState()
     var onChange: ((CaffeineState) -> Void)?
+    var onExpiration: ((_ succeeded: Bool, _ state: CaffeineState) -> Void)?
 
-    /// Turns Spotlite's own assertion on or off. A failed create leaves it off, so the
-    /// row never shows a switch claiming the display is being held awake when it isn't.
+    #if DEBUG
+    /// Development checks toggle an indefinite session.
     @discardableResult
     func toggle() -> Bool {
-        let previous = state.spotlite
-        if state.spotlite { release() } else { acquire() }
-        return state.spotlite != previous
+        state.spotlite ? stop() : start(.untilTurnedOff)
+    }
+    #endif
+
+    /// Renewing an active session reuses its assertion and replaces the deadline.
+    @discardableResult
+    func start(_ duration: CaffeineDuration, now: Date = Date()) -> Bool {
+        guard state.spotlite || acquire() else { return false }
+        update { $0.session = CaffeineSession(duration: duration, now: now) }
+        scheduleExpiration()
+        refresh()
+        return true
+    }
+
+    @discardableResult
+    func stop() -> Bool {
+        guard state.spotlite else { return true }
+        let succeeded = releaseAssertion()
+        if succeeded { refreshExternalState() }
+        return succeeded
+    }
+
+    private func releaseAssertion() -> Bool {
+        let result = IOPMAssertionRelease(assertionID)
+        guard result == kIOReturnSuccess else {
+            NSLog("Spotlite: could not release power assertion (\(result))")
+            return false
+        }
+        assertionID = IOPMAssertionID(0)
+        cancelExpiration()
+        update { $0.session = nil }
+        return true
     }
 
     /// Refreshes assertions owned by other processes. This is intentionally called only
     /// at lifecycle boundaries and by a coalescible status-item timer, never per keystroke.
     func refresh() {
+        if !expireIfNeeded() { refreshExternalState() }
+    }
+
+    private func refreshExternalState() {
         guard let external = CaffeineAssertion.externalCaffeinateIsActive() else { return }
         update { $0.external = external }
     }
 
-    private func acquire() {
+    private func acquire() -> Bool {
         var id = IOPMAssertionID(0)
         let result = IOPMAssertionCreateWithName(
             kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
@@ -51,24 +95,56 @@ final class CaffeineAssertion {
 
         guard result == kIOReturnSuccess else {
             NSLog("Spotlite: could not create power assertion (\(result))")
-            refresh()
-            return
+            return false
         }
         assertionID = id
-        update { $0.spotlite = true }
-        refresh()
+        return true
     }
 
-    private func release() {
-        let result = IOPMAssertionRelease(assertionID)
-        guard result == kIOReturnSuccess else {
-            NSLog("Spotlite: could not release power assertion (\(result))")
-            refresh()
-            return
+    private func scheduleExpiration() {
+        cancelExpiration()
+        guard let deadline = state.session?.deadline else { return }
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        let seconds = deadline.timeIntervalSince1970
+        let wallDeadline = DispatchWallTime(timespec: timespec(
+            tv_sec: Int(seconds), tv_nsec: Int((seconds - floor(seconds)) * 1_000_000_000)))
+        timer.schedule(wallDeadline: wallDeadline, leeway: .milliseconds(100))
+        timer.setEventHandler { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.expireIfNeeded()
+                // A clock adjustment or early delivery must not lose the deadline.
+                if self.state.session?.deadline != nil { self.scheduleExpiration() }
+            }
         }
-        assertionID = IOPMAssertionID(0)
-        update { $0.spotlite = false }
-        refresh()
+        expirationTimer = timer
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(didWake), name: NSWorkspace.didWakeNotification, object: nil)
+        timer.resume()
+    }
+
+    private func cancelExpiration() {
+        expirationTimer?.cancel()
+        expirationTimer = nil
+        NSWorkspace.shared.notificationCenter.removeObserver(self, name: NSWorkspace.didWakeNotification, object: nil)
+    }
+
+    @objc private func didWake() { refresh() }
+
+    /// Handles an expired session and refreshes external state before reporting it.
+    /// Returns true when expiration was handled, including a failed release.
+    @discardableResult
+    func expireIfNeeded(now: Date = Date()) -> Bool {
+        guard state.session?.hasExpired(at: now) == true else { return false }
+        let succeeded = releaseAssertion()
+        if !succeeded {
+            // Keep the still-held assertion visible, but report the failure once.
+            cancelExpiration()
+            update { $0.session = CaffeineSession(duration: .untilTurnedOff) }
+        }
+        refreshExternalState()
+        onExpiration?(succeeded, state)
+        return true
     }
 
     private func update(_ change: (inout CaffeineState) -> Void) {

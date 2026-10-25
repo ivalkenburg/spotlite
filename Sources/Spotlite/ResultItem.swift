@@ -70,19 +70,9 @@ enum ResultItem {
         }
     }
 
-    /// Rows that carry a switch. The switch is the state, so the row needs no words to
-    /// say whether it is on. For Caffeinate it is Spotlite's own assertion only: exactly
-    /// what Return toggles.
-    var switchState: Bool? {
-        if case .menuItem(let item, let state) = self, item.action == .toggleCaffeinate {
-            return state.spotlite
-        }
-        return nil
-    }
-
     var submenu: SearchMenu? {
         switch self {
-        case .caffeinate: return .caffeinate
+        case .caffeinate(let state): return .caffeinate(active: state.spotlite)
         case .generateUUID: return .generateUUID
         case .menuItem(let item, _): return item.submenu
         default: return nil
@@ -93,7 +83,8 @@ enum ResultItem {
     private var action: String {
         switch self {
         case .menuItem(let item, let state):
-            if item.action == .toggleCaffeinate { return state.spotlite ? "Turn Off" : "Turn On" }
+            if item.action == .stopCaffeinate { return "Turn Off" }
+            if case .startCaffeinate = item.action { return state.spotlite ? "Change" : "Start" }
             if case .generateUUID = item.action { return "Copy" }
             return item.action == nil ? "Open" : "Run"
         case .app(let match) where match.entry.kind == .command: return "Run"
@@ -125,17 +116,11 @@ enum ResultItem {
     /// Holding a modifier swaps the path for what that modifier does, so the alternate
     /// actions are discoverable without a legend.
     ///
-    /// The Caffeinate toggle says when another process is also keeping the display
-    /// awake, since its switch shows only Spotlite's own assertion.
     /// `running` says whether the app has an instance to quit, from the panel's snapshot:
     /// asking NSWorkspace here would enumerate every process on each render while ⌘ is held.
     func hints(modifiers: NSEvent.ModifierFlags, running: Bool) -> [Hint] {
         if submenu != nil {
             return [Hint(text: "Actions", key: "⇥")]
-        }
-        if case .menuItem(let item, let state) = self,
-           item.action == .toggleCaffeinate, state.external {
-            return [Hint(text: "Also active in another app", key: nil)]
         }
         if case .menuItem(let item, _) = self, case .generateUUID = item.action {
             return [Hint(text: "Copy UUID", key: "↩")]
@@ -229,7 +214,7 @@ enum ResultItem {
         case .caffeinate(let state):
             return state.spotlite ? ResultItem.caffeineOnIcon : ResultItem.caffeineOffIcon
         case .menuItem(let item, let state):
-            if item.action == .toggleCaffeinate {
+            if item.action == .stopCaffeinate {
                 return state.spotlite ? ResultItem.caffeineOnIcon : ResultItem.caffeineOffIcon
             }
             return ResultItem.symbol(item.symbolName)

@@ -1,13 +1,11 @@
 import AppKit
 import SpotliteCore
 
-/// Search-field completion, theme, glass tint, result appearance and panel placement.
+/// Theme, glass tint, result appearance, panel placement and confirmation messages.
 @MainActor
 final class AppearanceSettingsViewController: SettingsPaneController {
     /// Popup order of the Theme menu.
     private static let themeModes: [ThemeMode] = [.system, .light, .dark]
-
-    private static let completionModes: [AppNameCompletion] = [.off, .prefixOnly, .allMatches]
 
     override func loadView() {
         let prefs = model.preferences
@@ -34,12 +32,6 @@ final class AppearanceSettingsViewController: SettingsPaneController {
                                         action: #selector(toggleRunningIndicator))
         runningIndicator.state = prefs.showRunningIndicator ? .on : .off
 
-        let completionPicker = NSPopUpButton()
-        completionPicker.addItems(withTitles: ["Off", "Prefix matches only", "All matches"])
-        completionPicker.selectItem(at: Self.completionModes.firstIndex(of: prefs.appNameCompletion) ?? 2)
-        completionPicker.target = self
-        completionPicker.action = #selector(completionChoiceChanged)
-
         let rowsPicker = NSPopUpButton()
         rowsPicker.addItems(withTitles: Preferences.visibleRowsRange.map(String.init))
         rowsPicker.selectItem(at: prefs.visibleRows - Preferences.visibleRowsRange.lowerBound)
@@ -58,6 +50,10 @@ final class AppearanceSettingsViewController: SettingsPaneController {
         toastPicker.target = self
         toastPicker.action = #selector(toastPositionChanged)
 
+        let confirmations = NSButton(checkboxWithTitle: "Show confirmation messages", target: self,
+                                     action: #selector(toggleConfirmationMessages))
+        confirmations.state = prefs.showConfirmationMessages ? .on : .off
+
         let resetButton = NSButton(title: "Reset Size & Position", target: self,
                                    action: #selector(resetGeometry))
         resetButton.bezelStyle = .rounded
@@ -65,11 +61,14 @@ final class AppearanceSettingsViewController: SettingsPaneController {
         let grid = SettingsForm.grid([
             ("Theme:", themePicker),
             ("Tint:", SettingsForm.row([clearLabel, tintSlider, solidLabel])),
-            ("App name completion:", completionPicker),
             ("Results:", runningIndicator),
             ("Rows shown:", rowsPicker),
             ("Open on:", screenPicker),
             ("Panel:", resetButton),
+            ("Messages:", SettingsForm.column([
+                confirmations,
+                SettingsForm.hint("Failures and messages about another app keeping the display awake still appear."),
+            ])),
             ("Message position:", toastPicker),
         ])
         view = SettingsForm.page(grid)
@@ -88,10 +87,8 @@ final class AppearanceSettingsViewController: SettingsPaneController {
         model.set(\.showRunningIndicator, sender.state == .on)
     }
 
-    @objc private func completionChoiceChanged(_ sender: NSPopUpButton) {
-        let index = sender.indexOfSelectedItem
-        model.set(\.appNameCompletion,
-                  Self.completionModes.indices.contains(index) ? Self.completionModes[index] : .allMatches)
+    @objc private func toggleConfirmationMessages(_ sender: NSButton) {
+        model.set(\.showConfirmationMessages, sender.state == .on)
     }
 
     @objc private func visibleRowsChanged(_ sender: NSPopUpButton) {
@@ -106,7 +103,7 @@ final class AppearanceSettingsViewController: SettingsPaneController {
         let positions = ToastPosition.allCases
         guard positions.indices.contains(sender.indexOfSelectedItem) else { return }
         model.set(\.toastPosition, positions[sender.indexOfSelectedItem])
-        model.onToast?(ToastMessage(text: "Messages will appear here", symbol: "bubble.left"))
+        model.onToast?(ToastMessage(text: "Messages will appear here", symbol: "bubble.left", isConfirmation: false))
     }
 
     /// The way back from a panel dragged somewhere unusable. Without it the only

@@ -22,12 +22,12 @@ keystroke.
 - System commands such as Lock Screen, Sleep, Restart and Empty Trash.
 - Links to folders, files or web pages, each with its own name and alias.
 - Links with a `{query}` placeholder: press Tab and type to search GitHub or pass text to a Shortcut.
-- A web search row (DuckDuckGo, Google or Bing) for when nothing on the Mac matches.
+- A web search row (DuckDuckGo, Google or Bing), shown always, only when no local results match, or turned off.
 - Aliases, so `ps` opens Photoshop.
 - Choose which folders to search for apps.
 - Hide apps you never launch with Command-Delete.
-- Optional recent apps list before you type, and a dot under apps that are running.
-- A Caffeinate switch that keeps the display awake.
+- Optional frequently used apps list before you type, and a dot under apps that are running.
+- Caffeinate sessions that keep the display awake for 15 minutes, 30 minutes, one hour, two hours, or until turned off.
 - The look of macOS 26 Spotlight, Liquid Glass included, in light and dark mode.
 
 ## Install
@@ -67,6 +67,10 @@ make debug
 SPOTLITE_DEV_TOAST=1 build/Spotlite.app/Contents/MacOS/Spotlite
 ```
 
+Set `SPOTLITE_DEV_CAPTURE_DIR=/tmp/spotlite-captures` with the Toast, Utilities or
+Menu hook to save native screenshots alongside the frame checks. Capturing requires
+existing Screen Recording access; the hooks do not request it.
+
 ## Usage
 
 | Key | Action |
@@ -91,6 +95,20 @@ panel scaling and animated resizing.
 Spotlite briefly confirms result copies, Caffeinate toggles, and hiding or restoring
 items with a translucent message. Messages default to the bottom center of the
 screen; choose another position in Settings → Appearance → Message position.
+Turn off Show confirmation messages on the same page to hide routine confirmations.
+Failures, messages about another app keeping the display awake, and position previews
+still appear.
+
+Choose web search visibility and app name completion in Settings → Search. New
+installations offer web search only when no local result matches; upgrades preserve
+the previous web search setting. Calculations and conversions never show a web search row.
+
+Open Caffeinate in the launcher to choose a duration or turn off an active session.
+Until turned off is followed by the timed durations. While active, Turn Off appears
+first and is selected by default when the submenu opens.
+Choosing another duration replaces its deadline, starting from now. The menu-bar cup
+shows when it will finish. Time spent asleep counts toward the duration,
+and sessions end when Spotlite quits.
 
 ## Permissions
 

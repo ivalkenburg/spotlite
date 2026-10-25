@@ -9,6 +9,9 @@ final class SearchSettingsViewController: SettingsPaneController {
     private var directoriesView: ApplicationDirectoriesView?
 
     private static let engines = WebSearchEngine.allCases
+    private static let webSearchModes = WebSearchMode.allCases
+    private static let completionModes: [AppNameCompletion] = [.off, .prefixOnly, .allMatches]
+    private let enginePicker = NSPopUpButton()
     /// Seconds offered for "Remember last search". Zero is Off.
     private static let retentionChoices: [TimeInterval] = [0, 5, 10, 15, 30]
     private static let backNavigationChoices: [BackNavigationBehavior] = [.restoreQuery, .clearQuery]
@@ -24,18 +27,26 @@ final class SearchSettingsViewController: SettingsPaneController {
                                       action: #selector(toggleSystemCommands))
         systemCommands.state = prefs.showSystemCommands ? .on : .off
 
-        let webSearch = NSButton(checkboxWithTitle: "Web search with", target: self,
-                                 action: #selector(toggleWebSearch))
-        webSearch.state = prefs.showWebSearch ? .on : .off
-        let enginePicker = NSPopUpButton()
+        let webSearch = NSPopUpButton()
+        webSearch.addItems(withTitles: Self.webSearchModes.map(\.title))
+        webSearch.selectItem(at: Self.webSearchModes.firstIndex(of: prefs.webSearchMode) ?? 1)
+        webSearch.target = self
+        webSearch.action = #selector(webSearchModeChanged)
         enginePicker.addItems(withTitles: Self.engines.map(\.name))
         enginePicker.selectItem(at: Self.engines.firstIndex(of: prefs.webSearchEngine) ?? 0)
         enginePicker.target = self
         enginePicker.action = #selector(engineChoiceChanged)
+        enginePicker.isEnabled = prefs.webSearchMode != .off
 
-        let recentApps = NSButton(checkboxWithTitle: "Show recent apps", target: self,
+        let recentApps = NSButton(checkboxWithTitle: "Show frequently used apps", target: self,
                                   action: #selector(toggleRecentApps))
         recentApps.state = prefs.showRecentApps ? .on : .off
+
+        let completionPicker = NSPopUpButton()
+        completionPicker.addItems(withTitles: ["Off", "Prefix matches only", "All matches"])
+        completionPicker.selectItem(at: Self.completionModes.firstIndex(of: prefs.appNameCompletion) ?? 2)
+        completionPicker.target = self
+        completionPicker.action = #selector(completionChoiceChanged)
 
         let retentionPicker = NSPopUpButton()
         retentionPicker.addItems(withTitles: Self.retentionChoices.map {
@@ -65,9 +76,13 @@ final class SearchSettingsViewController: SettingsPaneController {
                     systemCommands,
                     SettingsForm.hint("Lock Screen, Sleep, Restart and more."),
                 ], spacing: 2),
-                SettingsForm.row([webSearch, enginePicker], spacing: 6),
             ], spacing: 8)),
+            ("Web search:", SettingsForm.column([
+                webSearch,
+                SettingsForm.row([NSTextField(labelWithString: "Engine:"), enginePicker]),
+            ])),
             ("Before typing:", recentApps),
+            ("App name completion:", completionPicker),
             ("Remember last search:", SettingsForm.column([
                 retentionPicker,
                 SettingsForm.hint("Reopening Spotlite within this time brings the last query back."),
@@ -101,8 +116,18 @@ final class SearchSettingsViewController: SettingsPaneController {
         model.set(\.showSystemCommands, sender.state == .on)
     }
 
-    @objc private func toggleWebSearch(_ sender: NSButton) {
-        model.set(\.showWebSearch, sender.state == .on)
+    @objc private func webSearchModeChanged(_ sender: NSPopUpButton) {
+        let index = sender.indexOfSelectedItem
+        guard Self.webSearchModes.indices.contains(index) else { return }
+        let mode = Self.webSearchModes[index]
+        enginePicker.isEnabled = mode != .off
+        model.set(\.webSearchMode, mode)
+    }
+
+    @objc private func completionChoiceChanged(_ sender: NSPopUpButton) {
+        let index = sender.indexOfSelectedItem
+        guard Self.completionModes.indices.contains(index) else { return }
+        model.set(\.appNameCompletion, Self.completionModes[index])
     }
 
     @objc private func engineChoiceChanged(_ sender: NSPopUpButton) {

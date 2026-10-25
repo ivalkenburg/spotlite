@@ -25,7 +25,7 @@ make dmg      # build/Spotlite-<version>.dmg
 
 ## Performance rules
 
-- Idle CPU must stay 0%. Avoid polling; the only timer is a coalescible 5 s caffeine refresh.
+- Idle CPU must stay 0%. Avoid polling; only the coalescible 5 s caffeine refresh repeats. Timed sessions use a one-shot expiration.
 - Keep memory to a minimum. Idle is ~32 MB (45 MB with menu bar icon); ~88 MB after first panel open, mostly `NSGlassEffectView`.
 - Matching runs synchronously on the main thread (~28 µs for the full index). Don't move it to a queue.
 - Icons load on a background queue (~670 µs each), only for visible rows.
@@ -48,7 +48,7 @@ make dmg      # build/Spotlite-<version>.dmg
 | `SPOTLITE_SHOW_ON_LAUNCH=1` | Show the panel at launch |
 | `SPOTLITE_DEV_FRAMES=1` | Dump view frames (collapsed, expanded for `SPOTLITE_DEV_QUERY` or "a") and exit |
 | `SPOTLITE_DEV_SEQUENCE=1` | Show, type, clear; log panel frames |
-| `SPOTLITE_DEV_MENU=1` | Exercise Caffeinate submenu keys, toggle and filtering; dump frames and exit |
+| `SPOTLITE_DEV_MENU=1` | Exercise Caffeinate durations, Turn Off, navigation and filtering; dump frames and exit |
 | `SPOTLITE_DEV_COMPLETION=1` | Exercise app completion modes, caret and Backspace; dump search and settings frames and exit |
 | `SPOTLITE_DEV_UTILITIES=1` | Exercise conversion cards, UUID actions, Utility settings and visibility; preserve clipboard, dump frames and exit |
 | `SPOTLITE_DEV_PIN=1` | Keep the panel open when it loses focus |
