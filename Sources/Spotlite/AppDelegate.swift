@@ -50,6 +50,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var preferences = Storage.loadPreferences()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_FOCUS"] == "1" {
+            let previousApplication = NSWorkspace.shared.frontmostApplication
+            Task { @MainActor in
+                do {
+                    try await self.controller.runDevFocusChecks(previousApplication: previousApplication)
+                    exit(0)
+                } catch {
+                    print("DEV focus failed: \(error)")
+                    exit(1)
+                }
+            }
+            return
+        }
+        #endif
         applyTheme()
         // Query before drawing the status item so an assertion that predates Spotlite is
         // represented immediately. Later changes all flow through this single callback.
@@ -73,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if ProcessInfo.processInfo.environment["SPOTLITE_SHOW_ON_LAUNCH"] == "1" {
             Task { @MainActor in self.controller.show() }
         }
+        #if DEBUG
         if ProcessInfo.processInfo.environment["SPOTLITE_DEV_FRAMES"] == "1" {
             Task { @MainActor in
                 self.controller.show()
@@ -131,6 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }
         }
+        #endif
     }
 
     func applicationWillTerminate(_ notification: Notification) {

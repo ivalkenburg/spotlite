@@ -145,8 +145,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         table.delegate = self
         table.target = self
         table.action = #selector(tableClicked)
-        // A click must not take focus from the field: Caffeinate and a template link keep
-        // the panel open, and typing has to keep reaching the query.
+        // A click must not take focus from the field: submenus and template-link
+        // arguments keep the panel open, and typing must keep reaching the query.
         table.refusesFirstResponder = true
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("main"))
         column.resizingMask = .autoresizingMask
@@ -302,8 +302,13 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         resetNavigation()
         ResultItem.forgetHandlers()
 
-        let recalled = devQuery == nil ? queryMemory.recall(retention: preferences.queryRetention) : nil
-        field.stringValue = devQuery ?? recalled ?? ""
+        #if DEBUG
+        let prefilledQuery = devQuery
+        #else
+        let prefilledQuery: String? = nil
+        #endif
+        let recalled = prefilledQuery == nil ? queryMemory.recall(retention: preferences.queryRetention) : nil
+        field.stringValue = prefilledQuery ?? recalled ?? ""
         lastQuery = field.stringValue
         selection = .topHit
         // Anchor first: the glass grows downward from the placed top edge.
@@ -317,7 +322,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         // Starts from wherever a cancelled close fade left off, not from zero, so a
         // quick re-open doesn't flash.
         if !panel.isVisible { panel.alphaValue = 0 }
-        NSApp.activate(ignoringOtherApps: true)
+        // The nonactivating panel borrows keyboard focus without deactivating the
+        // current app. Ordering it out then returns input to the original window,
+        // while launches and clicks elsewhere remain free to choose a destination.
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(field)
         // A recalled query is selected whole, as in Spotlight, so typing replaces it and
@@ -428,14 +435,18 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         placement.release()
     }
 
+    #if DEBUG
     /// Dev captures steal key focus, which would dismiss the panel mid-measurement.
     private let pinnedOpen = ProcessInfo.processInfo.environment["SPOTLITE_DEV_PIN"] == "1"
     /// Dev hook: prefill a query so the expanded state can be inspected. Read once:
     /// `environment` builds a fresh dictionary on every access.
     private let devQuery = ProcessInfo.processInfo.environment["SPOTLITE_DEV_QUERY"]
+    #endif
 
     @objc private func resignedKey() {
+        #if DEBUG
         guard !pinnedOpen else { return }
+        #endif
         hide()
     }
 
@@ -1034,8 +1045,138 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { false }
 }
 
+#if DEBUG
 /// Development checks live apart from the launcher behavior without widening access.
 extension SpotliteController {
+    /// SPOTLITE_DEV_FOCUS=1 skips hotkey registration so an installed copy can stay running.
+    /// Check real AppKit focus with an external app, then a local Settings-like window.
+    func runDevFocusChecks(previousApplication: NSRunningApplication?) async throws {
+        func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
+            guard condition() else {
+                throw NSError(domain: "SpotliteFocusChecks", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: message])
+            }
+        }
+        guard let previousApplication, previousApplication != .current else {
+            try check(false, "Focus checks need another app in front before launch")
+            return
+        }
+        let savedPreferences = preferences
+        let pasteboard = NSPasteboard.general
+        let savedClipboard = pasteboard.pasteboardItems?.map { item in
+            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+        } ?? []
+        defer {
+            preferencesDidChange(savedPreferences)
+            toasts.dismiss()
+            panel.orderOut(nil)
+            if NSApp.isActive { previousApplication.activate(options: []) }
+            pasteboard.clearContents()
+            let restored = savedClipboard.map { representations in
+                let item = NSPasteboardItem()
+                for (type, data) in representations { item.setData(data, forType: type) }
+                return item
+            }
+            if !restored.isEmpty { pasteboard.writeObjects(restored) }
+        }
+        preferences.hiddenUtilities = []
+        preferences.queryRetention = 0
+
+        func checkExternalFocus(_ label: String) throws {
+            try check(previousApplication.isActive,
+                      "\(label): search must leave the previous app active")
+            try check(NSWorkspace.shared.frontmostApplication == previousApplication,
+                      "\(label): frontmost app changed")
+            print("DEV focus: \(label) preserved \(previousApplication.localizedName ?? "previous app")")
+        }
+
+        // Wait for application startup before establishing the external focus fixture.
+        previousApplication.activate(options: [])
+        try? await Task.sleep(for: .milliseconds(300))
+        try checkExternalFocus("before search")
+        show()
+        try? await Task.sleep(for: .milliseconds(200))
+        try check(panel.isKeyWindow && field.currentEditor() != nil, "Search did not take keyboard focus")
+        try checkExternalFocus("search opened")
+        let editor = field.currentEditor() as! NSTextView
+        editor.insertText("2+2", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try check(field.stringValue == "2+2", "Search did not accept typing")
+        updateMatches(for: field.stringValue)
+        launch(at: 0)
+        try? await Task.sleep(for: .milliseconds(200))
+        try check(!panel.isVisible && pasteboard.string(forType: .string) == "4", "Calculation copy did not dismiss search")
+        try checkExternalFocus("calculation copied")
+
+        show()
+        setQuery("caf")
+        updateMatches(for: "caf")
+        launch(at: items.firstIndex { $0.identity == "caffeinate" }!)
+        let wasCaffeinated = caffeine.state.spotlite
+        launch(at: 0)
+        try check(caffeine.state.spotlite != wasCaffeinated, "Caffeinate did not toggle")
+        _ = caffeine.toggle()
+        try? await Task.sleep(for: .milliseconds(200))
+        try check(!panel.isVisible, "Caffeinate did not dismiss search")
+        try checkExternalFocus("Caffeinate toggled")
+
+        show()
+        let escapeEditor = field.currentEditor() as! NSTextView
+        _ = control(field, textView: escapeEditor, doCommandBy: #selector(NSResponder.cancelOperation(_:)))
+        try? await Task.sleep(for: .milliseconds(200))
+        try check(!panel.isVisible, "Escape did not dismiss search")
+        try checkExternalFocus("Escape")
+
+        toggle()
+        toggle()
+        // Reopen before the fade completes: its old completion must not dismiss search.
+        toggle()
+        try? await Task.sleep(for: .milliseconds(200))
+        try check(panel.isVisible && panel.isKeyWindow && !isDismissing, "Reopening did not cancel dismissal")
+        try checkExternalFocus("reopened during dismissal")
+        toggle()
+        try? await Task.sleep(for: .milliseconds(200))
+        try check(!panel.isVisible, "Hotkey did not dismiss search")
+        try checkExternalFocus("hotkey dismissal")
+
+        let settings = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 300, height: 120),
+                                styleMask: [.titled], backing: .buffered, defer: false)
+        settings.title = "Spotlite focus check"
+        let input = NSTextField(string: "Continue typing here")
+        settings.contentView = input
+        defer { settings.orderOut(nil) }
+        NSApp.activate(ignoringOtherApps: true)
+        settings.makeKeyAndOrderFront(nil)
+        settings.makeFirstResponder(input)
+        try? await Task.sleep(for: .milliseconds(200))
+        let previousResponder = settings.firstResponder
+        show()
+        hide()
+        try? await Task.sleep(for: .milliseconds(200))
+        try check(settings.isKeyWindow && settings.firstResponder === previousResponder,
+                  "Previous local window or responder did not regain focus")
+        print("DEV focus: returned to the previous local window and responder")
+
+        show()
+        hide()
+        settings.makeKeyAndOrderFront(nil)
+        try? await Task.sleep(for: .milliseconds(200))
+        try check(settings.isKeyWindow && !panel.isVisible, "Destination lost focus during dismissal")
+        print("DEV focus: a destination selected during dismissal kept focus")
+
+        show()
+        settings.makeKeyAndOrderFront(nil)
+        try? await Task.sleep(for: .milliseconds(200))
+        try check(settings.isKeyWindow && !panel.isVisible, "Selecting another window did not dismiss search")
+        print("DEV focus: switching to another local window dismissed search")
+
+        show()
+        previousApplication.activate(options: [])
+        try? await Task.sleep(for: .milliseconds(300))
+        try check(!panel.isVisible, "Switching apps did not dismiss search")
+        try checkExternalFocus("switched to another app")
+        print("DEV focus: all checks passed")
+    }
+
     private func devDescendants(of view: NSView) -> [NSView] {
         view.subviews.flatMap { [$0] + devDescendants(of: $0) }
     }
@@ -1569,6 +1710,8 @@ extension SpotliteController {
     }
 
 }
+
+#endif
 
 /// Top-left origin, so everything pinned to the top keeps its frame while the glass
 /// grows or shrinks beneath it. With AppKit's usual bottom-left origin those frames all

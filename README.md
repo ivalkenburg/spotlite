@@ -56,8 +56,16 @@ make install
 This builds the app and copies it to `/Applications`. "Start at login" only
 works from there.
 
-After building, run `SPOTLITE_DEV_TOAST=1 build/Spotlite.app/Contents/MacOS/Spotlite`
-to check toast layout, replacement, dismissal and the placement control.
+`make` builds a release app by default. Use `make debug` to build a debug app,
+`make run CONFIG=debug` to run it, or `make install CONFIG=debug` to install it.
+
+The `SPOTLITE_DEV_*` hooks are available only in debug builds. To check toast
+layout, replacement, dismissal and the placement control, run:
+
+```sh
+make debug
+SPOTLITE_DEV_TOAST=1 build/Spotlite.app/Contents/MacOS/Spotlite
+```
 
 ## Usage
 

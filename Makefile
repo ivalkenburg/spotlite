@@ -1,6 +1,7 @@
 APP      := Spotlite
+CONFIG   ?= release
 BUNDLE   := build/$(APP).app
-BIN      := .build/release/$(APP)
+BIN      := .build/$(CONFIG)/$(APP)
 # The first Apple Development certificate by its full name: the bare prefix is
 # ambiguous when the keychain holds more than one. Ad-hoc ("-") when there is none.
 # Override with `make IDENTITY="..."`.
@@ -14,12 +15,15 @@ DMG      := build/$(APP)-$(VERSION).dmg
 DEVELOPER_ID   ?= $(shell security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application/ {print $$2; exit}')
 NOTARY_PROFILE ?= spotlite
 
-.PHONY: all build bundle run clean install test dmg release cask
+.PHONY: all build debug bundle run clean install test dmg release cask
 
 all: bundle
 
 build:
-	swift build -c release
+	swift build -c $(CONFIG)
+
+debug:
+	@$(MAKE) bundle CONFIG=debug
 
 bundle: build
 	@rm -rf $(BUNDLE)
@@ -65,7 +69,7 @@ dmg: bundle
 # that check also passes offline.
 release:
 	@test -n "$(DEVELOPER_ID)" || { echo "no Developer ID Application certificate in the keychain"; exit 1; }
-	@$(MAKE) dmg IDENTITY="$(DEVELOPER_ID)" SIGN_FLAGS="--options runtime --timestamp"
+	@$(MAKE) dmg CONFIG=release IDENTITY="$(DEVELOPER_ID)" SIGN_FLAGS="--options runtime --timestamp"
 	codesign --sign "$(DEVELOPER_ID)" --timestamp $(DMG)
 	xcrun notarytool submit $(DMG) --keychain-profile "$(NOTARY_PROFILE)" --wait
 	xcrun stapler staple $(DMG)

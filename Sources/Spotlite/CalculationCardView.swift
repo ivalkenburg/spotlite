@@ -91,6 +91,7 @@ final class CalculationCardView: HoverResultCellView {
                   showsSeparator: last.showsSeparator)
     }
 
+    #if DEBUG
     var hasValidGeometry: Bool {
         let valueAlignment = value.alignmentRect(forFrame: value.frame)
         let copyAlignment = copyCircle.alignmentRect(forFrame: copyCircle.frame)
@@ -102,6 +103,7 @@ final class CalculationCardView: HoverResultCellView {
     func dumpFrames(_ tag: String) {
         print("[\(tag)] card=\(card.frame) expression=\(expression.frame) value=\(value.frame) copy=\(copyCircle.frame)")
     }
+    #endif
 
     func configure(expression text: String, value result: String, selection: RowSelection,
                    showsSeparator: Bool) {

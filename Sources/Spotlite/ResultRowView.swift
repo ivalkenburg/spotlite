@@ -96,10 +96,12 @@ final class ResultRowView: HoverResultCellView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    #if DEBUG
     func dumpFrames(_ tag: String) {
         print("[\(tag)] row=\(frame) label=\(label.frame) hints=\(hintStack.frame)")
         print("[\(tag)] switch=\(stateSwitch.frame) switchHidden=\(stateSwitch.isHidden) state=\(stateSwitch.state.rawValue)")
     }
+    #endif
 
     private var lastConfiguration: (item: ResultItem, selection: RowSelection,
                                     modifiers: NSEvent.ModifierFlags, running: Bool, marksRunning: Bool)?

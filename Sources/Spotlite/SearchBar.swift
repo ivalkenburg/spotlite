@@ -224,10 +224,12 @@ final class SearchBar {
         content?.layoutSubtreeIfNeeded()
     }
 
+    #if DEBUG
     func dumpFrames(_ tag: String) {
         print("[\(tag)] completion=\(completion.frame) text=\(completionLabel.stringValue) hidden=\(completion.isHidden) iconHidden=\(barIcon.isHidden)")
         print("[\(tag)] field=\(field.frame) chip=\(chip.frame) chipHidden=\(chip.isHidden)")
     }
+    #endif
 
     /// The field editor copies the placeholder when editing starts, so a change made
     /// mid-edit is handed to it too.

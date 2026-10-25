@@ -225,6 +225,7 @@ private final class ToastView: NSView {
     }
 }
 
+#if DEBUG
 extension ToastPresenter {
     /// SPOTLITE_DEV_TOAST=1: exercise native windows and controls without saving prefs
     /// or touching the general clipboard. Frame assertions catch clipped/wrapped labels.
@@ -357,3 +358,4 @@ extension ToastPresenter {
         precondition((panel?.contentView as? ToastView)?.label.stringValue == text)
     }
 }
+#endif
