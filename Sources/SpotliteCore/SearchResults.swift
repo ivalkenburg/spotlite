@@ -13,14 +13,16 @@ public enum SearchResult {
 }
 
 /// Assembles the result list for a query: a calculation pinned on top when the query is
-/// arithmetic, then apps ranked by textual score plus frecency, then the built-in
-/// entries the query asks for, then the web search. Apps still appear below a
+/// arithmetic, then apps and the built-in entries the query asks for, ranked together by
+/// textual score plus frecency, then the web search. Apps still appear below a
 /// calculation, since `x^2` shouldn't hide an app named X.
 public enum SearchResults {
     /// Queries that offer built-in entries alongside any app matches.
     static let settingsKeywords = ["settings", "preferences", "spotlite"]
     static let uuidKeywords = ["uuid", "generate uuid"]
     static let caffeineKeywords = ["caffeinate", "caffeine"]
+    /// Launch-history id of the Spotlite Settings row. The other built-ins use `SearchUtility.historyID`.
+    public static let settingsHistoryID = "utility.settings"
 
     public static func build(
         for query: String,
@@ -56,15 +58,22 @@ public enum SearchResults {
         // Unordered: ranking sorts them once, with launch history applied.
         let matches = matcher.matches(trimmed, in: corpus)
         let ranked = AppRanking.rank(matches, frecency: frecency, now: now)
-        result.append(contentsOf: ranked.map(SearchResult.app))
-
         // The self-indexed escape hatch: reachable even with the menu bar icon hidden.
-        if mentions(trimmed, keywords: settingsKeywords) { result.append(.settings) }
-        if !hiddenUtilities.contains(.caffeinate), mentions(trimmed, keywords: caffeineKeywords) {
-            result.append(.caffeinate)
+        var builtIns: [(result: SearchResult, historyID: String, keyword: String)] = []
+        if let keyword = matchedKeyword(trimmed, in: settingsKeywords) {
+            builtIns.append((.settings, settingsHistoryID, keyword))
         }
-        if !hiddenUtilities.contains(.generateUUID), mentions(trimmed, keywords: uuidKeywords) {
-            result.append(.generateUUID)
+        if !hiddenUtilities.contains(.caffeinate), let keyword = matchedKeyword(trimmed, in: caffeineKeywords) {
+            builtIns.append((.caffeinate, SearchUtility.caffeinate.historyID, keyword))
+        }
+        if !hiddenUtilities.contains(.generateUUID), let keyword = matchedKeyword(trimmed, in: uuidKeywords) {
+            builtIns.append((.generateUUID, SearchUtility.generateUUID.historyID, keyword))
+        }
+        if builtIns.isEmpty {
+            result.append(contentsOf: ranked.map(SearchResult.app))
+        } else {
+            result.append(contentsOf: merge(builtIns, into: ranked, query: trimmed,
+                                            matcher: matcher, frecency: frecency, now: now))
         }
         // Last, so it only becomes the top hit when nothing on this Mac matches. Not
         // under a calculation: arithmetic is already answered, and the card would lose
@@ -75,6 +84,13 @@ public enum SearchResults {
         }
         return result
     }
+
+    /// One-entry corpora of the keywords, built once, to score a query as a name prefix.
+    private static let keywordCorpora: [String: SearchCorpus] = Dictionary(
+        uniqueKeysWithValues: (settingsKeywords + caffeineKeywords + uuidKeywords).map { keyword in
+            (keyword, SearchCorpus(entries: [AppEntry(url: URL(string: "spotlite-builtin:")!, name: keyword,
+                                                      bundleID: keyword, kind: .command)]))
+        })
 
     /// Longer than any typed query, short enough to stay a sane URL.
     static let maxWebQuery = 2_000
@@ -107,7 +123,7 @@ public enum SearchResults {
     /// rebuilds the list when that row is on screen.
     public static func offersCaffeinate(_ query: String) -> Bool {
         guard let trimmed = bounded(query) else { return false }
-        return mentions(trimmed, keywords: caffeineKeywords)
+        return matchedKeyword(trimmed, in: caffeineKeywords) != nil
     }
 
     /// The trimmed query, or nil when it is empty or too long to produce any row: the
@@ -119,9 +135,34 @@ public enum SearchResults {
         ).map(String.init)
     }
 
-    /// Three characters minimum, or a bare "s" or "p" would summon an entry on every search.
-    private static func mentions(_ trimmed: String, keywords: [String]) -> Bool {
+    /// The keyword `trimmed` starts. Two characters minimum, or a bare "s" or "p" would
+    /// summon an entry on every search.
+    private static func matchedKeyword(_ trimmed: String, in keywords: [String]) -> String? {
         let lowered = trimmed.lowercased()
-        return lowered.count >= 3 && keywords.contains { $0.hasPrefix(lowered) }
+        guard lowered.count >= 2 else { return nil }
+        return keywords.first { $0.hasPrefix(lowered) }
+    }
+
+    /// Places built-ins among the ranked apps. A built-in is a name-prefix match with the
+    /// score a name starting with the query would earn, and ranks like an app: launch
+    /// history lifts it past a never-used app of the same tier. On a tie the app wins, so
+    /// an unused built-in sits just below the apps it ties with.
+    private static func merge(
+        _ builtIns: [(result: SearchResult, historyID: String, keyword: String)],
+        into ranked: [MatchResult], query: String, matcher: Matcher, frecency: Frecency, now: Date
+    ) -> [SearchResult] {
+        var rows = ranked.map { match in
+            (result: SearchResult.app(match), precedence: AppRanking.precedence(match),
+             score: frecency.adjustedScore(match.score, for: match.entry.id, now: now))
+        }
+        let precedence = MatchTier.namePrefix.rawValue * 2 + 1
+        for builtIn in builtIns {
+            let textual = keywordCorpora[builtIn.keyword].flatMap { matcher.matches(query, in: $0).first?.score } ?? 0
+            let score = frecency.adjustedScore(textual, for: builtIn.historyID, now: now)
+            let index = rows.firstIndex { $0.precedence < precedence || ($0.precedence == precedence && $0.score < score) }
+                ?? rows.endIndex
+            rows.insert((builtIn.result, precedence, score), at: index)
+        }
+        return rows.map(\.result)
     }
 }

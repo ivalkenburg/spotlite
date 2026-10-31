@@ -438,6 +438,13 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     #if DEBUG
     /// Dev captures steal key focus, which would dismiss the panel mid-measurement.
     private let pinnedOpen = ProcessInfo.processInfo.environment["SPOTLITE_DEV_PIN"] == "1"
+    /// Scripted dev runs press Return on utilities; they must not train the real history.
+    private let recordsUtilityUse: Bool = {
+        let environment = ProcessInfo.processInfo.environment
+        return ["FRAMES", "SEQUENCE", "MENU", "COMPLETION", "UTILITIES"].allSatisfy {
+            environment["SPOTLITE_DEV_\($0)"] != "1"
+        }
+    }()
     /// Dev hook: prefill a query so the expanded state can be inspected. Read once:
     /// `environment` builds a fresh dictionary on every access.
     private let devQuery = ProcessInfo.processInfo.environment["SPOTLITE_DEV_QUERY"]
@@ -500,6 +507,13 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         let navigatedTo = selection == .navigated && items.indices.contains(cursor)
             ? items[cursor].identity : nil
         updateMatches(for: field.stringValue, selecting: navigatedTo.map { ($0, .navigated) })
+    }
+
+    private func recordUtilityUse(_ id: String) {
+        #if DEBUG
+        guard recordsUtilityUse else { return }
+        #endif
+        library.recordLaunch(id)
     }
 
     private func recordSuccessfulLaunch(_ id: String) {
@@ -729,6 +743,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         case .settings:
             hide()
             onOpenSettings?()
+            recordUtilityUse(SearchResults.settingsHistoryID)
 
         case .caffeinate:
             enterScope(.menu(.caffeinate(active: caffeine.state.spotlite)))
@@ -736,16 +751,19 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         case .menuItem(let item, _):
             if let action = item.action {
                 if item.closesPanelOnAction { hide() }
+                let succeeded: Bool
                 switch action {
                 case .startCaffeinate(let duration):
-                    toasts.startCaffeinate(caffeine, duration: duration,
-                                          position: preferences.toastPosition, on: panel.screen)
+                    succeeded = toasts.startCaffeinate(caffeine, duration: duration,
+                                                       position: preferences.toastPosition, on: panel.screen)
                 case .stopCaffeinate:
-                    toasts.stopCaffeinate(caffeine, position: preferences.toastPosition, on: panel.screen)
+                    succeeded = toasts.stopCaffeinate(caffeine, position: preferences.toastPosition,
+                                                      on: panel.screen)
                 case .generateUUID(let version):
-                    toasts.copy(UUIDGenerator.generate(version),
-                                position: preferences.toastPosition, on: panel.screen)
+                    succeeded = toasts.copy(UUIDGenerator.generate(version),
+                                            position: preferences.toastPosition, on: panel.screen)
                 }
+                if succeeded { recordUtilityUse(action.historyID) }
             } else if let submenu = item.submenu {
                 enterScope(.menu(submenu))
             }

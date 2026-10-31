@@ -100,22 +100,28 @@ final class ToastPresenter {
         }
     }
 
+    @discardableResult
     func copy(_ value: String, position: ToastPosition, on screen: NSScreen?,
-              to pasteboard: NSPasteboard = .general) {
+              to pasteboard: NSPasteboard = .general) -> Bool {
         pasteboard.clearContents()
         let succeeded = pasteboard.setString(value, forType: .string)
         show(.copied(succeeded: succeeded), position: position, on: screen)
+        return succeeded
     }
 
+    @discardableResult
     func startCaffeinate(_ caffeine: CaffeineAssertion, duration: CaffeineDuration,
-                         position: ToastPosition, on screen: NSScreen? = nil) {
+                         position: ToastPosition, on screen: NSScreen? = nil) -> Bool {
         let succeeded = caffeine.start(duration)
         show(.caffeine(succeeded: succeeded, state: caffeine.state), position: position, on: screen)
+        return succeeded
     }
 
-    func stopCaffeinate(_ caffeine: CaffeineAssertion, position: ToastPosition, on screen: NSScreen? = nil) {
+    @discardableResult
+    func stopCaffeinate(_ caffeine: CaffeineAssertion, position: ToastPosition, on screen: NSScreen? = nil) -> Bool {
         let succeeded = caffeine.stop()
         show(.caffeine(succeeded: succeeded, state: caffeine.state), position: position, on: screen)
+        return succeeded
     }
 
     func dismiss() {

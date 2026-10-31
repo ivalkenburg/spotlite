@@ -5,6 +5,14 @@ public enum SearchMenuAction: Sendable, Equatable {
     case startCaffeinate(CaffeineDuration)
     case stopCaffeinate
     case generateUUID(UUIDVersion)
+
+    /// The utility this action belongs to, for launch history.
+    public var historyID: String {
+        switch self {
+        case .startCaffeinate, .stopCaffeinate: SearchUtility.caffeinate.historyID
+        case .generateUUID: SearchUtility.generateUUID.historyID
+        }
+    }
 }
 
 /// An item can have a direct Return action, a submenu, or both. Without an action,

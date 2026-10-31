@@ -15,6 +15,9 @@ public enum SearchUtility: String, Codable, Sendable, CaseIterable {
         }
     }
 
+    /// Key for launch history, which ranks the utility's row like an app's.
+    public var historyID: String { "utility.\(rawValue)" }
+
     public var symbolName: String {
         switch self {
         case .caffeinate: "cup.and.saucer"

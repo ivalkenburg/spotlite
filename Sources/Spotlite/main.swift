@@ -26,7 +26,7 @@ if CommandLine.arguments.contains("--bench") {
                               includeSettingsPanes: preferences.showSystemSettings,
                               includeCommands: preferences.showSystemCommands)
     let frecency = Storage.loadFrecency()
-    let queries = ["s", "sa", "saf", "safa", "safar", "safari", "gc", "term", "a", "cal", "xyz"]
+    let queries = ["s", "sa", "saf", "safa", "safar", "safari", "gc", "term", "a", "cal", "xyz", "ca", "se", "uu"]
     var sink = 0
     // The same call each keystroke makes: calculator, matcher, ranking and built-ins.
     func search(_ q: String) -> Int {
