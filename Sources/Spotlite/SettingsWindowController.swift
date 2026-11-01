@@ -33,8 +33,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
 
     /// UI state, not a setting, so it lives in user defaults rather than Preferences.
     private static let selectedTabKey = "SettingsSelectedTab"
-    /// The window is rebuilt on every open, so its position is kept in user defaults.
-    private static let frameName = "SpotliteSettings"
 
     private var window: NSWindow?
     private var currentTab: Tab?
@@ -48,11 +46,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
         get { model.onChange }
         set { model.onChange = newValue }
     }
-
-    /// Called as the window closes, so the owner can release it.
-    var onClose: (() -> Void)?
-
-    var isVisible: Bool { window?.isVisible ?? false }
 
     var onHotKeyChange: ((UInt32, UInt32) -> Bool)? {
         get { model.onHotKeyChange }
@@ -81,11 +74,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
 
         if window == nil {
             buildWindow()
-            let restored = window?.setFrameUsingName(Self.frameName) ?? false
-            window?.setFrameAutosaveName(Self.frameName)
             let saved = UserDefaults.standard.string(forKey: Self.selectedTabKey).flatMap(Tab.init)
             select(saved ?? .general)
-            if !restored { window?.center() }
+            window?.center()
         }
 
         // Stay .accessory and force activation: flipping to .regular would make a Dock
@@ -217,6 +208,5 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
 
     func windowWillClose(_ notification: Notification) {
         general.cancelRecording()
-        onClose?()
     }
 }

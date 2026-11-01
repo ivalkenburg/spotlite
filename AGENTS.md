@@ -26,8 +26,7 @@ make dmg      # build/Spotlite-<version>.dmg
 ## Performance rules
 
 - Idle CPU must stay 0%. Avoid polling; only the coalescible 5 s caffeine refresh repeats. Timed sessions use a one-shot expiration.
-- Keep memory to a minimum. Footprint is ~7 MB idle (~9 MB with menu bar icon), ~19 MB after panel use and ~30 MB after visiting every Settings tab. Measure phys_footprint, not RSS.
-- `main.swift` re-execs once with `MallocSpaceEfficient=1`, which saves about a quarter. Settings is released on close; its window position persists through frame autosave.
+- Keep memory to a minimum. Idle is ~32 MB (45 MB with menu bar icon); ~88 MB after first panel open, mostly `NSGlassEffectView`.
 - Matching runs synchronously on the main thread (~9 µs per keystroke, ranking included). Don't move it to a queue.
 - Icons load on a background queue (~670 µs each), only for visible rows.
 - Hotkey uses Carbon `RegisterEventHotKey`: no Accessibility permission, no per-keystroke wakeups.

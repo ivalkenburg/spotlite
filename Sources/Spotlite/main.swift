@@ -1,18 +1,6 @@
 import SpotliteCore
 import AppKit
 
-// A quarter less footprint at no measured latency cost, but libmalloc reads this only as
-// the process starts, so it takes a re-exec. It works for every launch path, unlike
-// LSEnvironment. Cleared afterwards so nothing Spotlite spawns inherits it, which also
-// stops this looping. If exec fails, Spotlite carries on with the default allocator.
-if getenv("MallocSpaceEfficient") == nil {
-    if let path = Bundle.main.executablePath {
-        setenv("MallocSpaceEfficient", "1", 1)
-        execv(path, CommandLine.unsafeArgv)
-    }
-}
-unsetenv("MallocSpaceEfficient")
-
 func configuredDirectories(_ preferences: Preferences = Storage.loadPreferences()) -> [URL] {
     AppIndex.normalizedDirectories(preferences.applicationDirectories)
 }

@@ -46,7 +46,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var caffeineStatusItem: NSStatusItem?
     private var caffeineRefreshTimer: DispatchSourceTimer?
-    /// Released on close: keeping it makes a reopen ~65 ms faster but holds ~11 MB.
     private var settings: SettingsWindowController?
     private var preferences = Storage.loadPreferences()
 
@@ -339,15 +338,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             controller.onToast = { [weak self] message in
                 guard let self else { return }
                 self.toasts.show(message, position: self.preferences.toastPosition)
-            }
-            controller.onClose = { [weak self, weak controller] in
-                // Deferred: the controller is still mid-callback as the window's delegate.
-                // A reopen in between reuses it, so it must stay.
-                DispatchQueue.main.async {
-                    guard let self, let controller, self.settings === controller,
-                          !controller.isVisible else { return }
-                    self.settings = nil
-                }
             }
             settings = controller
         }
