@@ -115,18 +115,15 @@ enum Metrics {
     static let shadowOffsetY: CGFloat = -18
     static let shadowOpacity: CGFloat = 0.6
 
-    /// Total distance from the window edge to the visible glass edge.
-    static var chromeInset: CGFloat { windowMargin }
-
     /// Window width for a given visible panel width. The window is larger than the
     /// panel so the glass view's shadow isn't clipped.
-    static func windowWidth(for panelWidth: CGFloat) -> CGFloat { panelWidth + chromeInset * 2 }
+    static func windowWidth(for panelWidth: CGFloat) -> CGFloat { panelWidth + windowMargin * 2 }
 
     /// The window is always tall enough for a full list. Growing the glass inside a
     /// fixed window lets it animate; resizing the window itself makes Liquid Glass
     /// visibly nudge its top edge on every frame.
     static func windowHeight(visibleRows: Int) -> CGFloat {
-        maxPanelHeight(visibleRows: visibleRows) + chromeInset * 2
+        maxPanelHeight(visibleRows: visibleRows) + windowMargin * 2
     }
 
     /// Width of the invisible strip at each edge that resizes the panel. Deliberately

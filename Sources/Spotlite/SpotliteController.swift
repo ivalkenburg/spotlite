@@ -25,8 +25,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private var preferences: Preferences {
         // Not on every change: a drag writes the geometry here on every pointer move.
         didSet {
-            guard preferences.links != oldValue.links
-                || preferences.aliases != oldValue.aliases
+            // Links are absent: they reach the corpus through the library's entries.
+            guard preferences.aliases != oldValue.aliases
                 || preferences.hiddenBundleIDs != oldValue.hiddenBundleIDs
                 || preferences.showSystemSettings != oldValue.showSystemSettings
                 || preferences.showSystemCommands != oldValue.showSystemCommands
@@ -65,7 +65,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private var previousResult: Double?
     /// Modifiers currently held, which swap the selected row's detail for action hints.
     private var modifiers: NSEvent.ModifierFlags = []
-    private var flagsMonitor: Any?
     /// True while the close fade runs. The panel is still on screen, but toggling must
     /// treat it as hidden, and a show that lands mid-fade must cancel the pending cleanup.
     private var isDismissing = false
@@ -84,9 +83,11 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private let trailingEdge = ResizeEdgeView(edge: .trailing)
     private let moveHandle = MoveHandleView()
 
-    /// Called when the user picks the Settings entry, or hides an app.
+    /// Called when the user picks the Settings entry.
     var onOpenSettings: (() -> Void)?
+    /// Called when the panel itself changes preferences, by hiding an app or being dragged.
     var onPreferencesChanged: ((Preferences) -> Void)?
+
     init(library: AppLibrary, caffeine: CaffeineAssertion, preferences: Preferences, toasts: ToastPresenter) {
         self.library = library
         self.caffeine = caffeine
@@ -114,7 +115,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             self, selector: #selector(liveScrollStarted),
             name: NSScrollView.willStartLiveScrollNotification, object: scroll
         )
-        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+        // Never removed: the controller lives as long as the app.
+        _ = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             self?.modifiersChanged(event.modifierFlags)
             return event
         }
@@ -243,7 +245,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         ])
         panel.contentView = host
         animator = FrameAnimator(view: host)
-        applyVibrancy()
     }
 
     /// Glass gives its contents a vibrant appearance, which can keep label colors white
@@ -673,9 +674,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             guard bar.isShowingCompletion, textView.selectedRange().length == 0 else { return false }
             dismissCompletion(); return true
         case #selector(NSResponder.deleteToBeginningOfLine(_:)):
-            // Command-Delete inside a text field arrives as deleteToBeginningOfLine.
-            if argument == nil { hideAppUnderCursor() }
-            return true
+            // Command-Delete inside a text field arrives as deleteToBeginningOfLine. With
+            // nothing to hide, in a menu or a link's argument, it edits the text as usual.
+            return hideAppUnderCursor()
         default:
             return false
         }
@@ -812,7 +813,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                     self.show()
                     // show() clears the field. Restore the query, otherwise the panel
                     // reopens blank and the failure reads as nothing having happened.
-                    self.field.stringValue = query
+                    self.setQuery(query)
                     self.updateMatches(for: query)
                     self.library.refresh()
                 }
@@ -980,17 +981,19 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     /// Hides the app under the cursor. Bound to Command-Delete: the fast path, with the
     /// full list available in Settings for un-hiding.
-    private func hideAppUnderCursor() {
+    /// - Returns: false when the cursor is on nothing that can be hidden.
+    private func hideAppUnderCursor() -> Bool {
         guard items.indices.contains(cursor), case .app(let match) = items[cursor],
-              let bundleID = match.entry.bundleID else { return }
+              let bundleID = match.entry.bundleID else { return false }
 
-        guard preferences.hiddenBundleIDs.insert(bundleID).inserted else { return }
+        guard preferences.hiddenBundleIDs.insert(bundleID).inserted else { return true }
         hideUndo.record(bundleID)
         Storage.save(preferences)
         onPreferencesChanged?(preferences)
         updateMatches(for: field.stringValue)
         toasts.show(.visibility(match.entry.name, hidden: true),
                     position: preferences.toastPosition, on: panel.screen)
+        return true
     }
 
     /// Consume Command-Z only while hides remain newer than the last query edit.
@@ -1092,21 +1095,13 @@ extension SpotliteController {
         }
         let savedPreferences = preferences
         let pasteboard = NSPasteboard.general
-        let savedClipboard = pasteboard.pasteboardItems?.map { item in
-            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
-        } ?? []
+        let restoreClipboard = savedClipboard()
         defer {
             preferencesDidChange(savedPreferences)
             toasts.dismiss()
             panel.orderOut(nil)
             if NSApp.isActive { previousApplication.activate(options: []) }
-            pasteboard.clearContents()
-            let restored = savedClipboard.map { representations in
-                let item = NSPasteboardItem()
-                for (type, data) in representations { item.setData(data, forType: type) }
-                return item
-            }
-            if !restored.isEmpty { pasteboard.writeObjects(restored) }
+            restoreClipboard()
         }
         preferences.hiddenUtilities = []
         preferences.queryRetention = 0
@@ -1204,6 +1199,23 @@ extension SpotliteController {
         try check(!panel.isVisible, "Switching apps did not dismiss search")
         try checkExternalFocus("switched to another app")
         print("DEV focus: all checks passed")
+    }
+
+    /// Snapshots every clipboard representation; the returned closure puts them back.
+    private func savedClipboard() -> () -> Void {
+        let pasteboard = NSPasteboard.general
+        let saved = pasteboard.pasteboardItems?.map { item in
+            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+        } ?? []
+        return {
+            pasteboard.clearContents()
+            let restored = saved.map { representations in
+                let item = NSPasteboardItem()
+                for (type, data) in representations { item.setData(data, forType: type) }
+                return item
+            }
+            if !restored.isEmpty { pasteboard.writeObjects(restored) }
+        }
     }
 
     private func devDescendants(of view: NSView) -> [NSView] {
@@ -1445,18 +1457,8 @@ extension SpotliteController {
         }
         preferences.hiddenUtilities = []
         let pasteboard = NSPasteboard.general
-        let savedClipboard = pasteboard.pasteboardItems?.map { item in
-            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
-        } ?? []
-        defer {
-            pasteboard.clearContents()
-            let restored = savedClipboard.map { representations in
-                let item = NSPasteboardItem()
-                for (type, data) in representations { item.setData(data, forType: type) }
-                return item
-            }
-            if !restored.isEmpty { pasteboard.writeObjects(restored) }
-        }
+        let restoreClipboard = savedClipboard()
+        defer { restoreClipboard() }
         for query in ["255 to hex", "18446744073709551615 to binary", "10 km to miles", "32 f to c"] {
             show()
             setQuery(query)
@@ -1750,6 +1752,12 @@ extension SpotliteController {
     private func runDevBackNavigationChecks(_ editor: NSTextView) async {
         let backKeys = [#selector(NSResponder.insertBacktab(_:)), #selector(NSResponder.deleteBackward(_:))]
         let link = Link(name: "Docs", target: "https://example.com/?q={query}").entry!
+        // Nothing to hide in an argument, so Command-Delete must reach the field editor.
+        enterScope(.argument(link))
+        setQuery("abc")
+        precondition(!control(field, textView: editor,
+                              doCommandBy: #selector(NSResponder.deleteToBeginningOfLine(_:))))
+        leaveScope()
         for behavior in BackNavigationBehavior.allCases {
             for key in backKeys {
                 for isArgument in [false, true] {

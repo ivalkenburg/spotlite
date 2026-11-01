@@ -64,7 +64,7 @@ final class CaffeineAssertion: NSObject {
     private func releaseAssertion() -> Bool {
         let result = IOPMAssertionRelease(assertionID)
         guard result == kIOReturnSuccess else {
-            NSLog("Spotlite: could not release power assertion (\(result))")
+            NSLog("%@", "Spotlite: could not release power assertion (\(result))")
             return false
         }
         assertionID = IOPMAssertionID(0)
@@ -94,7 +94,7 @@ final class CaffeineAssertion: NSObject {
         )
 
         guard result == kIOReturnSuccess else {
-            NSLog("Spotlite: could not create power assertion (\(result))")
+            NSLog("%@", "Spotlite: could not create power assertion (\(result))")
             return false
         }
         assertionID = id

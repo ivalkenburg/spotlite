@@ -38,14 +38,11 @@ public enum MatchTier: Int, Sendable {
 public struct MatchResult: Sendable {
     public let entry: AppEntry
     public let score: Int
-    /// Indices into the entry's name of the matched characters, for highlighting.
-    public let positions: [Int]
     public let tier: MatchTier
 
-    init(entry: AppEntry, score: Int, positions: [Int], tier: MatchTier = .other) {
+    init(entry: AppEntry, score: Int, tier: MatchTier = .other) {
         self.entry = entry
         self.score = score
-        self.positions = positions
         self.tier = tier
     }
 }

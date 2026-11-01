@@ -284,18 +284,9 @@ public enum Storage {
         loadPreferences(from: preferencesURL)
     }
 
-    /// Internal entry point used by tests and recovery tooling. A malformed preferences
-    /// file is moved aside before defaults are returned, so first-run persistence cannot
-    /// silently destroy the only copy of the user's settings.
+    /// Internal entry point used by tests and recovery tooling.
     static func loadPreferences(from url: URL) -> Preferences {
-        guard FileManager.default.fileExists(atPath: url.path) else { return Preferences() }
-        guard let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode(Preferences.self, from: data)
-        else {
-            preserveCorruptFile(at: url)
-            return Preferences()
-        }
-        return decoded
+        loadPreservingCorruptFile(Preferences.self, from: url) ?? Preferences()
     }
 
     public static func save(_ preferences: Preferences) {
@@ -309,7 +300,7 @@ public enum Storage {
     }
 
     static func loadFrecency(from url: URL) -> Frecency {
-        load(Frecency.self, from: url) ?? Frecency()
+        loadPreservingCorruptFile(Frecency.self, from: url) ?? Frecency()
     }
 
     public static func save(_ frecency: Frecency) {
@@ -329,14 +320,10 @@ public enum Storage {
     }
 
     static func loadIndex(directories: [URL], from url: URL) -> [CachedApp]? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        let decoder = JSONDecoder()
-        if let snapshot = try? decoder.decode(IndexSnapshot.self, from: data) {
-            return snapshot.directories == directories.map(\.path) ? snapshot.apps : nil
-        }
-        // Legacy array caches were always built with the standard locations.
-        guard directories == AppIndex.searchDirectories else { return nil }
-        return try? decoder.decode([CachedApp].self, from: data)
+        // A file in any older shape is a cache miss: a scan follows every load anyway.
+        guard let snapshot = load(IndexSnapshot.self, from: url),
+              snapshot.directories == directories.map(\.path) else { return nil }
+        return snapshot.apps
     }
 
     public static func saveIndex(_ apps: [CachedApp], directories: [URL]) {
@@ -358,6 +345,17 @@ public enum Storage {
         return try? JSONDecoder().decode(type, from: data)
     }
 
+    /// For files that cannot be regenerated. One that no longer decodes is moved aside
+    /// before the caller falls back, so the next save cannot silently destroy the only copy.
+    private static func loadPreservingCorruptFile<T: Decodable>(_ type: T.Type, from url: URL) -> T? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard let decoded = load(type, from: url) else {
+            preserveCorruptFile(at: url)
+            return nil
+        }
+        return decoded
+    }
+
     private static func preserveCorruptFile(at url: URL) {
         let stamp = Int(Date().timeIntervalSince1970)
         var backup = url.deletingPathExtension()
@@ -370,9 +368,9 @@ public enum Storage {
         }
         do {
             try FileManager.default.moveItem(at: url, to: backup)
-            NSLog("Spotlite: preserved invalid preferences as \(backup.lastPathComponent)")
+            NSLog("%@", "Spotlite: preserved invalid file as \(backup.lastPathComponent)")
         } catch {
-            NSLog("Spotlite: could not preserve invalid preferences: \(error)")
+            NSLog("%@", "Spotlite: could not preserve invalid file: \(error)")
         }
     }
 
@@ -385,7 +383,7 @@ public enum Storage {
             let data = try JSONEncoder().encode(value)
             try data.write(to: url, options: .atomic)
         } catch {
-            NSLog("Spotlite: failed to write \(url.lastPathComponent): \(error)")
+            NSLog("%@", "Spotlite: failed to write \(url.lastPathComponent): \(error)")
         }
     }
 }

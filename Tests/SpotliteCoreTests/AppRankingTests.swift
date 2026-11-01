@@ -8,7 +8,7 @@ struct AppRankingTests {
                        tier: MatchTier = .other, kind: EntryKind = .app) -> MatchResult {
         let entry = AppEntry(url: URL(fileURLWithPath: "/Applications/\(name).app"),
                              name: name, bundleID: id, kind: kind)
-        return MatchResult(entry: entry, score: score, positions: [], tier: tier)
+        return MatchResult(entry: entry, score: score, tier: tier)
     }
 
     @Test func settingsPanesRankBelowAppsOfTheSameTier() {
@@ -93,6 +93,12 @@ struct AppRankingTests {
             return
         }
         #expect(first.entry.name == "Keychain Access")
-        #expect(first.positions == [3, 4, 5])
+        #expect(first.tier == .substring)
+    }
+
+    @Test func theLimitCutsAfterRanking() {
+        let matches = [match("Low", id: "a", score: 1), match("High", id: "b", score: 9), match("Mid", id: "c", score: 5)]
+        #expect(AppRanking.rank(matches, frecency: Frecency(), limit: 2).map(\.entry.name) == ["High", "Mid"])
+        #expect(AppRanking.rank(matches, frecency: Frecency(), limit: 0).isEmpty)
     }
 }

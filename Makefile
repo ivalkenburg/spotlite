@@ -78,7 +78,7 @@ release:
 
 # Fills the cask template with this version and the disk image's checksum.
 cask:
-	@test -f $(DMG) || { echo "$(DMG) not found; run make release first"; exit 1; }
+	@test -f $(DMG) || { echo "$(DMG) not found; run make dmg first"; exit 1; }
 	@sed -e '1{/^#/d;}' -e 's/^  version ".*"/  version "$(VERSION)"/' \
 	     -e "s/^  sha256 \".*\"/  sha256 \"$$(shasum -a 256 $(DMG) | cut -d' ' -f1)\"/" \
 	     packaging/spotlite.rb > build/spotlite.rb

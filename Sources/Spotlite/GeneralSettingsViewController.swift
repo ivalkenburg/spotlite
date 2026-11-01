@@ -89,7 +89,7 @@ final class GeneralSettingsViewController: SettingsPaneController {
                 try SMAppService.mainApp.unregister()
             }
         } catch {
-            NSLog("Spotlite: login item change failed: \(error)")
+            NSLog("%@", "Spotlite: login item change failed: \(error)")
         }
         updateLoginItemState()
     }

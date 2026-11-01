@@ -95,4 +95,18 @@ struct PanelGeometryTests {
                                                                  expandedHeight: 320)
         #expect(fitted.verticalFraction == PanelGeometry.minVerticalFraction)
     }
+
+    @Test func decodingClampsAHandEditedFileAndFillsGaps() throws {
+        func decode(_ json: String) throws -> PanelGeometry {
+            try JSONDecoder().decode(PanelGeometry.self, from: Data(json.utf8))
+        }
+        #expect(try decode(#"{"width":5,"verticalFraction":9}"#)
+                == PanelGeometry(width: PanelGeometry.minWidth, verticalFraction: PanelGeometry.maxVerticalFraction))
+        #expect(try decode("{}") == .default)
+    }
+
+    @Test func movingOnAZeroHeightDisplayIsANoOp() {
+        let geometry = PanelGeometry(width: 700, verticalFraction: 0.3)
+        #expect(geometry.moved(pointerDelta: 50, visibleHeight: 0) == geometry)
+    }
 }

@@ -27,7 +27,7 @@ make dmg      # build/Spotlite-<version>.dmg
 
 - Idle CPU must stay 0%. Avoid polling; only the coalescible 5 s caffeine refresh repeats. Timed sessions use a one-shot expiration.
 - Keep memory to a minimum. Idle is ~32 MB (45 MB with menu bar icon); ~88 MB after first panel open, mostly `NSGlassEffectView`.
-- Matching runs synchronously on the main thread (~28 µs for the full index). Don't move it to a queue.
+- Matching runs synchronously on the main thread (~9 µs per keystroke, ranking included). Don't move it to a queue.
 - Icons load on a background queue (~670 µs each), only for visible rows.
 - Hotkey uses Carbon `RegisterEventHotKey`: no Accessibility permission, no per-keystroke wakeups.
 - Measure with `--bench` before and after touching the matcher or ranking.
@@ -51,6 +51,9 @@ make dmg      # build/Spotlite-<version>.dmg
 | `SPOTLITE_DEV_MENU=1` | Exercise Caffeinate durations, Turn Off, navigation and filtering; dump frames and exit |
 | `SPOTLITE_DEV_COMPLETION=1` | Exercise app completion modes, caret and Backspace; dump search and settings frames and exit |
 | `SPOTLITE_DEV_UTILITIES=1` | Exercise conversion cards, UUID actions, Utility settings and visibility; preserve clipboard, dump frames and exit |
+| `SPOTLITE_DEV_TOAST=1` | Exercise toasts, timed Caffeinate sessions and the Appearance page; exit |
+| `SPOTLITE_DEV_FOCUS=1` | Check focus returns to the previous app and window; needs another app in front; exit |
+| `SPOTLITE_DEV_CAPTURE_DIR=<dir>` | Also save screenshots from the hooks above (needs Screen Recording) |
 | `SPOTLITE_DEV_PIN=1` | Keep the panel open when it loses focus |
 | `SPOTLITE_DEV_QUERY=<q>` | Prefill a query |
 

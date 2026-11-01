@@ -1,9 +1,13 @@
 import SpotliteCore
 import AppKit
 
+func configuredDirectories(_ preferences: Preferences = Storage.loadPreferences()) -> [URL] {
+    AppIndex.normalizedDirectories(preferences.applicationDirectories)
+}
+
 // Headless dev entry point: verify the index without launching the UI.
 if CommandLine.arguments.contains("--dump") {
-    let entries = AppIndex.scan(directories: AppIndex.normalizedDirectories(Storage.loadPreferences().applicationDirectories))
+    let entries = AppIndex.scan(directories: configuredDirectories())
     print("indexed \(entries.count) apps")
     for e in entries.prefix(200) { print("  \(e.name)  [\(e.initials)]") }
     exit(0)
@@ -11,7 +15,7 @@ if CommandLine.arguments.contains("--dump") {
 
 if let i = CommandLine.arguments.firstIndex(of: "--search"), i + 1 < CommandLine.arguments.count {
     let q = CommandLine.arguments[i + 1]
-    for m in Matcher().search(q, in: AppIndex.scan(directories: AppIndex.normalizedDirectories(Storage.loadPreferences().applicationDirectories))).prefix(6) {
+    for m in Matcher().search(q, in: AppIndex.scan(directories: configuredDirectories())).prefix(6) {
         print("  \(m.score)\t\(m.entry.name)")
     }
     exit(0)
@@ -19,7 +23,7 @@ if let i = CommandLine.arguments.firstIndex(of: "--search"), i + 1 < CommandLine
 
 if CommandLine.arguments.contains("--bench") {
     let preferences = Storage.loadPreferences()
-    let entries = AppIndex.scanAll(directories: AppIndex.normalizedDirectories(preferences.applicationDirectories)) + preferences.extraEntries
+    let entries = AppIndex.scanAll(directories: configuredDirectories(preferences)) + preferences.extraEntries
     let matcher = Matcher()
     let corpus = SearchCorpus(entries: entries, aliases: AliasIndex(aliases: preferences.aliases),
                               hiddenBundleIDs: preferences.hiddenBundleIDs,

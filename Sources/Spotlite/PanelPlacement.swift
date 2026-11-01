@@ -53,8 +53,7 @@ final class PanelPlacement: PanelDragReceiver {
         let screen: NSScreen?
         switch preferences().panelScreen {
         case .followPointer:
-            let mouse = NSEvent.mouseLocation
-            screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
+            screen = NSScreen.underPointer
         case .primary:
             // `screens.first` is the one with the menu bar; `main` follows key window.
             screen = NSScreen.screens.first ?? NSScreen.main
@@ -66,7 +65,7 @@ final class PanelPlacement: PanelDragReceiver {
     /// written back: unplugging a display must not destroy the real setting.
     private func fitted(_ geometry: PanelGeometry, for visibleFrame: CGRect) -> PanelGeometry {
         geometry.fitted(visibleFrame: visibleFrame,
-                        chromeInset: Metrics.chromeInset,
+                        chromeInset: Metrics.windowMargin,
                         expandedHeight: Metrics.maxPanelHeight(visibleRows: preferences().visibleRows))
     }
 
@@ -84,7 +83,7 @@ final class PanelPlacement: PanelDragReceiver {
         let height = Metrics.windowHeight(visibleRows: preferences().visibleRows)
         let width = Metrics.windowWidth(for: geometry.width)
         let frame = NSRect(x: visibleFrame.midX - width / 2,
-                           y: anchorTopY + Metrics.chromeInset - height,
+                           y: anchorTopY + Metrics.windowMargin - height,
                            width: width, height: height)
         panel.setFrame(frame, display: true)
     }
@@ -131,5 +130,13 @@ final class PanelPlacement: PanelDragReceiver {
         let geometry = preferences().panelGeometry
         onGeometryChange?(geometry, true)
         apply(fitted(geometry, for: session.screen), on: session.screen)
+    }
+}
+
+extension NSScreen {
+    /// The display holding the pointer.
+    @MainActor static var underPointer: NSScreen? {
+        let pointer = NSEvent.mouseLocation
+        return screens.first { $0.frame.contains(pointer) } ?? main
     }
 }

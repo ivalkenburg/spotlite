@@ -33,4 +33,19 @@ struct SearchCorpusTests {
         #expect(hits.map(\.entry.name) == ["Terminal"])
         #expect(hits.first?.tier == .aliasPrefix)
     }
+
+    @Test func hidingAnIDHidesEveryCopyOfIt() {
+        let copy = AppEntry(url: URL(fileURLWithPath: "/Volumes/Old/Safari.app"), name: "Safari", bundleID: "app.Safari")
+        let corpus = SearchCorpus(entries: apps + [copy], hiddenBundleIDs: ["app.Safari"])
+        #expect(corpus.entries.map(\.name) == ["Photoshop", "Terminal"])
+    }
+
+    @Test func anAppWithoutABundleIDCannotBeHidden() {
+        let tool = AppEntry(url: URL(fileURLWithPath: "/Applications/Tool.app"), name: "Tool", bundleID: nil)
+        #expect(SearchCorpus(entries: [tool], hiddenBundleIDs: [tool.id]).entries == [tool])
+    }
+
+    @Test func noAliasesMeansNoPerEntryLookups() {
+        #expect(SearchCorpus(entries: apps).aliases.isEmpty)
+    }
 }

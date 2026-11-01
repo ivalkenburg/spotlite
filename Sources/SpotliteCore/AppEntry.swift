@@ -28,15 +28,6 @@ public struct CachedApp: Codable, Sendable, Hashable {
         self.bundleID = bundleID
         self.kind = kind
     }
-
-    /// A cache written before panes were indexed has no `kind`: everything in it is an app.
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        path = try c.decode(String.self, forKey: .path)
-        name = try c.decode(String.self, forKey: .name)
-        bundleID = try c.decodeIfPresent(String.self, forKey: .bundleID)
-        kind = try c.decodeIfPresent(EntryKind.self, forKey: .kind) ?? .app
-    }
 }
 
 /// A launchable application, with everything the matcher needs precomputed at index
@@ -57,8 +48,6 @@ public struct AppEntry: Sendable, Hashable {
     public let charMask: UInt32
     /// Word-start initials, e.g. "Google Chrome" -> "gc".
     public let initials: [Character]
-    /// Index into `lowerChars` of each character in `initials`.
-    public let initialIndices: [Int]
     /// Per-initial scoring bonus. Precomputed because the matcher would otherwise
     /// allocate this array for every candidate on every keystroke.
     public let initialBonuses: [Int]
@@ -95,14 +84,13 @@ public struct AppEntry: Sendable, Hashable {
         var bonuses = [Int]()
         var mask: UInt32 = 0
         var inits = [Character]()
-        var initIdx = [Int]()
         lower.reserveCapacity(chars.count)
         bonuses.reserveCapacity(chars.count)
 
         var atBoundary = true
         var previousWasLowerOrDigit = false
 
-        for (i, ch) in chars.enumerated() {
+        for ch in chars {
             // `Character(ch.lowercased())` traps when a scalar lowercases to more than
             // one grapheme; taking the first keeps a hostile app name from killing the index.
             let lowerCh = AppEntry.typeable(ch.lowercased().first ?? ch)
@@ -123,11 +111,9 @@ public struct AppEntry: Sendable, Hashable {
             if atBoundary {
                 bonuses.append(Scoring.bonusBoundary)
                 inits.append(lowerCh)
-                initIdx.append(i)
             } else if isCamelHump {
                 bonuses.append(Scoring.bonusCamel)
                 inits.append(lowerCh)
-                initIdx.append(i)
             } else {
                 bonuses.append(0)
             }
@@ -140,7 +126,6 @@ public struct AppEntry: Sendable, Hashable {
         self.bonus = bonuses
         self.charMask = mask
         self.initials = inits
-        self.initialIndices = initIdx
         self.initialBonuses = Array(repeating: Scoring.bonusBoundary, count: inits.count)
     }
 
@@ -160,7 +145,7 @@ public struct AppEntry: Sendable, Hashable {
     }
 
     /// The Unicode hyphens (U+2010-2012) match the "-" a keyboard types, so "wi-fi" finds
-    /// "Wi‑Fi". One character for one, so highlight positions still index the name.
+    /// "Wi‑Fi". One character for one, so `lowerChars` stays parallel to the name.
     static func typeable(_ ch: Character) -> Character {
         switch ch {
         case "\u{2010}", "\u{2011}", "\u{2012}": return "-"

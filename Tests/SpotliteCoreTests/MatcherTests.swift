@@ -35,7 +35,6 @@ struct FuzzyScoringTests {
                 let preparedResult = matcher.search(query, in: prepared, limit: limit)
                 #expect(preparedResult.map(\.entry.instanceID) == entriesResult.map(\.entry.instanceID))
                 #expect(preparedResult.map(\.score) == entriesResult.map(\.score))
-                #expect(preparedResult.map(\.positions) == entriesResult.map(\.positions))
                 #expect(preparedResult.map(\.tier) == entriesResult.map(\.tier))
             }
         }
@@ -49,7 +48,7 @@ struct FuzzyScoringTests {
 
     @Test func acronymMatchesWordInitials() {
         // System Settings writes "Wi‑Fi" with a non-breaking hyphen.
-        #expect(Matcher().search("wf", in: [app("Wi\u{2011}Fi")]).first?.positions == [0, 3])
+        #expect(Matcher().search("wf", in: [app("Wi\u{2011}Fi")]).first?.tier == .other)
         // Typed with a keyboard hyphen, it is still the start of the name.
         #expect(Matcher().search("wi-fi", in: [app("Wi\u{2011}Fi")]).first?.tier == .namePrefix)
         #expect(top("gc") == "Google Chrome")
@@ -61,7 +60,7 @@ struct FuzzyScoringTests {
         // "gh" is GitHub Desktop's acronym (the H is a camel hump) but Ghostty's start.
         let ranked = Matcher().search("gh", in: [app("GitHub Desktop"), app("Ghostty")])
         #expect(ranked.map(\.entry.name) == ["Ghostty", "GitHub Desktop"])
-        #expect(ranked.first?.positions == [0, 1])
+        #expect(ranked.first?.tier == .namePrefix)
         #expect(Matcher().search("tv", in: [app("Ticket Viewer"), app("TV")]).first?.entry.name == "TV")
         #expect(Matcher().search("map", in: [app("Markdown Preview"), app("Maps")]).first?.entry.name == "Maps")
     }
@@ -89,7 +88,6 @@ struct FuzzyScoringTests {
         let ranked = Matcher().search("cha", in: [app("T3 Code (Alpha)"), app("Keychain Access")])
         #expect(ranked.map(\.entry.name) == ["Keychain Access", "T3 Code (Alpha)"])
         #expect(ranked.first?.tier == .substring)
-        #expect(ranked.first?.positions == [3, 4, 5])
     }
 
     @Test func substringKeepsNameAndAliasPrefixesAhead() {
@@ -104,39 +102,34 @@ struct FuzzyScoringTests {
         let hit = Matcher().search("aunch", in: entries, aliases: interiorAlias).first
         #expect(hit?.entry.name == "T3 Code (Alpha)")
         #expect(hit?.tier == .substring)
-        #expect(hit?.positions.isEmpty == true)
     }
 
     @Test func adjacentPathCanWinAfterItsBonus() {
         // The first A wins before the bonus, but the final AB wins with it.
         let result = Matcher().search("ab", in: [app("A-AB")]).first
         #expect(result?.score == 100)
-        #expect(result?.positions == [2, 3])
     }
 
     @Test func fuzzyAdjacentPredecessorWinsBeforeAGap() {
         let result = Matcher().search("abc", in: [app("A-AB C")]).first
         #expect(result?.tier == .other)
         #expect(result?.score == 145)
-        #expect(result?.positions == [2, 3, 5])
     }
 
-    @Test func prefixScoreUsesTheHighlightedRun() {
+    @Test func prefixScoreUsesTheLeadingRun() {
         let plain = Matcher().search("ab", in: [app("ab")]).first
         let repeated = Matcher().search("ab", in: [app("ab A B")]).first
         #expect(repeated?.score == plain?.score)
-        #expect(repeated?.positions == [0, 1])
         #expect(repeated?.tier == .namePrefix)
 
         let aliases = AliasIndex(aliases: ["test.Safari": "ab A B"])
         let alias = Matcher().search("ab", in: [app("Safari")], aliases: aliases).first
         #expect(alias?.score == 134)
         #expect(alias?.tier == .aliasPrefix)
-        #expect(alias?.positions.isEmpty == true)
     }
 
     @Test func textLimitAppliesToEveryMatchingPath() {
-        let matcher = Matcher(maxQuery: 1, maxText: 1)
+        let matcher = Matcher(maxText: 1)
         let oversized = app("s" + String(repeating: "x", count: Matcher.maxSupportedText))
         #expect(matcher.search("sxxx", in: [oversized]).isEmpty)
         #expect(matcher.search("xxx", in: [oversized]).isEmpty)
@@ -149,14 +142,14 @@ struct FuzzyScoringTests {
         #expect(matcher.search("zz", in: [app("Safari")], aliases: aliases).isEmpty)
         #expect(matcher.search("saf", in: [app("Safari")], aliases: aliases).first?.tier == .namePrefix)
         // Fuzzy scoring must grow the small buffers after the preceding fast paths.
-        #expect(matcher.search("gc", in: [app("Google Chrome")]).first?.positions == [0, 7])
+        #expect(matcher.search("gc", in: [app("Google Chrome")]).first?.tier == .other)
     }
 
     @Test func unicodeHyphensMatchInNamesQueriesAndAliases() {
         let hyphens = ["-", "\u{2010}", "\u{2011}", "\u{2012}"]
         for nameHyphen in hyphens {
             let entry = app("Wi\(nameHyphen)Fi")
-            #expect(Matcher().search("wf", in: [entry]).first?.positions == [0, 3])
+            #expect(Matcher().search("wf", in: [entry]).first?.tier == .other)
             let aliases = AliasIndex(aliases: ["test.Safari": "wi\(nameHyphen)fi"])
             for queryHyphen in hyphens {
                 let query = "wi\(queryHyphen)fi"
@@ -171,19 +164,6 @@ struct FuzzyScoringTests {
         #expect(search("").isEmpty)
         // Every letter must be present: "safarix" has no x.
         #expect(search("safarix").isEmpty)
-    }
-
-    @Test func matchedPositionsPointAtTheMatchedCharacters() {
-        let result = search("saf").first!
-        let chars = Array(result.entry.name)
-        #expect(result.positions.count == 3)
-        #expect(String(result.positions.map { chars[$0] }).lowercased() == "saf")
-    }
-
-    @Test func acronymPositionsMapBackToWordStarts() {
-        let result = search("gc").first!
-        #expect(result.entry.name == "Google Chrome")
-        #expect(result.positions == [0, 7])
     }
 
     @Test func nameStartBeatsWordStartDeeperInTheName() {
@@ -225,13 +205,6 @@ struct FuzzyScoringTests {
         #expect(Matcher().search("xy", in: apps, aliases: aliases).count == 1)
     }
 
-    @Test func aliasMatchHighlightsNothing() {
-        let apps = [app("Photoshop")]
-        let aliases = AliasIndex(aliases: ["test.Photoshop": "ps"])
-        // The matched characters live in the alias, not in the displayed name.
-        #expect(Matcher().search("ps", in: apps, aliases: aliases).first?.positions.isEmpty == true)
-    }
-
     @Test func aliasOnlyOutranksNamesWhenItsStartIsTyped() {
         let apps = [app("Safari"), app("Photoshop")]
         let aliases = AliasIndex(aliases: ["test.Photoshop": "ps"])
@@ -248,6 +221,19 @@ struct FuzzyScoringTests {
         #expect(String(app("Google Chrome").initials) == "gc")
         #expect(String(app("QuickTime Player").initials) == "qtp")
         #expect(String(app("TextEdit").initials) == "te")
+    }
+
+    /// The scoring rows are reused in place, so nothing left by one candidate, a longer
+    /// name in particular, may reach the next one's score.
+    @Test func aScoreDoesNotDependOnWhatWasScoredBefore() {
+        let long = app("g o o g l e c h r o m e with a much longer tail than the name after it")
+        let short = app("gXcY")
+        let alone = Matcher().search("gc", in: [short]).first?.score
+        let matcher = Matcher()
+        let together = matcher.search("gc", in: [long, short, long, short])
+        #expect(alone != nil)
+        #expect(together.filter { $0.entry == short }.allSatisfy { $0.score == alone })
+        #expect(matcher.search("gc", in: [short]).first?.score == alone)
     }
 
     @Test func namesBeyondTheOriginalScratchCapacityStillMatch() {

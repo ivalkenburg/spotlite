@@ -62,4 +62,22 @@ struct ListViewportTests {
         let l = list(20)
         #expect(l.firstRow(showing: 1, offset: 70, height: l.restingHeight) == 1)
     }
+
+    @Test func anEmptyListHasNoHeight() {
+        #expect(list(0).restingHeight == 0)
+        #expect(list(0).scrolledRowCount == 0)
+    }
+
+    @Test func aShortListIsOnlyAsTallAsItsRows() {
+        #expect(list(1, lead: 81).restingHeight == 81)
+        #expect(list(3, lead: 81).restingHeight == CGFloat(81 + 2 * 56))
+        #expect(list(3).firstRow(showing: 2, offset: 0, height: list(3).restingHeight) == nil)
+    }
+
+    @Test func aTallLeadRowLosesItsSlotOnceScrolled() {
+        // The card leaves the list 417pt tall at rest, which holds seven whole 56pt rows.
+        let card = list(20, lead: 81)
+        #expect(card.height(from: 0) == CGFloat(81 + 6 * 56))
+        #expect(card.height(from: 3) == CGFloat(7 * 56))
+    }
 }

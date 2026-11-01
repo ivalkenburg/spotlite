@@ -72,7 +72,7 @@ enum SystemCommandRunner {
             Task { @MainActor in onSuccess() }
         }
         do { try process.run() }
-        catch { NSLog("Spotlite: could not run pmset: \(error)") }
+        catch { NSLog("%@", "Spotlite: could not run pmset: \(error)") }
     }
 
     /// Through osascript, not NSAppleScript: the first run waits on the Automation prompt,
@@ -101,14 +101,14 @@ enum SystemCommandRunner {
         do {
             try process.run()
         } catch {
-            NSLog("Spotlite: could not run osascript: \(error)")
+            NSLog("%@", "Spotlite: could not run osascript: \(error)")
         }
     }
 
     /// -1743 is a refused Automation permission, which only System Settings can undo.
     /// Anything else, such as -128 when a dialog is cancelled, is not worth an alert.
     private static func report(_ message: String, target: String) {
-        NSLog("Spotlite: command failed: \(message)")
+        NSLog("%@", "Spotlite: command failed: \(message)")
         guard message.contains("-1743") else { return }
         let alert = NSAlert()
         alert.messageText = "Spotlite isn’t allowed to control \(target)"

@@ -3,7 +3,7 @@ import Foundation
 /// The query the panel had when it closed, offered back if it reopens soon enough, so
 /// closing it by accident costs nothing.
 public struct QueryMemory: Sendable {
-    /// The longest the Settings slider allows.
+    /// The longest Settings offers.
     public static let maxRetention: TimeInterval = 30
 
     private var query = ""

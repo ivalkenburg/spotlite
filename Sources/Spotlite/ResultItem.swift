@@ -151,7 +151,8 @@ enum ResultItem {
         if modifiers.contains(.command) {
             var hints = [Hint(text: "Reveal in Finder", key: "⌘↩")]
             if running { hints.append(Hint(text: "Quit", key: "⌘Q")) }
-            hints.append(Hint(text: "Hide", key: "⌘⌫"))
+            // Hiding is keyed by bundle ID, so an app without one cannot be hidden.
+            if entry.bundleID != nil { hints.append(Hint(text: "Hide", key: "⌘⌫")) }
             return hints
         }
         if modifiers.contains(.option) { return [Hint(text: "Copy Path", key: "⌥↩")] }
@@ -163,9 +164,8 @@ enum ResultItem {
     /// bundle ID so two copies of the same app are told apart.
     var runningApplications: [NSRunningApplication] {
         guard case .app(let match) = self else { return [] }
-        let url = match.entry.url.standardizedFileURL
         return NSWorkspace.shared.runningApplications.filter {
-            $0.bundleURL?.standardizedFileURL == url
+            $0.bundleURL?.standardizedFileURL.path == match.entry.instanceID
         }
     }
 

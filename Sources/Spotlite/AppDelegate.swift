@@ -80,9 +80,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.toasts.show(.caffeineFinished(succeeded: succeeded, state: state),
                              position: self.preferences.toastPosition)
         }
-        registerHotKey()
-        refreshStatusItem()
-
+        // Before the hotkey: a chord already claimed opens Settings too, which would take
+        // its copy of the preferences from before this flag was set.
         if !preferences.hasCompletedFirstRun {
             preferences.hasCompletedFirstRun = true
             Storage.save(preferences)
@@ -90,6 +89,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Start-at-login stays off until the user asks for it.
             openSettings()
         }
+        registerHotKey()
+        refreshStatusItem()
 
         if ProcessInfo.processInfo.environment["SPOTLITE_SHOW_ON_LAUNCH"] == "1" {
             Task { @MainActor in self.controller.show() }

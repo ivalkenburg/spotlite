@@ -88,6 +88,12 @@ struct LinkTests {
     }
 
     /// The target's shape is judged before filling: digits after `tel:` are no port.
+    @Test func everyPlaceholderIsFilledWithTheTrimmedArgument() {
+        #expect(Link.resolve("https://a.com/{query}?q={query}", argument: "  x y ")?.absoluteString
+                == "https://a.com/x%20y?q=x%20y")
+        #expect(Link.resolve("~/{query}/{query}", argument: " a ", home: "/Users/me")?.path == "/Users/me/a/a")
+    }
+
     @Test func templateShapeIgnoresTheArgument() {
         #expect(fill("tel:{query}", "0612345678") == "tel:0612345678")
         #expect(fill("localhost:{query}", "3000") == "http://localhost:3000")
@@ -127,5 +133,11 @@ struct WebSearchEngineTests {
                 == "https://www.google.com/search?q=a%26b%3Dc%20%231")
         #expect(WebSearchEngine.duckDuckGo.url(for: "c++")?.absoluteString == "https://duckduckgo.com/?q=c%2B%2B")
         #expect(WebSearchEngine.bing.url(for: "   ") == nil)
+    }
+
+    @Test(arguments: WebSearchEngine.allCases)
+    func everyEngineBuildsASecureAddress(engine: WebSearchEngine) {
+        #expect(engine.url(for: "swift ?")?.scheme == "https")
+        #expect(engine.url(for: "swift ?")?.absoluteString.hasSuffix("=swift%20%3F") == true)
     }
 }

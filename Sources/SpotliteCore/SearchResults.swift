@@ -116,7 +116,7 @@ public enum SearchResults {
             .compactMap { id in byID[id].map { ($0, frecency.multiplier(for: id, now: now)) } }
             .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.tieBreaksBefore($1.0) }
             .prefix(limit)
-            .map { MatchResult(entry: $0.0, score: 0, positions: []) }
+            .map { MatchResult(entry: $0.0, score: 0) }
     }
 
     /// Whether `query` shows the Caffeinate row, so a caffeine change elsewhere only

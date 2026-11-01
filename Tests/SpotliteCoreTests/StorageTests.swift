@@ -67,9 +67,17 @@ struct StorageTests {
         #expect(Storage.loadIndex(directories: roots, from: url) == apps)
         #expect(Storage.loadIndex(directories: [], from: url) == nil)
         #expect(Storage.loadIndex(directories: AppIndex.searchDirectories, from: url) == nil)
-        try JSONEncoder().encode(apps).write(to: url)
-        #expect(Storage.loadIndex(directories: AppIndex.searchDirectories, from: url) == apps)
-        #expect(Storage.loadIndex(directories: roots, from: url) == nil)
+    }
+
+    /// The cache is regenerable, so an older shape is a miss rather than a migration.
+    @Test func olderIndexShapesAreACacheMiss() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("index.json")
+        try JSONEncoder().encode([CachedApp(path: "/Applications/Test.app", name: "Test", bundleID: nil)]).write(to: url)
+        #expect(Storage.loadIndex(directories: AppIndex.searchDirectories, from: url) == nil)
+        try Data(#"{"directories":[],"apps":[{"path":"/A.app","name":"A"}]}"#.utf8).write(to: url)
+        #expect(Storage.loadIndex(directories: [], from: url) == nil)
     }
 
     @Test func identicalIndexSnapshotsDoNotTouchTheCache() throws {
@@ -90,11 +98,33 @@ struct StorageTests {
         #expect(try Data(contentsOf: url) != original)
     }
 
-    /// An index cached before panes existed has no `kind`; it must load, as apps, rather
-    /// than fail and cost a cold scan.
-    @Test func indexWithoutKindsLoadsAsApps() throws {
-        let old = Data(#"[{"path":"/Applications/Test.app","name":"Test","bundleID":"test.app"}]"#.utf8)
-        let decoded = try JSONDecoder().decode([CachedApp].self, from: old)
-        #expect(decoded.map(\.kind) == [.app])
+    /// History is not regenerable either: the first launch after a bad write must not
+    /// overwrite the only copy with an empty file.
+    @Test func corruptLaunchHistoryIsPreservedBeforeStartingEmpty() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("frecency.json")
+        try Data("not json".utf8).write(to: url)
+
+        #expect(Storage.loadFrecency(from: url).records.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        let kept = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        #expect(kept.count == 1 && kept[0].hasPrefix("frecency.corrupt-"))
+    }
+
+    @Test func missingLaunchHistoryIsEmptyAndLeavesNoBackup() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        #expect(Storage.loadFrecency(from: directory.appendingPathComponent("frecency.json")).records.isEmpty)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
+    }
+
+    @Test func aCorruptIndexIsJustACacheMiss() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("index.json")
+        try Data("not json".utf8).write(to: url)
+        #expect(Storage.loadIndex(directories: [directory], from: url) == nil)
+        #expect(FileManager.default.fileExists(atPath: url.path))
     }
 }

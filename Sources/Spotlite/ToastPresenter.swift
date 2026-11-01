@@ -60,14 +60,9 @@ final class ToastPresenter {
         }
     }
 
-    static var pointerScreen: NSScreen? {
-        let pointer = NSEvent.mouseLocation
-        return NSScreen.screens.first { $0.frame.contains(pointer) } ?? NSScreen.main
-    }
-
     func show(_ message: ToastMessage, position: ToastPosition, on screen: NSScreen? = nil) {
         guard showConfirmationMessages || !message.isConfirmation else { return }
-        guard let screen = screen ?? Self.pointerScreen else { return }
+        guard let screen = screen ?? NSScreen.underPointer else { return }
         dismissal?.cancel()
         let window = panel ?? ToastPanel()
         panel = window
@@ -284,7 +279,7 @@ extension ToastPresenter {
         }
         let keyWindow = NSApp.keyWindow
         let active = NSApp.isActive
-        let screen = Self.pointerScreen!
+        let screen = NSScreen.underPointer!
         try check(panel == nil && dismissal == nil, "Presenter must start without views or work")
 
         for display in NSScreen.screens {

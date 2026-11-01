@@ -46,7 +46,9 @@ public enum Calculator {
         // Reused for the common case: a NumberFormatter costs far more to build than to
         // use, and this runs on every row render while a calculation is on screen.
         let formatter = (locale == .current) ? currentLocaleFormatter : makeFormatter(locale)
-        return formatter.string(from: NSNumber(value: value)) ?? String(value)
+        // `0 * -1` is -0.0 in IEEE arithmetic, which NumberFormatter draws as "-0".
+        let unsigned = value == 0 ? 0 : value
+        return formatter.string(from: NSNumber(value: unsigned)) ?? String(unsigned)
     }
 
     /// Only ever touched from the main thread (row rendering); tests pass an explicit

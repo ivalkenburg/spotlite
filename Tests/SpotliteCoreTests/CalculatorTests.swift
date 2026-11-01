@@ -133,4 +133,50 @@ struct CalculatorFunctionTests {
         #expect(Calculator.evaluate("sqrt(") == nil)
         #expect(Calculator.evaluate("e-mail") == nil)
     }
+
+    @Test func aNegativeZeroReadsAsZero() throws {
+        let locale = Locale(identifier: "en_US")
+        let value = try #require(Calculator.evaluate("0*-1"))
+        #expect(Calculator.format(value, locale: locale) == "0")
+        #expect(Calculator.format(-0.0, locale: locale) == "0")
+        #expect(Calculator.format(-1.5, locale: locale) == "-1.5")
+    }
+
+    @Test func typographicOperatorsAndSigns() {
+        #expect(Calculator.evaluate("6×7") == 42)
+        #expect(Calculator.evaluate("8÷2") == 4)
+        #expect(Calculator.evaluate("+3*2") == 6)
+        #expect(Calculator.evaluate("1+ +2") == 3)
+        #expect(Calculator.evaluate("2--3") == 5)
+    }
+
+    @Test func moduloKeepsTheDividendsSignAndRejectsZero() {
+        #expect(Calculator.evaluate("7%3") == 1)
+        #expect(Calculator.evaluate("-7%3") == -1)
+        #expect(Calculator.evaluate("5%0") == nil)
+    }
+
+    @Test func spacesAreAllowedBetweenTokensButNotInsideThem() {
+        #expect(Calculator.evaluate(" 1 + 2 * 3 ") == 7)
+        #expect(Calculator.evaluate("sqrt (4) + 1") == 3)
+        #expect(Calculator.evaluate("1 2+3") == nil)
+    }
+
+    /// The input limit is what bounds recursion, so the worst input it admits must survive.
+    @Test func deepestAdmittedNestingDoesNotOverflowTheStack() {
+        let depth = (Calculator.maxInputLength - 1) / 2
+        let nested = String(repeating: "(", count: depth) + "1" + String(repeating: ")", count: depth)
+        #expect(Calculator.evaluate(nested) == 1)
+        #expect(Calculator.evaluate(String(repeating: "-", count: Calculator.maxInputLength - 1) + "1") == -1)
+    }
+
+    @Test func aRadixLiteralThatOverflowsIsRejectedNotRounded() {
+        #expect(Calculator.evaluate("0xffffffffffffffff+0") == Double(UInt64.max))
+        #expect(Calculator.evaluate("0x1ffffffffffffffff+0") == nil)
+    }
+
+    @Test func overflowProducesNoResult() {
+        #expect(Calculator.evaluate("10^400") == nil)
+        #expect(Calculator.evaluate("-10^400") == nil)
+    }
 }

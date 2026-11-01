@@ -5,9 +5,8 @@ import Foundation
 /// dropped, and each entry's alias is looked up once instead of hashed per keystroke.
 public struct SearchCorpus: Sendable {
     public let entries: [AppEntry]
-    /// Parallel to `entries`.
+    /// Parallel to `entries`, or empty when no entry has one.
     let aliases: [AliasIndex.Prepared?]
-    let hasAliases: Bool
 
     public static let empty = SearchCorpus(entries: [])
 
@@ -26,6 +25,5 @@ public struct SearchCorpus: Sendable {
         }
         self.entries = kept
         self.aliases = aliases.isEmpty ? [] : kept.map { aliases[$0.id] }
-        hasAliases = !aliases.isEmpty
     }
 }

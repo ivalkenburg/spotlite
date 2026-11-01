@@ -296,4 +296,38 @@ struct SearchResultsTests {
         #expect(!SearchResults.offersCaffeinate("co"))
         #expect(!SearchResults.offersCaffeinate(String(repeating: "c", count: 10_000)))
     }
+
+    @Test func aLineBreakPastedAroundAQueryIsIgnored() {
+        #expect(describe(build("safari\n")).first == "Safari")
+        #expect(SearchResults.offersCaffeinate("caf\n"))
+    }
+
+    @Test func ansReachesTheCalculator() {
+        let results = SearchResults.build(for: "ans*2", corpus: .empty, matcher: Matcher(),
+                                          frecency: Frecency(), previousResult: 21)
+        #expect(describe(results) == ["= 42.0"])
+    }
+
+    @Test func hidingTheCalculatorLeavesTheRestOfTheList() {
+        #expect(describe(build("sqrt(4)+x", web: .google)) == ["Google: sqrt(4)+x"])
+        #expect(describe(build("1+1", hiddenUtilities: [.calculator])).isEmpty)
+        #expect(describe(build("1+1")) == ["= 2.0"])
+    }
+
+    @Test func hidingConversionDoesNotFallThroughToTheCalculator() {
+        #expect(describe(build("255 to hex", hiddenUtilities: [.unitConversion])).isEmpty)
+    }
+
+    @Test func recentsStopAtTheirLimitAndAskForNothingWithoutHistory() {
+        var frecency = Frecency()
+        for entry in entries { frecency.recordLaunch(entry.id) }
+        #expect(build("", frecency: frecency, recents: 2).count == 2)
+        #expect(build("", frecency: frecency, recents: 0).isEmpty)
+        #expect(build("", recents: 5).isEmpty)
+    }
+
+    @Test func anOverlongQueryIsTrimmedAndCappedForTheWeb() {
+        let tooLong = String(repeating: "a", count: SearchResults.maxWebQuery + 1)
+        #expect(build(tooLong, web: .google).isEmpty)
+    }
 }
