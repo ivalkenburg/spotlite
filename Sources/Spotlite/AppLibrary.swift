@@ -49,6 +49,11 @@ final class AppLibrary {
     private var watcher: DirectoryWatcher?
     private var fingerprint: [String: Date] = [:]
     private var hasLoaded = false
+    /// Icons are cached in memory only, and none is requested before the first load
+    /// starts the watcher, which reports any later change with a scan of its own. So the
+    /// first scan cannot find a stale icon; clearing them anyway flashed every visible
+    /// row back to the placeholder shortly after the first open.
+    private var hasScanned = false
     private var refreshTask: Task<Void, Never>?
     private var refreshPending = false
 
@@ -101,7 +106,9 @@ final class AppLibrary {
             self.combine()
             self.capFrecency()
             self.fingerprint = AppIndex.directoriesFingerprint(directories: directories)
-            self.onChange?(self.entries, true)
+            let iconsMayBeStale = self.hasScanned
+            self.hasScanned = true
+            self.onChange?(self.entries, iconsMayBeStale)
 
             self.refreshTask = nil
             if self.refreshPending {
