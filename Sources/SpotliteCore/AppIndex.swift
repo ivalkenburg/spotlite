@@ -96,7 +96,7 @@ public enum AppIndex {
                 // children: arbitrary bundle traversal would expose internal helpers.
                 let applications = host.appendingPathComponent("Contents/Applications", isDirectory: true)
                 for url in [host] + bundles(in: applications, depth: 1) {
-                    let path = url.standardizedFileURL.path
+                    let path = AppEntry.standardizedPath(url)
                     guard !seen.contains(path), let entry = makeEntry(for: url) else { continue }
                     seen.insert(path)
                     results.append(entry)

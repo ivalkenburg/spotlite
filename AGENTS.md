@@ -27,7 +27,7 @@ make dmg      # build/Spotlite-<version>.dmg
 
 - Idle CPU must stay 0%. Avoid polling; only the coalescible 5 s caffeine refresh repeats. Timed sessions use a one-shot expiration.
 - Keep memory to a minimum. Idle is ~32 MB (45 MB with menu bar icon); ~88 MB after first panel open, mostly `NSGlassEffectView`.
-- Matching runs synchronously on the main thread (~9 µs per keystroke, ranking included). Don't move it to a queue.
+- Matching runs synchronously on the main thread (~6.5 µs per keystroke, ranking included). Don't move it to a queue.
 - Icons load on a background queue (~670 µs each), only for visible rows.
 - Hotkey uses Carbon `RegisterEventHotKey`: no Accessibility permission, no per-keystroke wakeups.
 - Measure with `--bench` before and after touching the matcher or ranking.

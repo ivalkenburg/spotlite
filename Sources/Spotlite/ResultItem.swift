@@ -165,7 +165,7 @@ enum ResultItem {
     var runningApplications: [NSRunningApplication] {
         guard case .app(let match) = self else { return [] }
         return NSWorkspace.shared.runningApplications.filter {
-            $0.bundleURL?.standardizedFileURL.path == match.entry.instanceID
+            $0.bundleURL.map(AppEntry.standardizedPath) == match.entry.instanceID
         }
     }
 

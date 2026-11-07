@@ -60,9 +60,17 @@ public struct AppEntry: Sendable, Hashable {
     public let instanceID: String
     public var cached: CachedApp { CachedApp(path: url.path, name: name, bundleID: bundleID, kind: kind) }
 
+    /// Only bundles are cached, so the URL is marked a directory instead of asking the
+    /// file system once per entry while the index loads.
     public init(cached: CachedApp) {
-        self.init(url: URL(fileURLWithPath: cached.path), name: cached.name, bundleID: cached.bundleID,
-                  kind: cached.kind)
+        self.init(url: URL(fileURLWithPath: cached.path, isDirectory: true), name: cached.name,
+                  bundleID: cached.bundleID, kind: cached.kind)
+    }
+
+    /// `url.standardizedFileURL.path` without building that URL, which consults the file
+    /// system: about a tenth of the cost, for every entry indexed and every running app.
+    public static func standardizedPath(_ url: URL) -> String {
+        (url.path as NSString).standardizingPath
     }
 
     public init(url: URL, name: String, bundleID: String?, kind: EntryKind = .app, template: String? = nil) {
@@ -75,7 +83,7 @@ public struct AppEntry: Sendable, Hashable {
         // Safari.app is not the Safari app, and two links may open the same folder.
         switch kind {
         case .command, .link: instanceID = bundleID ?? url.absoluteString
-        case .app, .settingsPane: instanceID = url.standardizedFileURL.path
+        case .app, .settingsPane: instanceID = AppEntry.standardizedPath(url)
         }
         id = bundleID ?? instanceID
 

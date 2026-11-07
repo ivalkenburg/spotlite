@@ -276,11 +276,17 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         applyVibrancy()
     }
 
+    /// The mode the bar and divider were last drawn for. Each show re-applies the
+    /// appearance, and rebuilding the magnifier symbol alone costs about 200µs.
+    private var appliedVibrancy: Vibrancy.Mode?
+
     /// The bar's secondary elements and the divider blend additively, as Spotlight's
     /// do; see `Vibrancy`.
     private func applyVibrancy() {
         guard let appearance = content.appearance else { return }
         let mode = Vibrancy.mode(for: appearance)
+        guard mode != appliedVibrancy else { return }
+        appliedVibrancy = mode
         bar.applyVibrancy(mode)
         Vibrancy.fill(divider, Vibrancy.fill, mode)
     }
@@ -298,7 +304,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         applyResolvedAppearance()
         caffeine.refresh()
         loadLibrary()
-        runningPaths = Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL?.standardizedFileURL.path })
+        runningPaths = Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL.map(AppEntry.standardizedPath) })
         // A show during the close fade can still find a submenu or argument open.
         resetNavigation()
         ResultItem.forgetHandlers()

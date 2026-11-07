@@ -11,15 +11,20 @@ public enum AppRanking {
     ) -> [MatchResult] {
         guard limit > 0 else { return [] }
 
-        let ranked = matches.map { match in
-            (match, frecency.adjustedScore(match.score, for: match.entry.id, now: now), precedence(match))
+        // Sorts small keys, not the matches: each carries a whole entry, so moving and
+        // copying them through the sort cost more than the comparisons.
+        let ranked = matches.indices.map { index in
+            let match = matches[index]
+            return (index: index, score: frecency.adjustedScore(match.score, for: match.entry.id, now: now),
+                    precedence: precedence(match))
         }.sorted { a, b in
             // Launch history reorders apps within a tier, never across tiers.
-            if a.2 != b.2 { return a.2 > b.2 }
-            return a.1 != b.1 ? a.1 > b.1 : a.0.entry.tieBreaksBefore(b.0.entry)
+            if a.precedence != b.precedence { return a.precedence > b.precedence }
+            return a.score != b.score ? a.score > b.score
+                : matches[a.index].entry.tieBreaksBefore(matches[b.index].entry)
         }
 
-        return ranked.prefix(limit).map(\.0)
+        return ranked.prefix(limit).map { matches[$0.index] }
     }
 
     /// Tiers, with a settings pane or command just below an app of the same tier. A

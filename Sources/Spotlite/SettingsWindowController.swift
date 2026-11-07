@@ -91,7 +91,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
         search.updateHistoryState()
     }
 
+    /// A closed window skips the sort and reload: `show(apps:)` hands over the current
+    /// list when it opens again.
     func appsDidChange(_ apps: [AppEntry]) {
+        guard window?.isVisible == true else { return }
         items.setApps(apps)
     }
 
