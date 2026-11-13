@@ -132,6 +132,15 @@ struct PluginModelTests {
         #expect(response.items?.count == PluginItem.maxItems)
     }
 
+    @Test func malformedRowsDoNotConsumeTheResponseLimit() throws {
+        let malformed = ["null", #"{"subtitle":"No title"}"#, #"{"title":"Bad action","action":{"type":"unknown"}}"#]
+        let rows = malformed + (0..<(PluginItem.maxItems + 50)).map { #"{"title":"Row \#($0)"}"# }
+        let response = try PluginResponse.decode(Data(("{\"items\":[" + rows.joined(separator: ",") + "]}").utf8))
+        #expect(response.items?.count == PluginItem.maxItems)
+        #expect(response.items?.first?.title == "Row 0")
+        #expect(response.items?.last?.title == "Row \(PluginItem.maxItems - 1)")
+    }
+
     @Test func listFiltersByTitleAndKeepsOrderWhenEmpty() {
         // Duplicate ids and titles must each stay reachable.
         let list = PluginList(items: [
@@ -139,11 +148,30 @@ struct PluginModelTests {
             PluginItem(id: "y", title: "production-us"),
         ])
         let matcher = Matcher()
-        #expect(list.search("  ", matcher: matcher).map(\.title) == ["production-eu", "staging", "production-us"])
-        #expect(list.search("stag", matcher: matcher).map(\.title) == ["staging"])
-        #expect(Set(list.search("prod", matcher: matcher).map(\.title)) == ["production-eu", "production-us"])
-        #expect(list.search("zzz", matcher: matcher).isEmpty)
-        #expect(PluginList.empty.search("a", matcher: matcher).isEmpty)
+        #expect(list.matchingIndices("  ", matcher: matcher) == [0, 1, 2])
+        #expect(list.matchingIndices("stag", matcher: matcher) == [1])
+        #expect(Set(list.matchingIndices("prod", matcher: matcher)) == [0, 2])
+        #expect(list.matchingIndices("zzz", matcher: matcher).isEmpty)
+        #expect(PluginList.empty.matchingIndices("a", matcher: matcher).isEmpty)
+    }
+
+    @Test func remoteResultsKeepTheirOrderWithoutLocalMatching() {
+        let items = [PluginItem(title: "Remote answer B"), PluginItem(title: "Remote answer A")]
+        let remote = PluginList(items: items, filterLocally: false)
+        #expect(remote.matchingIndices("a completely different query", matcher: Matcher()) == [0, 1])
+        #expect(remote.matchingIndices("", matcher: Matcher()) == [0, 1])
+    }
+
+    @Test func duplicateOccurrencesSurviveFilteringAndUnrelatedInsertions() {
+        let rows = [PluginItem(id: "same", title: "Same title"), PluginItem(id: "other", title: "Other"),
+                    PluginItem(id: "same", title: "Same title")]
+        let list = PluginList(items: rows)
+        let indices = list.matchingIndices("Same title", matcher: Matcher())
+        #expect(indices == [0, 2])
+        #expect(indices.map { list.occurrence(at: $0) } == [0, 1])
+        let inserted = PluginList(items: [PluginItem(id: "new", title: "New")] + rows)
+        #expect(inserted.occurrence(at: 1) == list.occurrence(at: 0))
+        #expect(inserted.occurrence(at: 3) == list.occurrence(at: 2))
     }
 
     @Test func iconsAreSymbolsUnlessTheyLookLikePaths() {
@@ -248,6 +276,59 @@ struct PluginStoreTests {
         #expect(plugin.manifest != nil && plugin.entries.isEmpty)
     }
 
+    @Test func pluginIDsCannotCreateHiddenInstallations() throws {
+        let fixture = try PluginFixture()
+        let source = try fixture.plugin("source", manifest: PluginFixture.manifest(id: ".demo"), script: "echo '{}'")
+        #expect(PluginStore.load(source).problem?.contains("dot") == true)
+        #expect(throws: PluginStore.InstallError.self) { try PluginStore.install(from: source, into: fixture.plugins) }
+    }
+
+    @Test(arguments: [false, true])
+    func installationNeverOverwritesAnUnrelatedPlugin(linked: Bool) throws {
+        let fixture = try PluginFixture()
+        let old = try fixture.plugin("beta", manifest: PluginFixture.manifest(id: "alpha"), script: "echo original",
+                                     in: linked ? "Work" : "Plugins")
+        let destination = fixture.plugins.appendingPathComponent("beta")
+        if linked {
+            try FileManager.default.createDirectory(at: fixture.plugins, withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(at: destination, withDestinationURL: old)
+        }
+        let source = try fixture.plugin("download", manifest: PluginFixture.manifest(id: "beta"), script: "echo replacement", in: "Downloads")
+        #expect(throws: PluginStore.InstallError.self) { try PluginStore.install(from: source, into: fixture.plugins) }
+        #expect(PluginStore.scan(directory: fixture.plugins).map(\.id) == ["alpha"])
+        #expect(try String(contentsOf: old.appendingPathComponent("run.sh"), encoding: .utf8).contains("original"))
+    }
+
+    @Test func idsDifferingOnlyByCaseCannotShareInstallationOrState() throws {
+        let fixture = try PluginFixture()
+        try fixture.plugin("a", manifest: PluginFixture.manifest(id: "Demo"), script: "echo original")
+        let download = try fixture.plugin("download", manifest: PluginFixture.manifest(id: "demo"), script: "echo replacement", in: "Downloads")
+        #expect(throws: PluginStore.InstallError.self) { try PluginStore.install(from: download, into: fixture.plugins) }
+        try fixture.plugin("b", manifest: PluginFixture.manifest(id: "demo"), script: "echo duplicate")
+        let plugins = PluginStore.scan(directory: fixture.plugins)
+        #expect(plugins.filter(\.isUsable).map(\.id) == ["Demo"])
+        #expect(plugins.last?.problem?.contains("letter case") == true)
+    }
+
+    @Test(arguments: [false, true])
+    func replacementUsesAnExistingPluginsActualFolder(linked: Bool) throws {
+        let fixture = try PluginFixture()
+        let old = try fixture.plugin("a-development", manifest: PluginFixture.manifest(), script: "echo old",
+                                     in: linked ? "Work" : "Plugins")
+        let destination = fixture.plugins.appendingPathComponent("a-development")
+        if linked {
+            try FileManager.default.createDirectory(at: fixture.plugins, withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(at: destination, withDestinationURL: old)
+        }
+        let new = try fixture.plugin("download", manifest: PluginFixture.manifest(), script: "echo new", in: "Downloads")
+        let installed = try PluginStore.install(from: new, into: fixture.plugins)
+        #expect(installed.directory.standardizedFileURL == destination.standardizedFileURL)
+        let plugins = PluginStore.scan(directory: fixture.plugins)
+        #expect(plugins.count == 1 && plugins[0].isUsable)
+        #expect(try String(contentsOf: installed.executableURL!, encoding: .utf8).contains("new"))
+        if linked { #expect(try String(contentsOf: old.appendingPathComponent("run.sh"), encoding: .utf8).contains("old")) }
+    }
+
     @Test func installReplacesALinkAndLeavesAnInstalledFolderAlone() throws {
         let fixture = try PluginFixture()
         let development = try fixture.plugin("dev", manifest: PluginFixture.manifest(id: "demo"),
@@ -306,6 +387,41 @@ struct PluginStoreTests {
         #expect(PluginStore.scan(directory: fixture.plugins).map(\.id) == ["demo"])
     }
 
+    @Test func installingFromARelativeSymlinkCopiesTheFolder() throws {
+        let fixture = try PluginFixture()
+        let source = try fixture.plugin("source", manifest: PluginFixture.manifest(),
+                                        script: "echo '{}'", in: "Downloads")
+        let link = source.deletingLastPathComponent().appendingPathComponent("linked")
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "source")
+
+        let installed = try PluginStore.install(from: link, into: fixture.plugins)
+        #expect(installed.isUsable)
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: installed.directory.path)) == nil)
+        try FileManager.default.removeItem(at: source)
+        #expect(PluginStore.load(installed.directory).isUsable)
+    }
+
+    @Test func invalidStagedCopyPreservesTheInstalledPlugin() throws {
+        let fixture = try PluginFixture()
+        let source = try fixture.plugin("source", manifest: PluginFixture.manifest(),
+                                        script: "echo original", in: "Downloads")
+        let installed = try PluginStore.install(from: source, into: fixture.plugins)
+        let script = source.appendingPathComponent("run.sh")
+        let helper = source.deletingLastPathComponent().appendingPathComponent("helper.sh")
+        try FileManager.default.moveItem(at: script, to: helper)
+        try FileManager.default.createSymbolicLink(atPath: script.path, withDestinationPath: "../helper.sh")
+        #expect(PluginStore.load(source).isUsable)
+
+        // The relative executable link breaks after copying to Plugins. Reject the
+        // staged copy before replacing the working installation.
+        #expect(throws: PluginStore.InstallError.self) {
+            try PluginStore.install(from: source, into: fixture.plugins)
+        }
+        #expect(PluginStore.load(installed.directory).isUsable)
+        #expect(try String(contentsOf: installed.executableURL!, encoding: .utf8).contains("original"))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.plugins.path) == ["demo"])
+    }
+
     @Test func disabledPluginsSurviveASave() throws {
         let preferences = Preferences(disabledPlugins: ["demo"])
         let decoded = try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(preferences))
@@ -317,11 +433,11 @@ struct PluginStoreTests {
 @Suite("Plugin runs")
 struct PluginRunTests {
     private func run(_ script: String, arguments: [String] = [], timeout: TimeInterval = 5,
-                     query: String = "") async throws -> Result<PluginResponse, PluginRunError> {
+                     query: String = "", configurationJSON: String = "{}") async throws -> Result<PluginResponse, PluginRunError> {
         let fixture = try PluginFixture()
         let plugin = PluginStore.load(try fixture.plugin("demo", manifest: PluginFixture.manifest(), script: script))
         let environment = PluginEnvironment.make(for: plugin, query: query, base: ["PATH": "/usr/bin:/bin"],
-                                                 dataDirectory: fixture.root.appendingPathComponent("data"))
+                                                 dataDirectory: fixture.root.appendingPathComponent("data"), configurationJSON: configurationJSON)
         return await withCheckedContinuation { continuation in
             PluginRun.start(executable: plugin.executableURL!, arguments: arguments, environment: environment,
                             directory: plugin.directory, timeout: timeout) { continuation.resume(returning: $0) }
@@ -338,10 +454,28 @@ struct PluginRunTests {
         #expect(response.items?.map(\.title) == ["two words", "typed", "demo", "demo-data"])
     }
 
+    @Test func passesConfigurationAsOneJSONEnvironmentValue() async throws {
+        let response = try await run(#"printf '%s' "$SPOTLITE_CONFIG""#,
+                                     configurationJSON: #"{"copy":"configured"}"#).get()
+        #expect(response.copy == "configured")
+    }
+
     @Test func reportsTheFirstErrorLine() async throws {
         let result = try await run("echo 'kubectl was not found' >&2; echo more >&2; exit 3")
         #expect(result == .failure(.failed(status: 3, message: "kubectl was not found")))
         #expect(PluginRunError.failed(status: 3, message: "").message.contains("3"))
+    }
+
+    @Test func drainsStandardErrorWhenStandardOutputClosesFirst() async throws {
+        let result = try await run("exec 1>&-; echo 'the actual error' >&2; head -c 65536 /dev/zero >&2; exit 3")
+        #expect(result == .failure(.failed(status: 3, message: "the actual error")))
+    }
+
+    @Test func doesNotWaitForAnInheritedErrorPipe() async throws {
+        let start = Date()
+        let result = try await run("sleep 20 >/dev/null & echo 'the actual error' >&2; exit 3")
+        #expect(result == .failure(.failed(status: 3, message: "the actual error")))
+        #expect(Date().timeIntervalSince(start) < 4)
     }
 
     @Test func rejectsOutputThatIsNotJSON() async throws {
@@ -409,6 +543,59 @@ struct PluginRunTests {
             return
         }
     }
+
+    @Test func completedRunsReleaseBeforeTheirTimeoutDeadline() async throws {
+        let fixture = try PluginFixture()
+        let plugin = PluginStore.load(try fixture.plugin("demo", manifest: PluginFixture.manifest(), script: "echo '{}'"))
+        weak var released: PluginRun?
+        let result: Result<PluginResponse, PluginRunError> = await withCheckedContinuation { continuation in
+            let run = PluginRun.start(executable: plugin.executableURL!, arguments: [], environment: [:],
+                                      directory: plugin.directory, timeout: 60) { continuation.resume(returning: $0) }
+            released = run
+        }
+        #expect(try result.get() == PluginResponse())
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(released == nil)
+    }
+
+    @Test(arguments: [true, false])
+    func stopsDescendantsThatIgnoreTermination(cancelled: Bool) async throws {
+        let fixture = try PluginFixture()
+        let script = #"""
+        echo $$ > group.pid
+        /bin/sh -c 'trap "" TERM; echo $$ > "$1"; sleep 30; :' child "$PWD/child.pid" &
+        wait
+        """#
+        let plugin = PluginStore.load(try fixture.plugin("demo", manifest: PluginFixture.manifest(), script: script))
+        let outcome = RecordedPluginResult()
+        let run = PluginRun.start(executable: plugin.executableURL!, arguments: [], environment: ["PATH": "/usr/bin:/bin"],
+                                  directory: plugin.directory, timeout: cancelled ? 60 : 0.5) { outcome.record($0) }
+        defer { run.cancel() }
+        let marker = plugin.directory.appendingPathComponent("child.pid")
+        // Synchronize cancellation with the child installing its signal handler.
+        for _ in 0..<300 {
+            if FileManager.default.fileExists(atPath: marker.path) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let child = try #require(Int32(try String(contentsOf: marker, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        let group = try #require(Int32(try String(contentsOf: plugin.directory.appendingPathComponent("group.pid"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)))
+        defer { if group != getpgrp() { kill(-group, SIGKILL) } }
+        if cancelled { run.cancel() }
+        try await Task.sleep(for: .seconds(2))
+        let status = kill(child, 0)
+        let reason = errno
+        #expect(status == -1 && reason == ESRCH)
+        if cancelled { #expect(outcome.value == nil) }
+        else { #expect(outcome.value == .failure(.timedOut)) }
+    }
+}
+
+private final class RecordedPluginResult: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Result<PluginResponse, PluginRunError>?
+    var value: Result<PluginResponse, PluginRunError>? { lock.withLock { result } }
+    func record(_ value: Result<PluginResponse, PluginRunError>) { lock.withLock { result = value } }
 }
 
 private final class Called: @unchecked Sendable {

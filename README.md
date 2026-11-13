@@ -72,6 +72,31 @@ Set `SPOTLITE_DEV_CAPTURE_DIR=/tmp/spotlite-captures` with the Toast, Utilities 
 Menu hook to save native screenshots alongside the frame checks. Capturing requires
 existing Screen Recording access; the hooks do not request it.
 
+To check plugin query replacement, response copies and layout on short displays offline:
+
+```sh
+make debug
+SPOTLITE_DEV_REGRESSIONS=1 SPOTLITE_DEV_PIN=1 \
+  SPOTLITE_DEV_PLUGINS_DIR="$PWD/Tests/Fixtures/Plugins" \
+  build/Spotlite.app/Contents/MacOS/Spotlite
+```
+
+This check preserves the clipboard and saved preferences.
+
+For plugin configuration forms, setup routing, validation, Save/Cancel/Reset, and
+per-invocation snapshots, use an isolated settings directory:
+
+```sh
+make debug
+SPOTLITE_DEV_CONFIGURATION=1 SPOTLITE_DEV_PIN=1 \
+  SPOTLITE_DEV_PLUGINS_DIR="$PWD/Tests/Fixtures/Plugins" \
+  SPOTLITE_DEV_PLUGIN_SETTINGS_DIR="$(mktemp -d)" \
+  build/Spotlite.app/Contents/MacOS/Spotlite
+```
+
+With existing Screen Recording access, the check writes native form captures to
+`build/configuration-checks`.
+
 ## Usage
 
 | Key | Action |

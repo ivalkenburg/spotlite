@@ -4,12 +4,19 @@
 # the file "$SPOTLITE_PLUGIN_DATA/token" raises that and finds private repositories.
 
 query="$1"
+configuration="${SPOTLITE_CONFIG:-}"
+if [ -z "$configuration" ]; then configuration='{}'; fi
+organization="$(printf '%s' "$configuration" | jq -r '.organization // ""')"
+limit="$(printf '%s' "$configuration" | jq -r '(.resultLimit // 20) | floor')"
+if [ -n "$organization" ]; then query="$query org:$organization"; fi
 token="${GITHUB_TOKEN:-$(cat "$SPOTLITE_PLUGIN_DATA/token" 2>/dev/null)}"
 
-curl -sS --max-time 8 -G "https://api.github.com/search/repositories" \
-  --data-urlencode "q=$query" -d per_page=20 \
+response="$(curl -sS --max-time 8 -G "https://api.github.com/search/repositories" \
+  --data-urlencode "q=$query" -d "per_page=$limit" \
   -H "Accept: application/vnd.github+json" \
-  ${token:+-H "Authorization: Bearer $token"} |
+  ${token:+-H "Authorization: Bearer $token"})" || exit $?
+
+printf '%s' "$response" |
 jq '
   if (.items | type) == "array" then {
     items: [.items[] | {

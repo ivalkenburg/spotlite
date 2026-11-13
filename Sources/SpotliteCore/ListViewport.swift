@@ -19,6 +19,14 @@ public struct ListViewport: Sendable, Equatable {
         self.visibleRows = visibleRows
     }
 
+    /// Caps a saved row preference for the current display, allowing fewer rows
+    /// than Settings offers while keeping at least the lead row reachable.
+    public static func fittingVisibleRows(_ preferred: Int, availableHeight: CGFloat,
+                                         leadHeight: CGFloat, rowHeight: CGFloat) -> Int {
+        let additional = max(0, ((availableHeight - leadHeight) / rowHeight).rounded(.down))
+        return max(1, min(preferred, 1 + Int(additional)))
+    }
+
     /// The first rows up to `visibleRows`.
     public var restingHeight: CGFloat {
         let shown = min(count, visibleRows)

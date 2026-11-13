@@ -19,6 +19,24 @@ struct ListViewportTests {
         #expect(list(20, rows: 4).restingHeight == CGFloat(56 + 3 * 56))
     }
 
+    @Test(arguments: [400.0, 600, 640, 680, 1_130])
+    func visibleRowsFitShortScreens(height: Double) {
+        let screen = CGRect(x: 0, y: 0, width: 1_280, height: height)
+        let chrome: CGFloat = 57 + 10 + 8
+        let available = screen.height * (1 - PanelGeometry.minVerticalFraction) - chrome
+        let rows = ListViewport.fittingVisibleRows(10, availableHeight: available, leadHeight: 81, rowHeight: 56)
+        let panelHeight = chrome + list(20, lead: 81, rows: rows).restingHeight
+        let geometry = PanelGeometry().fitted(visibleFrame: screen, chromeInset: 110, expandedHeight: panelHeight)
+        #expect(rows >= 1 && rows <= 10)
+        #expect(geometry.anchorTopY(visibleFrame: screen) - panelHeight >= screen.minY)
+        #expect(rows == 10 || panelHeight + 56 > screen.height * (1 - PanelGeometry.minVerticalFraction))
+    }
+
+    @Test func fittingRowsKeepsThePreferenceAndAtLeastOneRow() {
+        #expect(ListViewport.fittingVisibleRows(4, availableHeight: 1_000, leadHeight: 81, rowHeight: 56) == 4)
+        #expect(ListViewport.fittingVisibleRows(10, availableHeight: 20, leadHeight: 81, rowHeight: 56) == 1)
+    }
+
     /// Scrolled, the list shows as many whole rows as at rest, with or without the card.
     @Test func scrolledHeightIsWholeRows() {
         #expect(list(20).scrolledRowCount == 7)

@@ -20,7 +20,11 @@ public struct InstalledPlugin: Sendable, Equatable {
 
     /// Stands in for a bundle identifier, so hiding, aliases and history key on it.
     public func entryID(for command: PluginCommand) -> String {
-        InstalledPlugin.entryIDPrefix + id + "/" + command.id
+        entryID(forCommandID: command.id)
+    }
+
+    public func entryID(forCommandID commandID: String) -> String {
+        InstalledPlugin.entryIDPrefix + id + "/" + commandID
     }
 
     /// The plugin's commands as search entries.
@@ -69,9 +73,9 @@ public enum PluginStore {
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
             .map { url in
                 let plugin = load(url)
-                guard plugin.isUsable, !seen.insert(plugin.id).inserted else { return plugin }
+                guard plugin.isUsable, !seen.insert(plugin.id.lowercased()).inserted else { return plugin }
                 return InstalledPlugin(directory: url, manifest: plugin.manifest,
-                                       problem: "Another plugin already uses the id \(plugin.id).")
+                                       problem: "Another plugin already uses the id \(plugin.id), ignoring letter case.")
             }
     }
 
@@ -88,8 +92,8 @@ public enum PluginStore {
         } catch {
             return broken("\(manifestName) is not valid: \(describe(error))")
         }
-        guard PluginManifest.isValidID(manifest.id) else {
-            return broken("The plugin id may only contain letters, digits, dots, dashes and underscores.")
+        guard PluginManifest.isValidID(manifest.id), !manifest.id.hasPrefix(".") else {
+            return broken("The plugin id may only contain letters, digits, dots, dashes and underscores, and cannot start with a dot.")
         }
         var commandIDs = Set<String>()
         for command in manifest.commands {
@@ -128,23 +132,40 @@ public enum PluginStore {
         }
     }
 
-    /// Copies a plugin folder in under its id, replacing an installed copy. The copy is
+    /// Copies a plugin folder into the store, replacing its installed copy. The copy is
     /// checked before it is used, and the old one survives a failed replacement.
     @discardableResult
     public static func install(from source: URL, into directory: URL = directory) throws(InstallError) -> InstalledPlugin {
+        // Copy the folder itself, even when the selected path is a symbolic link.
+        // Copying a relative link would make it point somewhere else after installing.
+        let source = source.standardizedFileURL.resolvingSymlinksInPath()
         let candidate = load(source)
         guard candidate.isUsable else {
             throw .invalid(candidate.problem ?? "This folder is not a Spotlite plugin.")
         }
         let files = FileManager.default
-        let destination = directory.appendingPathComponent(candidate.id, isDirectory: true)
-        guard source.standardizedFileURL.resolvingSymlinksInPath() != destination.standardizedFileURL.resolvingSymlinksInPath() else {
+        // Manually installed folders and development links need not be named by id.
+        // Replace the same plugin Settings identified instead of creating a duplicate.
+        let installed = scan(directory: directory)
+        if let collision = installed.first(where: { $0.id != candidate.id && $0.id.lowercased() == candidate.id.lowercased() }) {
+            throw .invalid("The id \(candidate.id) differs from installed plugin \(collision.id) only by letter case. Choose a different id.")
+        }
+        let existing = installed.first { $0.manifest?.id == candidate.id }
+        let destination = existing?.directory ?? directory.appendingPathComponent(candidate.id, isDirectory: true)
+        if existing == nil, files.fileExists(atPath: destination.path) || isLink(destination) {
+            throw .invalid("The folder \(destination.lastPathComponent) is already occupied. Rename that folder or choose a different plugin id.")
+        }
+        guard source != destination.standardizedFileURL.resolvingSymlinksInPath() else {
             return candidate
         }
         let staging = directory.appendingPathComponent(".installing-" + UUID().uuidString, isDirectory: true)
         do {
             try files.createDirectory(at: directory, withIntermediateDirectories: true)
             try files.copyItem(at: source, to: staging)
+            let staged = load(staging)
+            guard staged.isUsable, staged.id == candidate.id else {
+                throw InstallError.invalid(staged.problem ?? "The plugin changed while it was being installed.")
+            }
             if !isLink(destination), files.fileExists(atPath: destination.path) {
                 _ = try files.replaceItemAt(destination, withItemAt: staging)
             } else {
@@ -154,6 +175,7 @@ public enum PluginStore {
             }
         } catch {
             try? files.removeItem(at: staging)
+            if let error = error as? InstallError { throw error }
             throw .failed(error.localizedDescription)
         }
         return load(destination)

@@ -39,6 +39,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let controller = SpotliteController(library: library, caffeine: caffeine,
                                             preferences: preferences, toasts: toasts)
         controller.onOpenSettings = { [weak self] in self?.openSettings() }
+        controller.onConfigurePlugin = { [weak self] id in
+            self?.openSettings()
+            self?.settings?.configurePlugin(id: id)
+        }
         controller.onPreferencesChanged = { [weak self] prefs in
             self?.adoptPreferences(prefs) { self?.settings?.preferencesDidChange($0) }
         }
@@ -56,6 +60,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         toasts.showConfirmationMessages = preferences.showConfirmationMessages
         #if DEBUG
+        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_CONFIGURATION"] == "1" {
+            Task { @MainActor in
+                do {
+                    try await PluginConfigurationDevChecks.run(controller: self.controller, library: self.library,
+                                                               preferences: self.preferences)
+                    exit(0)
+                } catch {
+                    print("DEV configuration failed: \(error)")
+                    exit(1)
+                }
+            }
+            return
+        }
+        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_REGRESSIONS"] == "1" {
+            Task { @MainActor in
+                do {
+                    try await self.controller.runDevRegressionChecks()
+                    exit(0)
+                } catch {
+                    print("DEV regressions failed: \(error)")
+                    exit(1)
+                }
+            }
+            return
+        }
         if ProcessInfo.processInfo.environment["SPOTLITE_DEV_FOCUS"] == "1" {
             let previousApplication = NSWorkspace.shared.frontmostApplication
             Task { @MainActor in
@@ -355,6 +384,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // A replaced plugin may bring a new image at an old path.
                 IconCache.shared.invalidateAll()
                 self.library.extras = self.extraEntries
+            }
+            controller.onPluginConfigurationChanged = { [weak self] in
+                self?.controllerInstance?.libraryDidChange()
             }
             controller.onToast = { [weak self] message in
                 guard let self else { return }

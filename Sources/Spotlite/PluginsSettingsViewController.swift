@@ -7,8 +7,10 @@ import SpotliteCore
 final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDataSource, NSTableViewDelegate {
     private let table = NSTableView()
     private let removeButton = NSButton(title: "Remove…", target: nil, action: nil)
+    private let configureButton = NSButton(title: "Configure…", target: nil, action: nil)
     private let emptyLabel = SettingsForm.hint("No plugins installed.")
     private var plugins: [InstalledPlugin] = []
+    private var configurationController: PluginConfigurationWindowController?
 
     private static let height: CGFloat = 420
 
@@ -18,6 +20,8 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
         table.dataSource = self
         table.delegate = self
         table.allowsEmptySelection = true
+        table.target = self
+        table.doubleAction = #selector(configureClicked)
         table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("plugin")))
 
         let scroll = NSScrollView()
@@ -33,20 +37,24 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
         removeButton.target = self
         removeButton.action = #selector(removeClicked)
         removeButton.bezelStyle = .rounded
+        configureButton.target = self
+        configureButton.action = #selector(configureClicked)
+        configureButton.bezelStyle = .rounded
         let reloadButton = button("Reload", #selector(reloadClicked))
         reloadButton.toolTip = "Read every plugin again, after editing one"
         let folder = button("Open Folder", #selector(openFolderClicked))
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let buttons = NSStackView(views: [install, removeButton, spacer, reloadButton, folder])
+        let buttons = NSStackView(views: [install, removeButton, spacer, configureButton])
         buttons.orientation = .horizontal
         buttons.spacing = 8
+        let utilities = SettingsForm.row([reloadButton, folder])
 
         let caption = SettingsForm.hint(
             "Plugins add commands to search. A plugin is a program that runs with your permissions when you use it: install only ones you trust.")
         caption.preferredMaxLayoutWidth = SettingsForm.width - 40
 
-        let stack = NSStackView(views: [scroll, buttons, caption])
+        let stack = NSStackView(views: [scroll, buttons, utilities, caption])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -82,6 +90,29 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
 
     private func updateRemoveButton() {
         removeButton.isEnabled = plugins.indices.contains(table.selectedRow)
+        configureButton.isEnabled = plugins.indices.contains(table.selectedRow)
+            && plugins[table.selectedRow].isUsable && plugins[table.selectedRow].manifest?.settings.isEmpty == false
+    }
+
+    func configure(pluginID: String) {
+        guard let window = view.window, configurationController == nil,
+              let row = plugins.firstIndex(where: { $0.id == pluginID && $0.isUsable }),
+              plugins[row].manifest?.settings.isEmpty == false else { return }
+        table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        table.scrollRowToVisible(row)
+        let editor = PluginConfigurationWindowController(plugin: plugins[row])
+        editor.onChange = { [weak self] in
+            self?.reload()
+            self?.model.onPluginConfigurationChanged?()
+        }
+        configurationController = editor
+        guard let sheet = editor.window else { configurationController = nil; return }
+        window.beginSheet(sheet) { [weak self] _ in self?.configurationController = nil }
+    }
+
+    @objc private func configureClicked() {
+        guard plugins.indices.contains(table.selectedRow) else { return }
+        configure(pluginID: plugins[table.selectedRow].id)
     }
 
     /// After the folder changed: the host reads it, search takes the new commands.
@@ -207,7 +238,8 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
                 return v
             }()
         let plugin = plugins[row]
-        view.configure(with: plugin, enabled: !model.preferences.disabledPlugins.contains(plugin.id))
+        view.configure(with: plugin, enabled: !model.preferences.disabledPlugins.contains(plugin.id),
+                       needsSetup: PluginHost.shared.needsSetup(plugin.id))
         view.onEnabledChanged = { [weak self] enabled in
             guard let self else { return }
             if enabled { self.model.preferences.disabledPlugins.remove(plugin.id) }
@@ -260,7 +292,7 @@ private final class PluginRowView: NSTableCellView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(with plugin: InstalledPlugin, enabled: Bool) {
+    func configure(with plugin: InstalledPlugin, enabled: Bool, needsSetup: Bool) {
         checkbox.state = enabled && plugin.isUsable ? .on : .off
         checkbox.isEnabled = plugin.isUsable
         checkbox.setAccessibilityLabel("Enable \(plugin.name)")
@@ -284,7 +316,8 @@ private final class PluginRowView: NSTableCellView {
             detail.textColor = .systemRed
         } else {
             let commands = plugin.manifest?.commands.map(\.title).joined(separator: ", ") ?? ""
-            detail.stringValue = plugin.manifest?.description ?? commands
+            detail.stringValue = needsSetup ? "Setup required. Configure this plugin before using its commands."
+                : plugin.manifest?.description ?? commands
             detail.textColor = .secondaryLabelColor
         }
         detail.toolTip = detail.stringValue

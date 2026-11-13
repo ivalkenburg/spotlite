@@ -1,0 +1,19 @@
+{
+  "id": "configuration",
+  "name": "Configuration Fixture",
+  "description": "Exercises the native plugin configuration form.",
+  "executable": "run.sh",
+  "settings": [
+    { "id": "copy", "label": "Display name", "type": "text", "required": true,
+      "description": "A name shown when this plugin runs." },
+    { "id": "limit", "label": "Result limit", "type": "number", "min": 1, "max": 10, "default": 5,
+      "description": "Choose a number from 1 to 10." },
+    { "id": "enabled", "label": "Include archived", "type": "boolean", "default": true },
+    { "id": "format", "label": "Detail level", "type": "choice", "default": "brief",
+      "options": [{ "value": "brief", "label": "Brief" }, { "value": "full", "label": "Full" }] }
+  ],
+  "commands": [
+    { "id": "run", "title": "Configuration Fixture", "action": { "type": "run" } },
+    { "id": "literal", "title": "Configuration Literal", "action": { "type": "copy", "text": "literal" } }
+  ]
+}

@@ -14,6 +14,7 @@ final class SettingsModel {
     var onToast: ((ToastMessage) -> Void)?
     /// Called after a plugin is installed, removed or reloaded.
     var onPluginsChanged: (() -> Void)?
+    var onPluginConfigurationChanged: (() -> Void)?
 
     init(preferences: Preferences, library: AppLibrary,
          savePreferences: @escaping (Preferences) -> Void = { Storage.save($0) }) {

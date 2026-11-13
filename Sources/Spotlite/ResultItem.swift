@@ -17,6 +17,16 @@ enum ResultItem {
     /// A row inside a plugin's level. A plugin's root commands are `.app` entries.
     case plugin(PluginItem, PluginRowContext)
 
+    /// Commands at the root and rows inside a plugin share the same action vocabulary.
+    var pluginAction: PluginAction? {
+        switch self {
+        case .plugin(let item, _): item.action
+        case .app(let match) where match.entry.kind == .plugin:
+            PluginHost.shared.command(forEntryID: match.entry.id)?.command.action
+        default: nil
+        }
+    }
+
     init(_ result: SearchResult, caffeine: CaffeineState) {
         switch result {
         case .app(let match): self = .app(match)
@@ -41,7 +51,8 @@ enum ResultItem {
         case .caffeinate: return "caffeinate"
         case .menuItem(let item, _): return item.id
         case .webSearch: return "webSearch"
-        case .plugin(let item, _): return "plugin-item." + item.id
+        case .plugin(let item, let context):
+            return "plugin-item.\(item.id.utf8.count):\(item.id):\(context.occurrence)"
         }
     }
 
@@ -93,6 +104,8 @@ enum ResultItem {
             return item.action == nil ? "Open" : "Run"
         case .app(let match) where match.entry.kind == .command: return "Run"
         case .app(let match) where match.entry.kind == .plugin:
+            if let plugin = PluginHost.shared.command(forEntryID: match.entry.id)?.plugin,
+               PluginHost.shared.needsSetup(plugin.id) { return "Configure" }
             return ResultItem.verb(PluginHost.shared.command(forEntryID: match.entry.id)?.command.action)
         case .plugin(let item, _): return ResultItem.verb(item.action)
         default: return "Open"
@@ -155,6 +168,9 @@ enum ResultItem {
             break
         case .plugin:
             if modifiers.contains(.command) { return [Hint(text: "Hide", key: "⌘⌫")] }
+            if modifiers.contains(.option), case .open = pluginAction {
+                return [Hint(text: "Copy Link", key: "⌥↩")]
+            }
             return ResultItem.pluginHints(
                 subtitle: PluginHost.shared.subtitle(forEntryID: entry.id),
                 action: PluginHost.shared.command(forEntryID: entry.id)?.command.action)

@@ -105,8 +105,16 @@ public struct PluginItem: Sendable, Equatable, Decodable {
 
     /// Per element, so one malformed row does not empty the list.
     static func decodeList<K: CodingKey>(from container: KeyedDecodingContainer<K>, forKey key: K) -> [PluginItem] {
-        let decoded = (try? container.decodeIfPresent([Lossy<PluginItem>].self, forKey: key)) ?? []
-        return Array(decoded.lazy.compactMap(\.value).prefix(maxItems))
+        guard var list = try? container.nestedUnkeyedContainer(forKey: key) else { return [] }
+        var items: [PluginItem] = []
+        items.reserveCapacity(min(list.count ?? maxItems, maxItems))
+        // Stop constructing rows once the visible limit is reached. A large response
+        // need not allocate and decode thousands of actions that will be discarded.
+        while !list.isAtEnd, items.count < maxItems {
+            guard let decoded = try? list.decode(Lossy<PluginItem>.self) else { break }
+            if let item = decoded.value { items.append(item) }
+        }
+        return items
     }
 }
 
@@ -135,12 +143,13 @@ public struct PluginManifest: Sendable, Equatable, Decodable {
     /// Seconds a run may take before it is stopped.
     public let timeout: TimeInterval
     public let commands: [PluginCommand]
+    public let settings: [PluginSetting]
 
     public static let defaultTimeout: TimeInterval = 10
     static let timeoutRange: ClosedRange<TimeInterval> = 1...60
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, version, description, author, executable, timeout, commands
+        case id, name, version, description, author, executable, timeout, commands, settings
     }
 
     public init(from decoder: Decoder) throws {
@@ -156,6 +165,11 @@ public struct PluginManifest: Sendable, Equatable, Decodable {
         timeout = seconds.isFinite ? min(max(seconds, range.lowerBound), range.upperBound)
             : PluginManifest.defaultTimeout
         commands = try c.decode([PluginCommand].self, forKey: .commands)
+        settings = try c.decodeIfPresent([PluginSetting].self, forKey: .settings) ?? []
+        guard settings.count <= 64, Set(settings.map(\.id)).count == settings.count else {
+            throw DecodingError.dataCorruptedError(forKey: .settings, in: c,
+                debugDescription: "Settings must have unique ids, with at most 64 fields.")
+        }
     }
 
     /// Ids name folders and key preferences, so they stay plain.
@@ -279,15 +293,23 @@ public struct PluginScope: Sendable, Equatable {
     }
 }
 
-/// A plugin level's rows with their matching metadata, prepared once per load.
+/// A plugin level's rows, with matching metadata prepared only for local filtering.
 public struct PluginList: Sendable {
     public let items: [PluginItem]
-    private let corpus: SearchCorpus
+    private let corpus: SearchCorpus?
+    private let occurrences: [Int]
 
     public static let empty = PluginList(items: [])
 
-    public init(items: [PluginItem]) {
+    public init(items: [PluginItem], filterLocally: Bool = true) {
         self.items = items
+        var counts: [String: Int] = [:]
+        occurrences = items.map {
+            let occurrence = counts[$0.id, default: 0]
+            counts[$0.id] = occurrence + 1
+            return occurrence
+        }
+        guard filterLocally else { corpus = nil; return }
         // The position stands in for an id: a plugin's own ids need not be unique.
         corpus = SearchCorpus(entries: items.enumerated().map { index, item in
             AppEntry(url: PluginList.entryURL, name: item.title, bundleID: String(index), kind: .command)
@@ -296,11 +318,15 @@ public struct PluginList: Sendable {
 
     private static let entryURL = URL(string: "spotlite-plugin-item:")!
 
-    public func search(_ query: String, matcher: Matcher) -> [PluginItem] {
-        if query.allSatisfy(\.isWhitespace) { return items }
-        return matcher.search(query, in: corpus, limit: items.count).compactMap {
-            Int($0.entry.id).map { items[$0] }
-        }
+    /// Original list positions survive filtering; ids and titles need not be unique.
+    public func matchingIndices(_ query: String, matcher: Matcher) -> [Int] {
+        // Remote search rows already answer the query and retain the plugin's order.
+        guard !items.isEmpty, let corpus, !query.allSatisfy(\.isWhitespace) else { return Array(items.indices) }
+        return matcher.search(query, in: corpus, limit: items.count).compactMap { Int($0.entry.id) }
+    }
+
+    public func occurrence(at index: Int) -> Int {
+        occurrences[index]
     }
 }
 

@@ -8,6 +8,7 @@ public enum PluginRunError: Error, Equatable, Sendable {
     case failed(status: Int32, message: String)
     case outputTooLarge
     case invalidOutput(String)
+    case configurationRequired
 
     public var message: String {
         switch self {
@@ -17,6 +18,7 @@ public enum PluginRunError: Error, Equatable, Sendable {
         case .failed(let status, let message): message.isEmpty ? "The plugin failed (exit \(status))" : message
         case .outputTooLarge: "The plugin returned too much data"
         case .invalidOutput: "The plugin returned invalid JSON"
+        case .configurationRequired: "Setup required. Configure the plugin in Settings → Plugins."
         }
     }
 }
@@ -34,14 +36,16 @@ public final class PluginRun: @unchecked Sendable {
     /// Every field below is touched only on this queue.
     private let queue = DispatchQueue(label: "com.igorv.spotlite.plugin", qos: .userInitiated)
     private let process = Process()
+    private var processGroup: pid_t?
     private let completion: Completion
     private var output = Data()
     private var errorOutput = Data()
     private var outputChannel: DispatchIO?
     private var errorChannel: DispatchIO?
-    private var timeout: DispatchWorkItem?
+    private var timeout: DispatchSourceTimer?
     private var exitStatus: Int32?
     private var outputEnded = false
+    private var errorEnded = false
     private var stopReason: PluginRunError?
     private var finished = false
 
@@ -84,11 +88,12 @@ public final class PluginRun: @unchecked Sendable {
             queue.async {
                 self.exitStatus = status
                 self.finishIfReady()
-                guard !self.outputEnded else { return }
+                guard !self.outputEnded || !self.errorEnded else { return }
                 // Something the program left running still holds the pipe. Take what
                 // was written rather than waiting for a stranger to exit.
                 self.queue.asyncAfter(deadline: .now() + .milliseconds(100)) {
                     self.outputChannel?.close(flags: .stop)
+                    self.errorChannel?.close(flags: .stop)
                 }
             }
         }
@@ -101,6 +106,10 @@ public final class PluginRun: @unchecked Sendable {
             completion(.failure(.launchFailed(error.localizedDescription)))
             return
         }
+        // Foundation launches the child in an isolated group on macOS. Record only
+        // a confirmed child-owned group so escalation can never target Spotlite's.
+        let pid = process.processIdentifier
+        if getpgid(pid) == pid, pid != getpgrp() { processGroup = pid }
         // The child has its own copies; ours would keep the pipes from ever ending.
         try? outputPipe.fileHandleForWriting.close()
         try? errorPipe.fileHandleForWriting.close()
@@ -116,14 +125,22 @@ public final class PluginRun: @unchecked Sendable {
                 finishIfReady()
             }
         }
-        errorChannel = read(errorPipe) { [self] chunk, _ in
+        errorChannel = read(errorPipe) { [self] chunk, ended in
             let room = PluginRun.maxErrorOutput - errorOutput.count
             if room > 0 { errorOutput.append(chunk.prefix(room)) }
+            if ended {
+                errorEnded = true
+                finishIfReady()
+            }
         }
 
-        let deadline = DispatchWorkItem { [self] in stop(.timedOut) }
+        // Cancelling a dispatch source removes its deadline immediately, rather
+        // than leaving a cancelled asyncAfter item queued until the old timeout.
+        let deadline = DispatchSource.makeTimerSource(queue: queue)
+        deadline.schedule(deadline: .now() + seconds)
+        deadline.setEventHandler { [weak self] in self?.stop(.timedOut) }
         timeout = deadline
-        queue.asyncAfter(deadline: .now() + seconds, execute: deadline)
+        deadline.resume()
     }
 
     /// Reads a pipe to its end on the run's queue. The pipe object is held until the
@@ -143,12 +160,15 @@ public final class PluginRun: @unchecked Sendable {
     private func stop(_ reason: PluginRunError) {
         guard !finished, stopReason == nil else { return }
         stopReason = reason
-        if process.isRunning {
-            process.terminate()
-            // A program that ignores the request is not left running behind the panel.
+        if process.isRunning || processGroup != nil {
+            if process.isRunning { process.terminate() }
+            // A shell may exit on SIGTERM while a nested command ignores it. The
+            // entire owned group must be stopped even after its leader has exited.
             let process = process
+            let group = processGroup
             queue.asyncAfter(deadline: .now() + .seconds(1)) {
-                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                if let group { kill(-group, SIGKILL) }
+                else if process.isRunning { kill(process.processIdentifier, SIGKILL) }
             }
         }
         // A cancelled run reports nothing, so it need not wait for the exit.
@@ -156,7 +176,9 @@ public final class PluginRun: @unchecked Sendable {
     }
 
     private func finishIfReady() {
-        if exitStatus != nil, outputEnded { finish() }
+        // Exit notification and the two I/O streams can arrive in any order. In
+        // particular, stdout EOF does not mean the diagnostic on stderr was read.
+        if exitStatus != nil, outputEnded, errorEnded { finish() }
     }
 
     private func finish() {
@@ -198,7 +220,7 @@ public enum PluginEnvironment {
     /// `SPOTLITE_*` variables that say where the plugin lives and what was typed.
     public static func make(for plugin: InstalledPlugin, query: String,
                             base: [String: String] = ProcessInfo.processInfo.environment,
-                            dataDirectory: URL? = nil) -> [String: String] {
+                            dataDirectory: URL? = nil, configurationJSON: String = "{}") -> [String: String] {
         var environment = base
         let inherited = (base["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin").split(separator: ":").map(String.init)
         environment["PATH"] = (inherited + extraPaths.filter { !inherited.contains($0) }).joined(separator: ":")
@@ -206,6 +228,7 @@ public enum PluginEnvironment {
         environment["SPOTLITE_PLUGIN_DIR"] = plugin.directory.path
         environment["SPOTLITE_PLUGIN_DATA"] = (dataDirectory ?? PluginStore.dataDirectory(for: plugin.id)).path
         environment["SPOTLITE_QUERY"] = query
+        environment["SPOTLITE_CONFIG"] = configurationJSON
         return environment
     }
 }

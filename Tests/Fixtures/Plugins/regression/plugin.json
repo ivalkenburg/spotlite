@@ -1,0 +1,10 @@
+{
+  "id": "regression",
+  "name": "Regression Fixture",
+  "executable": "run.sh",
+  "commands": [
+    { "id": "list", "title": "Regression List", "action": { "type": "list", "args": ["list"] } },
+    { "id": "search", "title": "Regression Search", "action": { "type": "search", "args": ["search"] } },
+    { "id": "open", "title": "Regression Open Link", "action": { "type": "open", "url": "https://example.com/plugin" } }
+  ]
+}

@@ -16,6 +16,10 @@ final class PanelPlacement: PanelDragReceiver {
     /// Fixed for one presentation so moving the pointer to another display cannot make
     /// the panel jump while its result count changes.
     private var activeVisibleFrame: CGRect?
+    #if DEBUG
+    /// Exercise short displays through the real window and viewport layout.
+    var devVisibleFrame: CGRect?
+    #endif
     /// Live drag state. Non-nil only between mouse-down and the drag ending.
     private var drag: (kind: PanelDrag, origin: NSPoint, start: PanelGeometry,
                        screen: CGRect, engaged: Bool)?
@@ -50,6 +54,9 @@ final class PanelPlacement: PanelDragReceiver {
     }
 
     private func selectedVisibleFrame() -> CGRect? {
+        #if DEBUG
+        if let devVisibleFrame { return devVisibleFrame }
+        #endif
         let screen: NSScreen?
         switch preferences().panelScreen {
         case .followPointer:
@@ -66,7 +73,18 @@ final class PanelPlacement: PanelDragReceiver {
     private func fitted(_ geometry: PanelGeometry, for visibleFrame: CGRect) -> PanelGeometry {
         geometry.fitted(visibleFrame: visibleFrame,
                         chromeInset: Metrics.windowMargin,
-                        expandedHeight: Metrics.maxPanelHeight(visibleRows: preferences().visibleRows))
+                        expandedHeight: Metrics.maxPanelHeight(visibleRows: visibleRows(on: visibleFrame)))
+    }
+
+    /// Fit the tallest list at the highest allowed panel position. Keep the saved
+    /// preference so moving back to a larger display restores the requested rows.
+    var visibleRows: Int { visibleRows(on: currentVisibleFrame) }
+
+    private func visibleRows(on frame: CGRect) -> Int {
+        let available = frame.height * (1 - PanelGeometry.minVerticalFraction)
+            - Metrics.inputHeight - Metrics.listTopPadding - Metrics.listBottomPadding
+        return ListViewport.fittingVisibleRows(preferences().visibleRows, availableHeight: available,
+                                              leadHeight: Metrics.cardRowHeight, rowHeight: Metrics.rowHeight)
     }
 
     private var currentVisibleFrame: CGRect {
@@ -80,7 +98,7 @@ final class PanelPlacement: PanelDragReceiver {
     private func apply(_ geometry: PanelGeometry, on visibleFrame: CGRect) {
         let anchorTopY = geometry.anchorTopY(visibleFrame: visibleFrame)
 
-        let height = Metrics.windowHeight(visibleRows: preferences().visibleRows)
+        let height = Metrics.windowHeight(visibleRows: visibleRows(on: visibleFrame))
         let width = Metrics.windowWidth(for: geometry.width)
         let frame = NSRect(x: visibleFrame.midX - width / 2,
                            y: anchorTopY + Metrics.windowMargin - height,

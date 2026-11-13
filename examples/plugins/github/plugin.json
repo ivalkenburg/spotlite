@@ -1,9 +1,19 @@
 {
   "id": "github",
   "name": "GitHub",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Search GitHub repositories and open one in the browser.",
   "executable": "github.sh",
+  "settings": [
+    {
+      "id": "organization", "label": "Organization", "type": "text", "default": "",
+      "description": "Limit searches to one organization. Leave empty to search all of GitHub."
+    },
+    {
+      "id": "resultLimit", "label": "Result limit", "type": "number", "default": 20, "min": 1, "max": 50,
+      "description": "How many repositories to show, from 1 to 50. Fractions round down."
+    }
+  ],
   "commands": [
     {
       "id": "search",

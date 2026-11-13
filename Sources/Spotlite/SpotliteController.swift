@@ -68,6 +68,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private var pluginRun: PluginRun?
     /// Bumped whenever the rows on screen stop being wanted, so a late answer is dropped.
     private var pluginGeneration = 0
+    /// Only the latest action in the same navigation session may replace its rows.
+    private var pluginActionGeneration = 0
     private var pluginDebounce: DispatchWorkItem?
     /// The row to return to once a parent level's list has loaded again.
     private var pluginPendingSelection: (id: String, style: Selection)?
@@ -100,6 +102,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     /// Called when the user picks the Settings entry.
     var onOpenSettings: (() -> Void)?
+    var onConfigurePlugin: ((String) -> Void)?
     /// Called when the panel itself changes preferences, by hiding an app or being dragged.
     var onPreferencesChanged: ((Preferences) -> Void)?
 
@@ -418,6 +421,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     func hide() {
         guard panel.isVisible, !isDismissing else { return }
         isDismissing = true
+        pluginActionGeneration &+= 1
+        // A result arriving during the fade must not copy, open or notify after Escape.
+        cancelPluginWork()
         // Taken now rather than when the fade ends: a show() during the fade must
         // already see this query.
         queryMemory.remember(navigation.rootQuery ?? field.stringValue)
@@ -465,7 +471,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// Scripted dev runs press Return on utilities; they must not train the real history.
     private let recordsUtilityUse: Bool = {
         let environment = ProcessInfo.processInfo.environment
-        return ["FRAMES", "SEQUENCE", "MENU", "COMPLETION", "UTILITIES", "PLUGINS"].allSatisfy {
+        return ["FRAMES", "SEQUENCE", "MENU", "COMPLETION", "UTILITIES", "PLUGINS", "REGRESSIONS", "CONFIGURATION"].allSatisfy {
             environment["SPOTLITE_DEV_\($0)"] != "1"
         }
     }()
@@ -555,12 +561,14 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         case .argument: return []
         case .plugin(let scope):
             guard let plugin = plugins.plugin(id: scope.pluginID) else { return [] }
-            let rows = scope.source.isSearch ? pluginList.items : pluginList.search(query, matcher: matcher)
+            let rows = pluginList.matchingIndices(query, matcher: matcher)
             if pluginList.items.isEmpty, let pluginStatus {
                 return [.plugin(pluginStatus, PluginRowContext(plugin: plugin, completes: false))]
             }
-            let context = PluginRowContext(plugin: plugin, completes: !scope.source.isSearch)
-            return rows.map { .plugin($0, context) }
+            return rows.map { index in
+                .plugin(pluginList.items[index], PluginRowContext(plugin: plugin, completes: !scope.source.isSearch,
+                                                                 occurrence: pluginList.occurrence(at: index)))
+            }
         case .menu(let menu):
             if let utility = SearchUtility(rawValue: menu.id), preferences.hiddenUtilities.contains(utility) {
                 return []
@@ -594,7 +602,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     private var viewport: ListViewport {
         ListViewport(count: items.count, leadHeight: rowHeight(at: 0),
-                     rowHeight: Metrics.rowHeight, visibleRows: preferences.visibleRows)
+                     rowHeight: Metrics.rowHeight, visibleRows: placement.visibleRows)
     }
 
     /// Lays the list out at its final size, then resizes the glass to reveal it. The
@@ -685,7 +693,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                 enterScope(.menu(submenu))
             } else if case .app(let match) = items[cursor], match.entry.template != nil {
                 enterArgument(for: cursor)
-            } else if entersPluginScope(items[cursor]) {
+            } else if items[cursor].pluginAction?.entersScope == true {
                 launch(at: cursor)
             }
             return true
@@ -878,6 +886,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     // MARK: - Scoped navigation
 
     private func enterScope(_ scope: SearchScope) {
+        pluginActionGeneration &+= 1
         navigation.enter(scope, query: field.stringValue,
                          selectedID: items.indices.contains(cursor) ? items[cursor].identity : nil,
                          selection: selection)
@@ -890,6 +899,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     private func leaveScope() {
         guard let parent = navigation.back(behavior: preferences.backNavigationBehavior) else { return }
+        pluginActionGeneration &+= 1
         updateScopeChip()
         setQuery(parent.query)
         selection = .topHit
@@ -926,6 +936,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     private func resetNavigation() {
+        pluginActionGeneration &+= 1
         navigation.reset()
         bar.hideChip()
         loadPluginScope()
@@ -933,20 +944,16 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     // MARK: - Plugins
 
-    private func entersPluginScope(_ item: ResultItem) -> Bool {
-        switch item {
-        case .plugin(let item, _): return item.action?.entersScope == true
-        case .app(let match) where match.entry.kind == .plugin:
-            return plugins.command(forEntryID: match.entry.id)?.command.action.entersScope == true
-        default: return false
-        }
-    }
-
     /// `historyID` is a root command's entry id; rows inside a plugin learn no history.
     private func performPlugin(_ action: PluginAction?, plugin: InstalledPlugin, title: String,
                                icon: String?, historyID: String?) {
         // A row without an action only informs.
         guard let action else { return }
+        guard !plugins.needsSetup(plugin.id) else {
+            hide()
+            onConfigurePlugin?(plugin.id)
+            return
+        }
         if let historyID { recordUtilityUse(historyID) }
         switch action {
         case .open(let target):
@@ -977,6 +984,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         let screen = panel.screen
         let scope = pluginScope
         if !keepOpen { hide() }
+        pluginActionGeneration &+= 1
+        let generation = pluginActionGeneration
         plugins.run(plugin, arguments: arguments, query: query) { [weak self] result in
             guard let self else { return }
             let position = self.preferences.toastPosition
@@ -984,18 +993,12 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             case .failure(let error):
                 self.toasts.show(.pluginFailure(error), position: position, on: screen)
             case .success(let response):
-                self.plugins.apply(response.update, from: plugin)
-                if let text = response.copy { self.toasts.copy(text, position: position, on: screen) }
-                if let target = response.open, let url = PluginAction.url(for: target) {
-                    NSWorkspace.shared.open(url)
-                }
-                if let toast = response.toast {
-                    self.toasts.show(ToastMessage(toast), position: position, on: screen)
-                }
+                self.applyPluginResponse(response, from: plugin, on: screen)
                 guard self.panel.isVisible, !self.isDismissing else { return }
-                if keepOpen, let scope, scope == self.pluginScope {
+                if keepOpen, self.pluginActionGeneration == generation, let scope, scope == self.pluginScope {
                     if let items = response.items, !scope.source.isSearch {
                         self.showPluginItems(items)
+                        return // showPluginItems already refreshes the rows and chrome.
                     } else {
                         self.loadPluginScope(keepingRows: true)
                     }
@@ -1004,6 +1007,16 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                 self.refreshMatches()
             }
         }
+    }
+
+    private func applyPluginResponse(_ response: PluginResponse, from plugin: InstalledPlugin, on screen: NSScreen?) {
+        let position = preferences.toastPosition
+        plugins.apply(response.update, from: plugin)
+        if let text = response.copy { toasts.copy(text, position: position, on: screen) }
+        if let target = response.open, let url = PluginAction.url(for: target) {
+            NSWorkspace.shared.open(url)
+        }
+        if let toast = response.toast { toasts.show(ToastMessage(toast), position: position, on: screen) }
     }
 
     /// Prepares the rows of the level just entered or returned to; outside a plugin
@@ -1035,12 +1048,12 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private func searchPlugin(immediately: Bool) {
         guard let scope = pluginScope, case .search(let args, let debounce, let minimum) = scope.source else { return }
         cancelPluginWork()
+        // Search rows answer one particular query. Keeping the previous answer
+        // actionable during debounce could run it when Return follows new typing.
+        pluginList = .empty
+        pluginStatus = nil
         let query = String(field.stringValue.trimmingCharacters(in: .whitespaces).prefix(Self.maxPluginQuery))
-        guard query.count >= minimum else {
-            pluginList = .empty
-            pluginStatus = nil
-            return
-        }
+        guard query.count >= minimum else { return }
         guard !immediately, debounce > 0 else {
             fetchPluginItems(scope, arguments: args + [query], query: query)
             return
@@ -1057,6 +1070,11 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     private func fetchPluginItems(_ scope: PluginScope, arguments: [String], query: String) {
         guard let plugin = plugins.plugin(id: scope.pluginID) else { return }
+        guard !plugins.needsSetup(plugin.id) else {
+            hide()
+            onConfigurePlugin?(plugin.id)
+            return
+        }
         pluginGeneration &+= 1
         let generation = pluginGeneration
         pluginRun?.cancel()
@@ -1065,11 +1083,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             self.pluginRun = nil
             switch result {
             case .success(let response):
-                self.plugins.apply(response.update, from: plugin)
-                if let toast = response.toast {
-                    self.toasts.show(ToastMessage(toast), position: self.preferences.toastPosition,
-                                     on: self.panel.screen)
-                }
+                self.applyPluginResponse(response, from: plugin, on: self.panel.screen)
                 self.showPluginItems(response.items ?? [])
             case .failure(let error):
                 self.pluginList = .empty
@@ -1087,7 +1101,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     private func showPluginItems(_ items: [PluginItem]) {
-        pluginList = PluginList(items: items)
+        pluginList = PluginList(items: items, filterLocally: pluginScope?.source.isSearch != true)
         pluginStatus = items.isEmpty ? PluginItem(title: "No results", icon: "magnifyingglass") : nil
         refreshPluginRows()
     }
@@ -1171,8 +1185,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     private func copyPath() {
         let url: URL
-        if items.indices.contains(cursor), case .plugin(let item, _) = items[cursor] {
-            guard case .open(let target) = item.action else {
+        if items.indices.contains(cursor), let action = items[cursor].pluginAction {
+            guard case .open(let target) = action else {
                 NSSound.beep()
                 return
             }
@@ -1257,9 +1271,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         preferences = updated
         applyResolvedAppearance()
         guard panel.isVisible else { return }
-        refreshMatches()
         // Picks up a Reset Size & Position from Settings while the panel is on screen.
+        // Place first so the viewport uses the new display's available row count.
         placement.reapply(screenChanged: screenChanged)
+        refreshMatches()
     }
 
     func caffeineStateDidChange() {
@@ -1316,6 +1331,155 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 #if DEBUG
 /// Development checks live apart from the launcher behavior without widening access.
 extension SpotliteController {
+    func runDevSetupRoutingCheck(plugin: InstalledPlugin, configure: @escaping (String) -> Void) {
+        let saved = preferences
+        let savedHandler = onConfigurePlugin
+        defer { preferences = saved; onConfigurePlugin = savedHandler }
+        preferences.hiddenBundleIDs = []
+        library.extras = preferences.extraEntries + plugins.entries(disabled: [])
+        onConfigurePlugin = configure
+        show()
+        setQuery("Configuration Fixture")
+        updateMatches(for: field.stringValue)
+        let row = items.firstIndex { $0.identity == plugin.entries[0].instanceID }!
+        precondition(items[row].hints(modifiers: [], running: false).first?.text == "Setup required")
+        launch(at: row)
+        precondition(isDismissing && pluginRun == nil)
+    }
+
+    /// Offline fixtures cover query replacement, response side effects and short displays.
+    func runDevRegressionChecks() async throws {
+        func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
+            guard condition() else {
+                throw NSError(domain: "SpotliteRegressionChecks", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: message])
+            }
+        }
+        guard let fixture = plugins.plugin(id: "regression") else {
+            throw NSError(domain: "SpotliteRegressionChecks", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Set SPOTLITE_DEV_PLUGINS_DIR to Tests/Fixtures/Plugins"])
+        }
+        let savedPreferences = preferences
+        let restoreClipboard = savedClipboard()
+        defer {
+            resetNavigation()
+            placement.devVisibleFrame = nil
+            preferencesDidChange(savedPreferences)
+            toasts.dismiss()
+            panel.orderOut(nil)
+            restoreClipboard()
+        }
+        show()
+        enterScope(.plugin(PluginScope(pluginID: fixture.id, title: "List", icon: nil, source: .list(args: ["list"]))))
+        try await Task.sleep(for: .milliseconds(500))
+        try check(NSPasteboard.general.string(forType: .string) == "list-response", "List response did not copy")
+        leaveScope()
+        enterScope(.plugin(PluginScope(pluginID: fixture.id, title: "Search", icon: nil,
+                                      source: .search(args: ["search"], debounce: 200, minimumQuery: 1))))
+        func typeQuery(_ query: String) {
+            let editor = field.currentEditor() as! NSTextView
+            editor.insertText(query, replacementRange: NSRange(location: 0, length: (field.stringValue as NSString).length))
+        }
+        typeQuery("alpha")
+        try await Task.sleep(for: .milliseconds(500))
+        try check(items.first?.title == "alpha", "Search fixture did not load")
+        try check(NSPasteboard.general.string(forType: .string) == "response-alpha", "Search response did not copy")
+        typeQuery("beta")
+        try check(items.isEmpty, "Previous query's action survived during debounce")
+        try await Task.sleep(for: .milliseconds(250))
+        try check(items.isEmpty, "Previous query's action survived while loading")
+        typeQuery("gamma")
+        try await Task.sleep(for: .milliseconds(700))
+        try check(items.first?.title == "gamma", "Replacement query did not load")
+        try check(NSPasteboard.general.string(forType: .string) == "response-gamma", "Superseded response applied its copy")
+        print("DEV regressions: list/search copies, stale actions and superseded responses passed")
+        setQuery("dismissed")
+        searchPlugin(immediately: true)
+        updateMatches(for: field.stringValue)
+        hide()
+        try check(pluginRun == nil && pluginDebounce == nil, "Dismissal left plugin work running during the fade")
+        try await Task.sleep(for: .milliseconds(250))
+        try check(NSPasteboard.general.string(forType: .string) == "response-gamma", "Dismissed search applied a late copy")
+        print("DEV regressions: dismissal cancels plugin work before the fade")
+        resetNavigation()
+
+        preferences.hiddenBundleIDs.subtract(fixture.entries.map(\.id))
+        library.extras = preferences.extraEntries + plugins.entries(disabled: [])
+        show()
+        setQuery("Regression Open Link")
+        updateMatches(for: field.stringValue)
+        guard let linkRow = items.firstIndex(where: { $0.identity == "com.igorv.spotlite.plugin.regression/open" }) else {
+            return try check(false, "Missing root open command")
+        }
+        select(linkRow, as: .navigated)
+        try check(items[linkRow].hints(modifiers: .option, running: false).first?.text == "Copy Link", "Root command lacks copy hint")
+        copyPath()
+        try check(NSPasteboard.general.string(forType: .string) == "https://example.com/plugin", "Root command did not copy its address")
+        try await Task.sleep(for: .milliseconds(200))
+        show()
+        let nested = PluginItem(title: "Nested link", action: .open("https://example.com/nested"))
+        enterScope(.plugin(PluginScope(pluginID: fixture.id, title: "Links", icon: nil, source: .items([nested]))))
+        try check(items[0].hints(modifiers: .option, running: false).first?.text == "Copy Link", "Scoped command lacks copy hint")
+        copyPath()
+        try check(NSPasteboard.general.string(forType: .string) == "https://example.com/nested", "Scoped command did not copy its address")
+        try await Task.sleep(for: .milliseconds(200))
+        print("DEV regressions: root and scoped plugin addresses share the copy action")
+
+        show()
+        let duplicateRows = [
+            PluginItem(id: "duplicate", title: "Same title", action: .menu([PluginItem(title: "First", action: .copy("first"))])),
+            PluginItem(id: "duplicate", title: "Same title", action: .menu([PluginItem(title: "Second", action: .copy("second"))])),
+        ]
+        enterScope(.plugin(PluginScope(pluginID: fixture.id, title: "Duplicates", icon: nil, source: .items(duplicateRows))))
+        try check(items[0].identity != items[1].identity, "Duplicate plugin ids collided in selection identity")
+        select(1, as: .navigated)
+        launch(at: 1)
+        leaveScope()
+        try check(cursor == 1 && selection == .navigated, "Back navigation selected the first duplicate")
+        launch(at: cursor)
+        launch(at: 0)
+        try check(NSPasteboard.general.string(forType: .string) == "second", "Restored duplicate ran the wrong action")
+        try await Task.sleep(for: .milliseconds(200))
+        print("DEV regressions: duplicate ids retain selection and action after back navigation")
+
+        show()
+        let actionScope = PluginScope(pluginID: fixture.id, title: "Actions", icon: nil,
+            source: .items([PluginItem(title: "Run action", action: .run(args: ["keep-open", "old"], keepOpen: true))]))
+        enterScope(.plugin(actionScope))
+        launch(at: 0)
+        leaveScope()
+        enterScope(.plugin(actionScope))
+        try await Task.sleep(for: .milliseconds(550))
+        try check(items.first?.title == "Run action", "A late action overwrote a re-entered scope")
+        runPlugin(fixture, arguments: ["keep-open", "old"], keepOpen: true)
+        runPlugin(fixture, arguments: ["keep-open", "new"], keepOpen: true)
+        try await Task.sleep(for: .milliseconds(550))
+        try check(items.first?.title == "new", "An older action overwrote the latest action's results")
+        runPlugin(fixture, arguments: ["detached-copy"], keepOpen: false)
+        try await Task.sleep(for: .milliseconds(250))
+        try check(NSPasteboard.general.string(forType: .string) == "detached-action", "Closing cancelled an explicitly selected run action")
+        print("DEV regressions: action results respect navigation and invocation order while detached actions finish")
+
+        preferences.visibleRows = 10
+        for height in [400.0, 600, 640, 680, 1_130] {
+            let frame = CGRect(x: 0, y: 0, width: 1_280, height: height)
+            placement.devVisibleFrame = frame
+            show()
+            items = (0..<20).map { .plugin(PluginItem(title: "Row \($0)"), PluginRowContext(plugin: fixture, completes: false)) }
+            table.reloadData()
+            layoutList(animated: false)
+            panel.layoutIfNeeded()
+            let actual = panel.convertToScreen(glass.convert(glass.bounds, to: nil))
+            try check(frame.insetBy(dx: -0.5, dy: -0.5).contains(actual), "Glass extends outside \(frame): \(actual)")
+            try check(preferences.visibleRows == 10, "Fitting changed the saved row preference")
+            select(items.count - 1, as: .navigated)
+            try check(viewport.firstRow(showing: cursor, offset: scroll.contentView.bounds.minY,
+                                        height: listHeight.constant) == nil, "Last row is unreachable")
+            dumpFrames("short-screen-\(Int(height))")
+        }
+        print("DEV regressions: short displays fit and every row stays reachable")
+    }
+
     /// SPOTLITE_DEV_FOCUS=1 skips hotkey registration so an installed copy can stay running.
     /// Check real AppKit focus with an external app, then a local Settings-like window.
     func runDevFocusChecks(previousApplication: NSRunningApplication?) async throws {

@@ -17,17 +17,37 @@ final class PluginHost {
     private var updates: [String: PluginCommandUpdate] = [:]
     /// Each command's keyword, by entry id, for commands the user gave no alias.
     private var keywords: [String: String] = [:]
+    private var configurations: [String: PluginConfiguration] = [:]
+    private var configurationJSON: [String: String] = [:]
+    private let configurationStore: PluginConfigurationStore
 
     static let fallbackSymbol = "puzzlepiece.extension"
 
-    let pluginsDirectory: URL = {
+    let pluginsDirectory: URL
+
+    init(directory: URL? = nil, configurationStore: PluginConfigurationStore? = nil) {
+        self.pluginsDirectory = directory ?? Self.defaultDirectory
+        if let configurationStore {
+            self.configurationStore = configurationStore
+        } else {
+            #if DEBUG
+            if let override = ProcessInfo.processInfo.environment["SPOTLITE_DEV_PLUGIN_SETTINGS_DIR"] {
+                self.configurationStore = PluginConfigurationStore(directory: URL(fileURLWithPath: override, isDirectory: true))
+                return
+            }
+            #endif
+            self.configurationStore = PluginConfigurationStore()
+        }
+    }
+
+    private static var defaultDirectory: URL {
         #if DEBUG
         if let override = ProcessInfo.processInfo.environment["SPOTLITE_DEV_PLUGINS_DIR"] {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
         #endif
         return PluginStore.directory
-    }()
+    }
 
     var plugins: [InstalledPlugin] {
         loadIfNeeded()
@@ -50,8 +70,11 @@ final class PluginHost {
         byID = [:]
         commands = [:]
         keywords = [:]
+        configurations = [:]
+        configurationJSON = [:]
         for plugin in installed where plugin.isUsable {
             byID[plugin.id] = plugin
+            readConfiguration(for: plugin)
             for command in plugin.manifest?.commands ?? [] {
                 let id = plugin.entryID(for: command)
                 commands[id] = (plugin, command)
@@ -98,7 +121,47 @@ final class PluginHost {
     /// own subtitle, or the plugin it belongs to.
     func subtitle(forEntryID id: String) -> String {
         guard let (plugin, command) = command(forEntryID: id) else { return "" }
+        if needsSetup(plugin.id) { return "Setup required" }
         return update(forEntryID: id)?.subtitle ?? command.subtitle ?? plugin.name
+    }
+
+    // MARK: - Configuration
+
+    /// These lookups only consult state prepared when plugins load or settings change.
+    func configuration(for plugin: InstalledPlugin) -> PluginConfiguration {
+        loadIfNeeded()
+        return configurations[plugin.id] ?? PluginConfiguration(settings: plugin.manifest?.settings ?? [])
+    }
+
+    func needsSetup(_ id: String) -> Bool { configurations[id]?.isValid == false }
+
+    private func readConfiguration(for plugin: InstalledPlugin) {
+        let fields = plugin.manifest?.settings ?? []
+        var configuration = PluginConfiguration(settings: fields)
+        do {
+            let saved = fields.isEmpty ? [:] : try configurationStore.load(for: plugin.id)
+            configuration = PluginConfiguration(settings: fields, saved: saved)
+            if configuration.isValid { configurationJSON[plugin.id] = try configuration.json() }
+        } catch {
+            configuration = PluginConfiguration(settings: fields, saved: configuration.values,
+                problem: "Couldn’t read plugin settings: \(error.localizedDescription)")
+        }
+        configurations[plugin.id] = configuration
+    }
+
+    func saveConfiguration(_ values: [String: PluginSettingValue], for plugin: InstalledPlugin) throws {
+        let configuration = PluginConfiguration(settings: plugin.manifest?.settings ?? [], saved: values)
+        guard configuration.isValid else { throw PluginRunError.configurationRequired }
+        let json = try configuration.json()
+        try configurationStore.save(configuration.values, for: plugin.id)
+        configurations[plugin.id] = configuration
+        configurationJSON[plugin.id] = json
+    }
+
+    func resetConfiguration(for plugin: InstalledPlugin) throws {
+        try configurationStore.reset(for: plugin.id)
+        configurationJSON[plugin.id] = nil
+        readConfiguration(for: plugin)
     }
 
     static func icon(_ raw: String?, in plugin: InstalledPlugin) -> PluginIcon {
@@ -106,9 +169,14 @@ final class PluginHost {
     }
 
     func apply(_ changes: [PluginCommandUpdate], from plugin: InstalledPlugin) {
+        guard !changes.isEmpty, let declared = plugin.manifest?.commands, !declared.isEmpty else { return }
+        // A temporary index pays off for large batches. Small responses keep the
+        // linear path, without allocating a set or adding a persistent cache.
+        let commandIDs = changes.count >= 128 && declared.count >= 128 && changes.count >= declared.count / 2
+            ? Set(declared.map(\.id)) : nil
         for change in changes {
-            guard let command = plugin.manifest?.commands.first(where: { $0.id == change.command }) else { continue }
-            updates[plugin.entryID(for: command)] = change.isReset ? nil : change
+            guard commandIDs?.contains(change.command) ?? declared.contains(where: { $0.id == change.command }) else { continue }
+            updates[plugin.entryID(forCommandID: change.command)] = change.isReset ? nil : change
         }
     }
 
@@ -119,6 +187,11 @@ final class PluginHost {
     @discardableResult
     func run(_ plugin: InstalledPlugin, arguments: [String], query: String,
              completion: @escaping @MainActor (Result<PluginResponse, PluginRunError>) -> Void) -> PluginRun? {
+        loadIfNeeded()
+        guard !needsSetup(plugin.id), let json = configurationJSON[plugin.id] else {
+            completion(.failure(.configurationRequired))
+            return nil
+        }
         guard let executable = plugin.executableURL, let manifest = plugin.manifest else {
             completion(.failure(.launchFailed("\(plugin.name) has no executable")))
             return nil
@@ -127,7 +200,7 @@ final class PluginHost {
         try? FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
         return PluginRun.start(
             executable: executable, arguments: arguments,
-            environment: PluginEnvironment.make(for: plugin, query: query, dataDirectory: data),
+            environment: PluginEnvironment.make(for: plugin, query: query, dataDirectory: data, configurationJSON: json),
             directory: plugin.directory, timeout: manifest.timeout
         ) { result in
             Task { @MainActor in completion(result) }
@@ -140,6 +213,13 @@ struct PluginRowContext {
     let plugin: InstalledPlugin
     /// False for a search's rows, which answer the query rather than complete it.
     let completes: Bool
+    let occurrence: Int
+
+    init(plugin: InstalledPlugin, completes: Bool, occurrence: Int = 0) {
+        self.plugin = plugin
+        self.completes = completes
+        self.occurrence = occurrence
+    }
 }
 
 extension ToastMessage {

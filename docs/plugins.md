@@ -38,13 +38,73 @@ A plugin runs with your user's permissions. Install only ones you trust.
 
 | Key | |
 | --- | --- |
-| `id`, `name`, `commands` | Required. Ids use letters, digits, `.`, `-` and `_`. |
+| `id`, `name`, `commands` | Required. Ids use letters, digits, `.`, `-` and `_`. A plugin id cannot start with `.`, and plugin ids must be unique ignoring letter case. |
 | `executable` | Path inside the plugin's folder; must have the executable bit. Not needed when every action is `open`, `copy` or `menu`. |
 | `timeout` | Seconds a run may take, 1 to 60. Default 10. |
+| `settings` | Optional configuration fields, shared by all of the plugin's commands. See below. |
 
 A command is a root search result. It ranks, hides, takes an alias and learns launch
 history like an app. `keyword` finds it by a name its title lacks, until the user sets an
 alias of their own in Settings → Items.
+
+## Configuration
+
+Select a plugin in Settings → Plugins and click Configure. Spotlite builds the form
+from an optional `settings` array in the manifest; no script runs to show or validate it.
+
+```json
+"settings": [
+  { "id": "organization", "label": "Organization", "type": "text",
+    "description": "The organization to search.", "required": true },
+  { "id": "limit", "label": "Result limit", "type": "number",
+    "default": 20, "min": 1, "max": 50 },
+  { "id": "archived", "label": "Include archived", "type": "boolean", "default": false },
+  { "id": "sort", "label": "Sort by", "type": "choice", "default": "stars",
+    "options": [{ "value": "stars", "label": "Stars" }, { "value": "updated", "label": "Updated" }] }
+]
+```
+
+Every field needs a unique `id` (the same plain characters as plugin ids), a nonempty
+`label`, and a `type`. `description`, `required`, and `default` are optional. At most 64
+fields are supported.
+
+| Type | Value and validation |
+| --- | --- |
+| `text` | A string. Required text cannot be empty or whitespace-only. Whitespace in a saved value is preserved. |
+| `number` | A finite JSON number, including fractions. Optional `min` and `max` are inclusive. |
+| `boolean` | A JSON boolean, defaulting to `false`. A required toggle can still be `false`. |
+| `choice` | A string matching an option's `value`. Options need unique, nonempty values and nonempty labels. |
+
+A declared default must satisfy the field's type, range, choices, and required rule.
+An invalid schema makes the plugin unusable and Settings explains why.
+
+Save commits valid values together; Cancel discards edits. Reset Settings asks before
+removing the saved configuration and restoring defaults. Reset takes effect immediately,
+even if the configuration sheet is subsequently cancelled. Plugin-owned data is retained.
+Saving settings never repeats the command that opened the form.
+
+Commands with missing required values or invalid saved values remain searchable with
+“Setup required”. Activating one opens configuration without executing its action.
+After a manifest update, Reload revalidates saved values and applies defaults for new
+fields. Invalid values remain visible for correction. Optional values without a default
+are omitted from the effective configuration when unset; an empty text field is a string.
+
+Each executable invocation receives the effective configuration as one JSON object in
+`SPOTLITE_CONFIG`, retaining string, number, and boolean types. Only declared keys are
+included. No settings produces `{}`. Values are literal data: Spotlite does not expand
+them into manifest `args`, `open` targets, or `copy` text.
+
+For example, a script using `jq` can read `printf '%s' "$SPOTLITE_CONFIG" | jq -r '.organization'`.
+The GitHub example demonstrates an organization filter and result limit.
+
+Configuration is stored in `~/Library/Application Support/Spotlite/PluginSettings/<id>.json`,
+separate from plugin code and plugin-owned data. It survives disabling, replacement, removal,
+and reinstallation. Saving drops obsolete keys. Settings are ordinary values stored on disk;
+secret fields and Keychain integration are not supported. The JSON object is limited to 64 KB.
+
+Changes apply to the next invocation. An already-running process keeps its original
+snapshot. Values are read at first use, on Reload, and after a configuration change;
+there is no background watcher, polling, or configuration I/O while typing a root query.
 
 ## Actions
 
@@ -73,11 +133,16 @@ last argument. The working directory is the plugin's folder. Environment:
 | `SPOTLITE_PLUGIN_DIR` | The plugin's folder |
 | `SPOTLITE_PLUGIN_DATA` | A folder for the plugin's own state; it exists, and survives reinstalling |
 | `SPOTLITE_PLUGIN_ID` | The manifest's id |
+| `SPOTLITE_CONFIG` | Effective configuration as a JSON object, with defaults applied; `{}` when no fields are declared |
 | `PATH` | Spotlite's, plus `/opt/homebrew/bin`, `/opt/homebrew/sbin` and `/usr/local/bin` |
 
 A non-zero exit is a failure; the first line on standard error is shown. A run that
 exceeds the timeout, or a search superseded by newer typing, is terminated. Redirect the
 output of anything left running in the background (`cmd >/dev/null 2>&1 &`).
+
+Leaving a list or search cancels its pending retrieval. An explicit `run` action
+continues to completion or timeout, including its copy/open/toast response. A late
+`keepOpen` response cannot replace rows after leaving its level or starting a newer action.
 
 ## Response
 

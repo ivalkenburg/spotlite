@@ -65,6 +65,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
         set { model.onPluginsChanged = newValue }
     }
 
+    var onPluginConfigurationChanged: (() -> Void)? {
+        get { model.onPluginConfigurationChanged }
+        set { model.onPluginConfigurationChanged = newValue }
+    }
+
+    func configurePlugin(id: String) {
+        select(.plugins)
+        plugins.configure(pluginID: id)
+    }
+
     init(preferences: Preferences, library: AppLibrary) {
         model = SettingsModel(preferences: preferences, library: library)
         general = GeneralSettingsViewController(model: model)
