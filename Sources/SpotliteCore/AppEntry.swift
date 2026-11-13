@@ -11,6 +11,9 @@ public enum EntryKind: UInt8, Codable, Sendable {
     /// A folder, file or web address the user added in Settings. Ranks like an app: the
     /// user created it to be found.
     case link
+    /// A command an installed plugin contributes. Ranks like an app: the user
+    /// installed it to be found.
+    case plugin
 }
 
 /// The persisted shape of an indexed app. Only these fields are cached; every derived
@@ -82,7 +85,7 @@ public struct AppEntry: Sendable, Hashable {
         // A command or link is identified by its own id, not its target: a link to
         // Safari.app is not the Safari app, and two links may open the same folder.
         switch kind {
-        case .command, .link: instanceID = bundleID ?? url.absoluteString
+        case .command, .link, .plugin: instanceID = bundleID ?? url.absoluteString
         case .app, .settingsPane: instanceID = AppEntry.standardizedPath(url)
         }
         id = bundleID ?? instanceID

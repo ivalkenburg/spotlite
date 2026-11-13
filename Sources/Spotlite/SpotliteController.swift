@@ -56,6 +56,21 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         if case .argument(let link) = navigation.scope { return link }
         return nil
     }
+    private let plugins = PluginHost.shared
+    private var pluginScope: PluginScope? {
+        if case .plugin(let scope) = navigation.scope { return scope }
+        return nil
+    }
+    /// Rows of the plugin level on screen, with a row that stands in while they load,
+    /// fail to, or turn out empty.
+    private var pluginList = PluginList.empty
+    private var pluginStatus: PluginItem?
+    private var pluginRun: PluginRun?
+    /// Bumped whenever the rows on screen stop being wanted, so a late answer is dropped.
+    private var pluginGeneration = 0
+    private var pluginDebounce: DispatchWorkItem?
+    /// The row to return to once a parent level's list has loaded again.
+    private var pluginPendingSelection: (id: String, style: Selection)?
     /// The query before the latest edit, to tell typing from deleting.
     private var lastQuery = ""
     /// The query at the last close, offered back on a quick reopen.
@@ -391,8 +406,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     private func rebuildCorpus() {
+        // A plugin command's keyword finds it until the user gives it an alias of their own.
+        let aliases = plugins.defaultAliases.merging(preferences.aliases) { _, chosen in chosen }
         corpus = SearchCorpus(entries: library.entries,
-                              aliases: AliasIndex(aliases: preferences.aliases),
+                              aliases: AliasIndex(aliases: aliases),
                               hiddenBundleIDs: preferences.hiddenBundleIDs,
                               includeSettingsPanes: preferences.showSystemSettings,
                               includeCommands: preferences.showSystemCommands)
@@ -448,7 +465,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// Scripted dev runs press Return on utilities; they must not train the real history.
     private let recordsUtilityUse: Bool = {
         let environment = ProcessInfo.processInfo.environment
-        return ["FRAMES", "SEQUENCE", "MENU", "COMPLETION", "UTILITIES"].allSatisfy {
+        return ["FRAMES", "SEQUENCE", "MENU", "COMPLETION", "UTILITIES", "PLUGINS"].allSatisfy {
             environment["SPOTLITE_DEV_\($0)"] != "1"
         }
     }()
@@ -482,6 +499,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         // not, so a run of Backspaces keeps the bare query, as in Spotlight.
         if query.count > lastQuery.count || query.isEmpty { selection = .topHit }
         lastQuery = query
+        if pluginScope?.source.isSearch == true { searchPlugin(immediately: false) }
         updateMatches(for: query)
     }
 
@@ -535,6 +553,14 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         let state = caffeine.state
         switch navigation.scope {
         case .argument: return []
+        case .plugin(let scope):
+            guard let plugin = plugins.plugin(id: scope.pluginID) else { return [] }
+            let rows = scope.source.isSearch ? pluginList.items : pluginList.search(query, matcher: matcher)
+            if pluginList.items.isEmpty, let pluginStatus {
+                return [.plugin(pluginStatus, PluginRowContext(plugin: plugin, completes: false))]
+            }
+            let context = PluginRowContext(plugin: plugin, completes: !scope.source.isSearch)
+            return rows.map { .plugin($0, context) }
         case .menu(let menu):
             if let utility = SearchUtility(rawValue: menu.id), preferences.hiddenUtilities.contains(utility) {
                 return []
@@ -659,6 +685,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                 enterScope(.menu(submenu))
             } else if case .app(let match) = items[cursor], match.entry.template != nil {
                 enterArgument(for: cursor)
+            } else if entersPluginScope(items[cursor]) {
+                launch(at: cursor)
             }
             return true
         case #selector(NSResponder.insertBacktab(_:)):
@@ -780,6 +808,15 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             guard let url = engine.url(for: query) else { return }
             NSWorkspace.shared.open(url)
 
+        case .plugin(let item, let context):
+            performPlugin(item.action, plugin: context.plugin, title: item.title, icon: item.icon,
+                          historyID: nil)
+
+        case .app(let match) where match.entry.kind == .plugin:
+            guard let (plugin, command) = plugins.command(forEntryID: match.entry.id) else { return }
+            performPlugin(command.action, plugin: plugin, title: command.title, icon: command.icon,
+                          historyID: match.entry.id)
+
         case .app(let match) where match.entry.kind == .settingsPane:
             hide()
             openSettingsPane(match.entry)
@@ -847,6 +884,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         updateScopeChip()
         setQuery("")
         selection = .topHit
+        loadPluginScope()
         updateMatches(for: "")
     }
 
@@ -855,7 +893,11 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         updateScopeChip()
         setQuery(parent.query)
         selection = .topHit
-        updateMatches(for: parent.query, selecting: parent.selectedID.map { ($0, parent.selection) })
+        loadPluginScope()
+        let returning = parent.selectedID.map { (id: $0, style: parent.selection) }
+        // A list that is still loading has no row to return to yet.
+        if pluginRun != nil { pluginPendingSelection = returning }
+        updateMatches(for: parent.query, selecting: returning)
     }
 
     private func setQuery(_ query: String) {
@@ -873,12 +915,191 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         case .argument(let link):
             let url = ResultItem.iconURL(for: link)
             bar.showChip(title: link.name, icon: url == nil ? ResultItem.linkIcon : nil, iconURL: url)
+        case .plugin(let scope):
+            let icon = plugins.plugin(id: scope.pluginID).map { PluginHost.icon(scope.icon, in: $0) }
+                ?? .symbol(PluginHost.fallbackSymbol)
+            switch icon {
+            case .symbol: bar.showChip(title: scope.title, icon: ResultItem.pluginImage(icon))
+            case .file(let url): bar.showChip(title: scope.title, icon: nil, iconURL: url)
+            }
         }
     }
 
     private func resetNavigation() {
         navigation.reset()
         bar.hideChip()
+        loadPluginScope()
+    }
+
+    // MARK: - Plugins
+
+    private func entersPluginScope(_ item: ResultItem) -> Bool {
+        switch item {
+        case .plugin(let item, _): return item.action?.entersScope == true
+        case .app(let match) where match.entry.kind == .plugin:
+            return plugins.command(forEntryID: match.entry.id)?.command.action.entersScope == true
+        default: return false
+        }
+    }
+
+    /// `historyID` is a root command's entry id; rows inside a plugin learn no history.
+    private func performPlugin(_ action: PluginAction?, plugin: InstalledPlugin, title: String,
+                               icon: String?, historyID: String?) {
+        // A row without an action only informs.
+        guard let action else { return }
+        if let historyID { recordUtilityUse(historyID) }
+        switch action {
+        case .open(let target):
+            hide()
+            guard let url = PluginAction.url(for: target) else {
+                NSSound.beep()
+                return
+            }
+            NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                guard error != nil else { return }
+                Task { @MainActor in NSSound.beep() }
+            }
+        case .copy(let text):
+            toasts.copy(text, position: preferences.toastPosition, on: panel.screen)
+            hide()
+        case .run(let args, let keepOpen):
+            runPlugin(plugin, arguments: args, keepOpen: keepOpen)
+        case .list, .search, .menu:
+            guard let source = PluginSource(action) else { return }
+            enterScope(.plugin(PluginScope(pluginID: plugin.id, title: title, icon: icon, source: source)))
+        }
+    }
+
+    /// Runs a plugin's action and applies what it answers: a copy, an address to open,
+    /// a toast, new looks for its commands, or rows for the level that stayed open.
+    private func runPlugin(_ plugin: InstalledPlugin, arguments: [String], keepOpen: Bool) {
+        let query = field.stringValue
+        let screen = panel.screen
+        let scope = pluginScope
+        if !keepOpen { hide() }
+        plugins.run(plugin, arguments: arguments, query: query) { [weak self] result in
+            guard let self else { return }
+            let position = self.preferences.toastPosition
+            switch result {
+            case .failure(let error):
+                self.toasts.show(.pluginFailure(error), position: position, on: screen)
+            case .success(let response):
+                self.plugins.apply(response.update, from: plugin)
+                if let text = response.copy { self.toasts.copy(text, position: position, on: screen) }
+                if let target = response.open, let url = PluginAction.url(for: target) {
+                    NSWorkspace.shared.open(url)
+                }
+                if let toast = response.toast {
+                    self.toasts.show(ToastMessage(toast), position: position, on: screen)
+                }
+                guard self.panel.isVisible, !self.isDismissing else { return }
+                if keepOpen, let scope, scope == self.pluginScope {
+                    if let items = response.items, !scope.source.isSearch {
+                        self.showPluginItems(items)
+                    } else {
+                        self.loadPluginScope(keepingRows: true)
+                    }
+                }
+                // A command's new look shows without waiting for the next keystroke.
+                self.refreshMatches()
+            }
+        }
+    }
+
+    /// Prepares the rows of the level just entered or returned to; outside a plugin
+    /// level, drops whatever one left behind.
+    private func loadPluginScope(keepingRows: Bool = false) {
+        cancelPluginWork()
+        if !keepingRows {
+            pluginList = .empty
+            pluginStatus = nil
+        }
+        guard let scope = pluginScope else { return }
+        switch scope.source {
+        case .items(let items): pluginList = PluginList(items: items)
+        case .list(let args): fetchPluginItems(scope, arguments: args, query: "")
+        case .search: searchPlugin(immediately: true)
+        }
+    }
+
+    private func cancelPluginWork() {
+        pluginGeneration &+= 1
+        pluginDebounce?.cancel()
+        pluginDebounce = nil
+        pluginRun?.cancel()
+        pluginRun = nil
+        pluginPendingSelection = nil
+    }
+
+    /// Asks a search level for rows once typing pauses. One-shot: nothing repeats.
+    private func searchPlugin(immediately: Bool) {
+        guard let scope = pluginScope, case .search(let args, let debounce, let minimum) = scope.source else { return }
+        cancelPluginWork()
+        let query = String(field.stringValue.trimmingCharacters(in: .whitespaces).prefix(Self.maxPluginQuery))
+        guard query.count >= minimum else {
+            pluginList = .empty
+            pluginStatus = nil
+            return
+        }
+        guard !immediately, debounce > 0 else {
+            fetchPluginItems(scope, arguments: args + [query], query: query)
+            return
+        }
+        let work = DispatchWorkItem { [weak self] in
+            self?.fetchPluginItems(scope, arguments: args + [query], query: query)
+        }
+        pluginDebounce = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(debounce), execute: work)
+    }
+
+    private static let maxPluginQuery = 512
+    private static let pluginLoadingDelay = DispatchTimeInterval.milliseconds(300)
+
+    private func fetchPluginItems(_ scope: PluginScope, arguments: [String], query: String) {
+        guard let plugin = plugins.plugin(id: scope.pluginID) else { return }
+        pluginGeneration &+= 1
+        let generation = pluginGeneration
+        pluginRun?.cancel()
+        pluginRun = plugins.run(plugin, arguments: arguments, query: query) { [weak self] result in
+            guard let self, self.pluginGeneration == generation else { return }
+            self.pluginRun = nil
+            switch result {
+            case .success(let response):
+                self.plugins.apply(response.update, from: plugin)
+                if let toast = response.toast {
+                    self.toasts.show(ToastMessage(toast), position: self.preferences.toastPosition,
+                                     on: self.panel.screen)
+                }
+                self.showPluginItems(response.items ?? [])
+            case .failure(let error):
+                self.pluginList = .empty
+                self.pluginStatus = PluginItem(title: error.message, icon: "exclamationmark.triangle")
+                self.refreshPluginRows()
+            }
+        }
+        // A fast plugin answers before this fires, so its list never flashes a placeholder.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pluginLoadingDelay) { [weak self] in
+            guard let self, self.pluginGeneration == generation, self.pluginRun != nil,
+                  self.pluginList.items.isEmpty else { return }
+            self.pluginStatus = PluginItem(title: "Loading…", icon: "ellipsis")
+            self.refreshPluginRows()
+        }
+    }
+
+    private func showPluginItems(_ items: [PluginItem]) {
+        pluginList = PluginList(items: items)
+        pluginStatus = items.isEmpty ? PluginItem(title: "No results", icon: "magnifyingglass") : nil
+        refreshPluginRows()
+    }
+
+    private func refreshPluginRows() {
+        guard panel.isVisible, !isDismissing else { return }
+        if let pending = pluginPendingSelection {
+            pluginPendingSelection = nil
+            updateMatches(for: field.stringValue, selecting: pending)
+        } else {
+            refreshMatches()
+        }
     }
 
     // MARK: - Argument
@@ -950,6 +1171,15 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     private func copyPath() {
         let url: URL
+        if items.indices.contains(cursor), case .plugin(let item, _) = items[cursor] {
+            guard case .open(let target) = item.action else {
+                NSSound.beep()
+                return
+            }
+            toasts.copy(target, position: preferences.toastPosition, on: panel.screen)
+            hide()
+            return
+        }
         if argument != nil {
             guard let filled = argumentURL else {
                 NSSound.beep()
@@ -1807,6 +2037,107 @@ extension SpotliteController {
         let pickerFrame = picker.convert(picker.bounds, to: page)
         precondition(picker.titleOfSelectedItem == "Clear query" && page.bounds.contains(pickerFrame))
         print("DEV settings: Search page=\(page.frame) back-query picker=\(pickerFrame)")
+    }
+
+    /// SPOTLITE_DEV_PLUGINS=1 with SPOTLITE_DEV_PLUGINS_DIR=examples/plugins: finds the
+    /// example Caffeinate plugin by keyword, loads and filters its list, starts and stops a
+    /// session through it, and runs one GitHub search when the network answers.
+    func runDevPluginChecks() async throws {
+        func check(_ condition: @autoclosure () -> Bool, _ message: @autoclosure () -> String) throws {
+            guard condition() else {
+                throw NSError(domain: "SpotlitePluginChecks", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: message()])
+            }
+        }
+        func settle(_ milliseconds: Int = 500) async { try? await Task.sleep(for: .milliseconds(milliseconds)) }
+        func pluginRow(_ query: String) -> Int? {
+            setQuery(query)
+            updateMatches(for: query)
+            return items.firstIndex {
+                if case .app(let match) = $0 { return match.entry.kind == .plugin }
+                return false
+            }
+        }
+        let savedPreferences = preferences
+        defer {
+            preferencesDidChange(savedPreferences)
+            toasts.dismiss()
+            panel.orderOut(nil)
+        }
+        preferences.disabledPlugins = []
+        preferences.hiddenBundleIDs = []
+        preferences.backNavigationBehavior = .restoreQuery
+        library.extras = savedPreferences.extraEntries + plugins.entries(disabled: [])
+
+        show()
+        // The keyword is an alias: it finds a command whose title does not contain it.
+        let caffeinate = try { () throws -> Int in
+            guard let row = pluginRow("caffeine") else {
+                try check(false, "No plugin command for its keyword: \(items.map(\.title))")
+                return 0
+            }
+            return row
+        }()
+        try check(items[caffeinate].title == "Caffeinate", "Keyword found \(items[caffeinate].title)")
+        try check(items[caffeinate].hints(modifiers: [], running: false).first?.key == "⇥", "Command lacks the Tab hint")
+        select(caffeinate, as: .navigated)
+        dumpFrames("plugin-command")
+
+        launch(at: caffeinate)
+        try check(pluginScope?.title == "Caffeinate", "Return did not enter the plugin level")
+        await settle()
+        try check(items.map(\.title).suffix(5) == ["Until turned off", "15 minutes", "30 minutes", "1 hour", "2 hours"],
+                  "Unexpected list: \(items.map(\.title))")
+        dumpFrames("plugin-list")
+        try? await SettingsForm.captureWindow(panel, name: "plugin-list")
+        setQuery("hour")
+        updateMatches(for: "hour")
+        try check(items.map(\.title) == ["1 hour", "2 hours"], "Filter gave \(items.map(\.title))")
+        print("DEV plugins: keyword, level and local filtering passed")
+
+        // Start a session, then find Turn Off first and the command's new look at the root.
+        setQuery("15")
+        updateMatches(for: "15")
+        launch(at: 0)
+        try check(isDismissing, "A run action must close the panel")
+        await settle(800)
+        show()
+        guard let active = pluginRow("caffeine") else { return try check(false, "Command vanished") }
+        let look = items[active].hints(modifiers: [], running: false).first?.text ?? ""
+        try check(look.hasPrefix("Active until"), "Command did not take the plugin's look: \(look)")
+        launch(at: active)
+        await settle()
+        try check(items.first?.title == "Turn Off", "Active list starts with \(items.first?.title ?? "nothing")")
+        launch(at: 0)
+        await settle(800)
+        show()
+        guard let stopped = pluginRow("caffeine") else { return try check(false, "Command vanished") }
+        try check(items[stopped].hints(modifiers: [], running: false).first?.text == "Caffeinate",
+                  "Command kept its active look")
+        print("DEV plugins: run actions, toasts and command looks passed")
+
+        // Back navigation returns to the root query with the command selected.
+        launch(at: stopped)
+        await settle()
+        leaveScope()
+        try check(pluginScope == nil && field.stringValue == "caffeine" && pluginList.items.isEmpty,
+                  "Leaving the level did not restore the root")
+
+        guard let github = pluginRow("github") else { return try check(false, "No GitHub command") }
+        launch(at: github)
+        try check(pluginScope?.source.isSearch == true && items.isEmpty, "Search level should start empty")
+        let editor = field.currentEditor() as! NSTextView
+        editor.insertText("swift", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try check(items.isEmpty && pluginDebounce != nil, "Typing must wait out the debounce")
+        await settle(4_000)
+        print("DEV plugins: GitHub search returned \(items.count) rows; first: \(items.first?.title ?? "none")")
+        try check(!bar.isShowingCompletion, "Search rows must not complete the query")
+        dumpFrames("plugin-search")
+        try? await SettingsForm.captureWindow(panel, name: "plugin-search")
+        hide()
+        await settle(300)
+        try check(pluginRun == nil && pluginList.items.isEmpty, "Closing must drop plugin work")
+        print("DEV plugins: all checks passed")
     }
 
     /// Dev harness: show -> type -> clear, logging the panel frame at each step,

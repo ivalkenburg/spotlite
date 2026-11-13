@@ -14,6 +14,8 @@ enum ResultItem {
     case caffeinate(state: CaffeineState)
     case menuItem(SearchMenuItem, state: CaffeineState)
     case webSearch(query: String, engine: WebSearchEngine)
+    /// A row inside a plugin's level. A plugin's root commands are `.app` entries.
+    case plugin(PluginItem, PluginRowContext)
 
     init(_ result: SearchResult, caffeine: CaffeineState) {
         switch result {
@@ -39,6 +41,7 @@ enum ResultItem {
         case .caffeinate: return "caffeinate"
         case .menuItem(let item, _): return item.id
         case .webSearch: return "webSearch"
+        case .plugin(let item, _): return "plugin-item." + item.id
         }
     }
 
@@ -52,6 +55,7 @@ enum ResultItem {
         case .caffeinate: return "Caffeinate"
         case .menuItem(let item, _): return item.title
         case .webSearch(let query, let engine): return "Search \(engine.name) for “\(query)”"
+        case .plugin(let item, _): return item.title
         }
     }
 
@@ -88,7 +92,18 @@ enum ResultItem {
             if case .generateUUID = item.action { return "Copy" }
             return item.action == nil ? "Open" : "Run"
         case .app(let match) where match.entry.kind == .command: return "Run"
+        case .app(let match) where match.entry.kind == .plugin:
+            return ResultItem.verb(PluginHost.shared.command(forEntryID: match.entry.id)?.command.action)
+        case .plugin(let item, _): return ResultItem.verb(item.action)
         default: return "Open"
+        }
+    }
+
+    private static func verb(_ action: PluginAction?) -> String {
+        switch action {
+        case .copy: "Copy"
+        case .run: "Run"
+        default: "Open"
         }
     }
 
@@ -99,6 +114,8 @@ enum ResultItem {
         case .conversion(_, let result): return " = " + result
         // The title repeats the query, so the pill names only the engine.
         case .webSearch(_, let engine): return " – Search \(engine.name)"
+        // A search's rows answer the query; a row without an action completes nothing.
+        case .plugin(let item, let context) where !context.completes || item.action == nil: return ""
         case .app(let match) where match.entry.kind == .app:
             return Completion.suffix(query: query, title: title, action: action, mode: appNameCompletion)
         default: return Completion.suffix(query: query, title: title, action: action)
@@ -125,11 +142,22 @@ enum ResultItem {
         if case .menuItem(let item, _) = self, case .generateUUID = item.action {
             return [Hint(text: "Copy UUID", key: "↩")]
         }
+        if case .plugin(let item, _) = self {
+            if modifiers.contains(.option), case .open = item.action {
+                return [Hint(text: "Copy Link", key: "⌥↩")]
+            }
+            return ResultItem.pluginHints(subtitle: item.subtitle, action: item.action)
+        }
         guard case .app(let match) = self else { return [] }
         let entry = match.entry
         switch entry.kind {
         case .app:
             break
+        case .plugin:
+            if modifiers.contains(.command) { return [Hint(text: "Hide", key: "⌘⌫")] }
+            return ResultItem.pluginHints(
+                subtitle: PluginHost.shared.subtitle(forEntryID: entry.id),
+                action: PluginHost.shared.command(forEntryID: entry.id)?.command.action)
         // A pane or a command has no file worth revealing or copying and nothing to quit.
         case .settingsPane, .command:
             if modifiers.contains(.command) { return [Hint(text: "Hide", key: "⌘⌫")] }
@@ -160,6 +188,13 @@ enum ResultItem {
                      key: nil)]
     }
 
+    /// A plugin row's subtitle, and the key that opens its next level.
+    private static func pluginHints(subtitle: String?, action: PluginAction?) -> [Hint] {
+        let key = action?.entersScope == true ? "⇥" : nil
+        let text = subtitle ?? ""
+        return text.isEmpty && key == nil ? [] : [Hint(text: text, key: key)]
+    }
+
     /// Running instances of this row's app, matched by bundle location rather than
     /// bundle ID so two copies of the same app are told apart.
     var runningApplications: [NSRunningApplication] {
@@ -184,6 +219,9 @@ enum ResultItem {
         switch self {
         case .app(let match): return ResultItem.iconURL(for: match.entry)
         case .webSearch: return ResultItem.handler(for: ResultItem.webURL)
+        case .plugin(let item, let context):
+            if case .file(let url) = PluginHost.icon(item.icon, in: context.plugin) { return url }
+            return nil
         default: return nil
         }
     }
@@ -193,6 +231,9 @@ enum ResultItem {
     static func iconURL(for entry: AppEntry) -> URL? {
         switch entry.kind {
         case .command: return nil
+        case .plugin:
+            if case .file(let url) = PluginHost.shared.icon(forEntryID: entry.id) { return url }
+            return nil
         case .link where !entry.url.isFileURL: return handler(for: entry.url)
         default: return entry.url
         }
@@ -203,6 +244,10 @@ enum ResultItem {
         switch self {
         case .app(let match) where match.entry.kind == .command:
             return ResultItem.commandIcon(match.entry)
+        case .app(let match) where match.entry.kind == .plugin:
+            return ResultItem.pluginImage(PluginHost.shared.icon(forEntryID: match.entry.id))
+        case .plugin(let item, let context):
+            return ResultItem.pluginImage(PluginHost.icon(item.icon, in: context.plugin))
         case .app:
             // Only a link whose scheme no app handles has no file to take an icon from.
             guard let url = iconURL else { return ResultItem.linkIcon }
@@ -229,6 +274,15 @@ enum ResultItem {
         case .settings: return NSApp.applicationIconImage
         case .app(let match) where match.entry.kind == .settingsPane: return ResultItem.systemSettingsIcon
         default: return immediateIcon
+        }
+    }
+
+    /// A plugin's symbol, or its file's icon once that has been loaded. An unknown
+    /// symbol name falls back rather than leaving the row without an icon.
+    static func pluginImage(_ icon: PluginIcon) -> NSImage? {
+        switch icon {
+        case .symbol(let name): return symbol(name) ?? symbol(PluginHost.fallbackSymbol)
+        case .file(let url): return IconCache.shared.cached(for: url)
         }
     }
 

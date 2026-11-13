@@ -15,7 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var library: AppLibrary {
         if let libraryInstance { return libraryInstance }
         let created = AppLibrary(directories: preferences.applicationDirectories)
-        created.extras = preferences.extraEntries
+        created.extras = extraEntries
         created.onChange = { [weak self] apps, scanned in
             guard let self else { return }
             if scanned { IconCache.shared.invalidateAll() }
@@ -24,6 +24,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         libraryInstance = created
         return created
+    }
+    /// Spotlite's commands, the user's links and the commands of enabled plugins.
+    private var extraEntries: [AppEntry] {
+        preferences.extraEntries + PluginHost.shared.entries(disabled: preferences.disabledPlugins)
     }
     private var controllerInstance: SpotliteController?
 
@@ -122,6 +126,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     exit(0)
                 } catch {
                     print("DEV utilities failed: \(error)")
+                    exit(1)
+                }
+            }
+        }
+        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_PLUGINS"] == "1" {
+            Task { @MainActor in
+                do {
+                    try await self.controller.runDevPluginChecks()
+                    exit(0)
+                } catch {
+                    print("DEV plugins failed: \(error.localizedDescription)")
                     exit(1)
                 }
             }
@@ -335,6 +350,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             controller.onHotKeyChange = { [weak self] code, modifiers in
                 self?.rebindHotKey(code: code, modifiers: modifiers) ?? false
             }
+            controller.onPluginsChanged = { [weak self] in
+                guard let self else { return }
+                // A replaced plugin may bring a new image at an old path.
+                IconCache.shared.invalidateAll()
+                self.library.extras = self.extraEntries
+            }
             controller.onToast = { [weak self] message in
                 guard let self else { return }
                 self.toasts.show(message, position: self.preferences.toastPosition)
@@ -350,11 +371,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func adoptPreferences(_ prefs: Preferences, forward: (Preferences) -> Void) {
         let enabledStatusItem = !preferences.showMenuBarIcon && prefs.showMenuBarIcon
         let directoriesChanged = preferences.applicationDirectories != prefs.applicationDirectories
-        let linksChanged = preferences.links != prefs.links
+        let extrasChanged = preferences.links != prefs.links
+            || preferences.disabledPlugins != prefs.disabledPlugins
         preferences = prefs
         toasts.showConfirmationMessages = prefs.showConfirmationMessages
         if directoriesChanged { libraryInstance?.setDirectories(prefs.applicationDirectories) }
-        if linksChanged { library.extras = prefs.extraEntries }
+        if extrasChanged { library.extras = extraEntries }
         applyTheme()
         forward(prefs)
         if enabledStatusItem { caffeine.refresh() }

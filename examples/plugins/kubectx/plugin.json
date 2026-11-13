@@ -1,0 +1,16 @@
+{
+  "id": "kubectx",
+  "name": "Kube Context",
+  "version": "1.0.0",
+  "description": "Switch the current kubectl context.",
+  "executable": "kubectx.sh",
+  "commands": [
+    {
+      "id": "switch",
+      "title": "Switch Kube Context",
+      "keyword": "kubectx",
+      "icon": "shippingbox",
+      "action": { "type": "list" }
+    }
+  ]
+}

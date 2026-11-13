@@ -12,6 +12,8 @@ final class SettingsModel {
     var onChange: ((Preferences) -> Void)?
     var onHotKeyChange: ((UInt32, UInt32) -> Bool)?
     var onToast: ((ToastMessage) -> Void)?
+    /// Called after a plugin is installed, removed or reloaded.
+    var onPluginsChanged: (() -> Void)?
 
     init(preferences: Preferences, library: AppLibrary,
          savePreferences: @escaping (Preferences) -> Void = { Storage.save($0) }) {

@@ -83,6 +83,7 @@ final class SettingsRowView: NSView, NSTextFieldDelegate {
         case .settingsPane: " (System Settings)"
         case .command: " (Command)"
         case .link: " (Link)"
+        case .plugin: " (Plugin)"
         }
         label.stringValue = showsKind ? entry.name + suffix : entry.name
         label.textColor = hidden ? .tertiaryLabelColor : .labelColor
@@ -99,6 +100,14 @@ final class SettingsRowView: NSView, NSTextFieldDelegate {
             pendingIconURL = nil
             iconView.image = ResultItem.commandIcon(entry)
             return
+        }
+        if entry.kind == .plugin {
+            let icon = PluginHost.shared.icon(forEntryID: entry.id)
+            if case .symbol = icon {
+                pendingIconURL = nil
+                iconView.image = ResultItem.pluginImage(icon)
+                return
+            }
         }
         guard let iconURL = ResultItem.iconURL(for: entry) else {
             pendingIconURL = nil

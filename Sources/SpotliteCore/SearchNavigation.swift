@@ -3,6 +3,7 @@ public enum SearchScope: Sendable {
     case root
     case menu(SearchMenu)
     case argument(AppEntry)
+    case plugin(PluginScope)
 }
 
 public enum SearchSelection: Sendable {

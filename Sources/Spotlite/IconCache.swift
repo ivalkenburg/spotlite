@@ -1,4 +1,5 @@
 import AppKit
+import SpotliteCore
 
 /// Icons are loaded only for rows that are actually on screen, and never on the main
 /// thread: fetching plus a first rasterise costs roughly 670µs per icon, which would be
@@ -52,7 +53,11 @@ final class IconCache {
         queue.async {
             // Resolved first: an app in /Applications that is a symlink (Safari, into its
             // cryptex) would otherwise carry Finder's alias arrow, which Spotlight omits.
-            let icon = NSWorkspace.shared.icon(forFile: (key as NSString).resolvingSymlinksInPath)
+            let path = (key as NSString).resolvingSymlinksInPath
+            // A plugin's image file is the icon itself; anything else shows its Finder icon.
+            let image = PluginIcon.imageExtensions.contains((path as NSString).pathExtension.lowercased())
+                ? NSImage(contentsOfFile: path) : nil
+            let icon = image ?? NSWorkspace.shared.icon(forFile: path)
             let flattened = IconCache.rasterize(icon, to: Metrics.iconSize)
             Task { @MainActor in
                 guard self.generation == requestedGeneration else { return }

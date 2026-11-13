@@ -33,7 +33,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         case queryRetention, backNavigationBehavior, showSystemSettings
         case showSystemCommands, showRecentApps, showRunningIndicator, showWebSearch, webSearchEngine, links
         case visibleRows, applicationDirectories, appNameCompletion, hiddenUtilities, toastPosition
-        case webSearchMode, showConfirmationMessages
+        case webSearchMode, showConfirmationMessages, disabledPlugins
     }
 
     /// Ordered search roots. Empty means no application locations; panes remain independent.
@@ -42,6 +42,9 @@ public struct Preferences: Codable, Sendable, Equatable {
     /// Utilities hidden from search; independent of indexed apps and running activity.
     public var hiddenUtilities: Set<SearchUtility>
     public var hiddenBundleIDs: Set<String>
+    /// Ids of installed plugins that are switched off. Their commands leave search;
+    /// the plugin stays installed.
+    public var disabledPlugins: Set<String>
     /// Bundle ID to a short name the user types instead, e.g. "ps" for Photoshop.
     public var aliases: [String: String]
     public var panelScreen: PanelScreen
@@ -109,6 +112,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         hiddenUtilities = Set((try? c.decodeIfPresent([Lossy<SearchUtility>].self,
                                                       forKey: .hiddenUtilities))?.compactMap(\.value) ?? [])
         hiddenBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .hiddenBundleIDs) ?? []
+        disabledPlugins = (try? c.decodeIfPresent(Set<String>.self, forKey: .disabledPlugins)) ?? []
         aliases = try c.decodeIfPresent([String: String].self, forKey: .aliases) ?? [:]
         panelScreen = try c.decodeIfPresent(PanelScreen.self, forKey: .panelScreen) ?? .followPointer
         toastPosition = (try? c.decodeIfPresent(ToastPosition.self, forKey: .toastPosition)) ?? .bottomCenter
@@ -155,6 +159,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         try c.encode(applicationDirectories, forKey: .applicationDirectories)
         try c.encode(hiddenUtilities, forKey: .hiddenUtilities)
         try c.encode(hiddenBundleIDs, forKey: .hiddenBundleIDs)
+        try c.encode(disabledPlugins, forKey: .disabledPlugins)
         try c.encode(aliases, forKey: .aliases)
         try c.encode(panelScreen, forKey: .panelScreen)
         try c.encode(toastPosition, forKey: .toastPosition)
@@ -185,6 +190,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         applicationDirectories: [String] = AppIndex.searchDirectories.map(\.path),
         hiddenBundleIDs: Set<String> = [],
         hiddenUtilities: Set<SearchUtility> = [],
+        disabledPlugins: Set<String> = [],
         aliases: [String: String] = [:],
         panelScreen: PanelScreen = .followPointer,
         toastPosition: ToastPosition = .bottomCenter,
@@ -211,6 +217,7 @@ public struct Preferences: Codable, Sendable, Equatable {
         self.applicationDirectories = AppIndex.normalizedDirectories(applicationDirectories).map(\.path)
         self.hiddenBundleIDs = hiddenBundleIDs
         self.hiddenUtilities = hiddenUtilities
+        self.disabledPlugins = disabledPlugins
         self.aliases = aliases
         self.panelScreen = panelScreen
         self.toastPosition = toastPosition
@@ -257,7 +264,7 @@ public struct Preferences: Codable, Sendable, Equatable {
 }
 
 /// Decodes to nil instead of throwing, so one bad element doesn't fail its whole array.
-private struct Lossy<T: Decodable>: Decodable {
+struct Lossy<T: Decodable>: Decodable {
     let value: T?
     init(from decoder: Decoder) throws { value = try? T(from: decoder) }
 }

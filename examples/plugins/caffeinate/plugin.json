@@ -1,0 +1,16 @@
+{
+  "id": "caffeinate",
+  "name": "Caffeinate",
+  "version": "1.0.0",
+  "description": "Keep the display awake for a while, or until turned off.",
+  "executable": "caffeinate.sh",
+  "commands": [
+    {
+      "id": "caffeinate",
+      "title": "Caffeinate",
+      "keyword": "caffeine",
+      "icon": "cup.and.saucer",
+      "action": { "type": "list" }
+    }
+  ]
+}

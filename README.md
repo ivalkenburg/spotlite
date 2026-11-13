@@ -28,6 +28,7 @@ keystroke.
 - Hide apps you never launch with Command-Delete.
 - Optional frequently used apps list before you type, and a dot under apps that are running.
 - Caffeinate sessions that keep the display awake for 15 minutes, 30 minutes, one hour, two hours, or until turned off.
+- Plugins: add your own commands with a small script in any language. See [docs/plugins.md](docs/plugins.md).
 - The look of macOS 26 Spotlight, Liquid Glass included, in light and dark mode.
 
 ## Install

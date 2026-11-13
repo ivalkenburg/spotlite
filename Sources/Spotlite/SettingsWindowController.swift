@@ -8,7 +8,7 @@ import SpotliteCore
 final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate {
 
     private enum Tab: String, CaseIterable {
-        case general, appearance, search, items
+        case general, appearance, search, items, plugins
 
         var title: String {
             switch self {
@@ -16,6 +16,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
             case .appearance: "Appearance"
             case .search: "Search"
             case .items: "Items"
+            case .plugins: "Plugins"
             }
         }
 
@@ -25,6 +26,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
             case .appearance: "paintbrush"
             case .search: "magnifyingglass"
             case .items: "list.bullet"
+            case .plugins: "puzzlepiece.extension"
             }
         }
 
@@ -41,6 +43,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
     private let appearance: AppearanceSettingsViewController
     private let search: SearchSettingsViewController
     private let items: ItemsSettingsViewController
+    private let plugins: PluginsSettingsViewController
 
     var onChange: ((Preferences) -> Void)? {
         get { model.onChange }
@@ -57,12 +60,18 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
         set { model.onToast = newValue }
     }
 
+    var onPluginsChanged: (() -> Void)? {
+        get { model.onPluginsChanged }
+        set { model.onPluginsChanged = newValue }
+    }
+
     init(preferences: Preferences, library: AppLibrary) {
         model = SettingsModel(preferences: preferences, library: library)
         general = GeneralSettingsViewController(model: model)
         appearance = AppearanceSettingsViewController(model: model)
         search = SearchSettingsViewController(model: model)
         items = ItemsSettingsViewController(model: model)
+        plugins = PluginsSettingsViewController(model: model)
         super.init()
         general.onLayoutChange = { [weak self] in
             if self?.currentTab == .general { self?.fitWindow(animated: true) }
@@ -88,6 +97,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
     func preferencesDidChange(_ updated: Preferences) {
         model.preferences = updated
         items.reload()
+        plugins.reload()
         search.updateHistoryState()
     }
 
@@ -125,6 +135,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
         case .appearance: appearance
         case .search: search
         case .items: items
+        case .plugins: plugins
         }
     }
 
@@ -145,6 +156,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
         switch tab {
         case .general: general.updateLoginItemState()
         case .search: search.updateHistoryState()
+        case .plugins: plugins.reload()
         case .appearance, .items: break
         }
 
