@@ -122,6 +122,13 @@ A command and every row carry one action, which is what Return does.
 Tab also enters `menu`, `list` and `search`. Backspace on an empty query or Shift-Tab goes
 back. ⌥↩ on a row whose action is `open` copies its address.
 
+`list`, `search` and `menu` also take:
+
+| Key | |
+| --- | --- |
+| `emptyText` | Shown when the level has no rows: nothing came back, or typing filtered every row out. A `search` also shows it while the query is shorter than `minQuery`. Default: “No results”, and nothing below `minQuery`. Nothing shows while the first answer is still loading. |
+| `sort` | `list` and `menu` only. `false` keeps matches in the plugin's order; typing still narrows the rows. Default `true`, best match first. |
+
 ## Running
 
 The executable is called as `executable <args…>`, and for `search` with the query as the
@@ -151,7 +158,8 @@ One JSON object on standard output. Every key is optional and printing nothing i
 ```json
 {
   "items": [
-    { "id": "prod", "title": "prod", "subtitle": "Current", "icon": "checkmark.circle.fill",
+    { "id": "prod", "title": "prod", "subtitle": "Current", "accessory": "eu-west-1",
+      "keywords": ["production"], "icon": "checkmark.circle.fill",
       "action": { "type": "run", "args": ["use", "prod"] } }
   ],
   "toast": { "text": "Switched to prod", "symbol": "checkmark.circle", "style": "success" },
@@ -164,7 +172,12 @@ One JSON object on standard output. Every key is optional and printing nothing i
 ```
 
 - `items`: rows for `list` and `search`, at most 500. `title` is required; a row without an
-  `action` only informs. `subtitle` shows at the right of the selected row.
+  `action` only informs. `subtitle` shows at the right of the selected row. `accessory` is
+  short text at the right of every row, such as `"★ 1.2k"` or a date; on the selected row
+  the subtitle comes before it. It truncates before the title does. `keywords`, up to 8
+  strings, also find the row when typing filters it; a title match ranks above a
+  keyword-only one. The same keys work on `menu` items. A row whose keys have the wrong
+  type is skipped.
 - `toast`: a string, or an object. `"style":"failure"` shows even when confirmation
   messages are off.
 - `update`: changes how one of the plugin's commands looks in root results, until

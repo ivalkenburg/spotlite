@@ -20,7 +20,7 @@
       "title": "Search GitHub",
       "keyword": "github",
       "icon": "chevron.left.forwardslash.chevron.right",
-      "action": { "type": "search", "debounce": 350, "minQuery": 2 }
+      "action": { "type": "search", "debounce": 350, "minQuery": 2, "emptyText": "Type a repository name" }
     }
   ]
 }

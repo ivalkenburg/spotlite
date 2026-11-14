@@ -200,7 +200,7 @@ public enum PluginStore {
         switch action {
         case .run, .list, .search: true
         case .open, .copy: false
-        case .menu(let items): items.contains { $0.action.map(needsExecutable) ?? false }
+        case .menu(let items, _): items.contains { $0.action.map(needsExecutable) ?? false }
         }
     }
 

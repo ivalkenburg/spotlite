@@ -65,6 +65,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// fail to, or turn out empty.
     private var pluginList = PluginList.empty
     private var pluginStatus: PluginItem?
+    /// Whether rows have arrived for the level on screen. Until then an empty level is
+    /// waiting, and shows no empty text.
+    private var pluginLoaded = false
     private var pluginRun: PluginRun?
     /// Bumped whenever the rows on screen stop being wanted, so a late answer is dropped.
     private var pluginGeneration = 0
@@ -562,8 +565,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         case .plugin(let scope):
             guard let plugin = plugins.plugin(id: scope.pluginID) else { return [] }
             let rows = pluginList.matchingIndices(query, matcher: matcher)
-            if pluginList.items.isEmpty, let pluginStatus {
-                return [.plugin(pluginStatus, PluginRowContext(plugin: plugin, completes: false))]
+            // Loading or a failure first; then what the level says when it has no rows.
+            if rows.isEmpty, let status = pluginStatus
+                ?? scope.source.emptyText(query: query, loaded: pluginLoaded).map(Self.pluginEmptyRow) {
+                return [.plugin(status, PluginRowContext(plugin: plugin, completes: false))]
             }
             return rows.map { index in
                 .plugin(pluginList.items[index], PluginRowContext(plugin: plugin, completes: !scope.source.isSearch,
@@ -1026,11 +1031,14 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         if !keepingRows {
             pluginList = .empty
             pluginStatus = nil
+            pluginLoaded = false
         }
         guard let scope = pluginScope else { return }
         switch scope.source {
-        case .items(let items): pluginList = PluginList(items: items)
-        case .list(let args): fetchPluginItems(scope, arguments: args, query: "")
+        case .items(let items, let options):
+            pluginList = PluginList(items: items, sorts: options.sorts)
+            pluginLoaded = true
+        case .list(let args, _): fetchPluginItems(scope, arguments: args, query: "")
         case .search: searchPlugin(immediately: true)
         }
     }
@@ -1046,14 +1054,21 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     /// Asks a search level for rows once typing pauses. One-shot: nothing repeats.
     private func searchPlugin(immediately: Bool) {
-        guard let scope = pluginScope, case .search(let args, let debounce, let minimum) = scope.source else { return }
+        guard let scope = pluginScope, case .search(let args, let debounce, let minimum, let options) = scope.source else { return }
         cancelPluginWork()
         // Search rows answer one particular query. Keeping the previous answer
         // actionable during debounce could run it when Return follows new typing.
+        // An empty answer can stay until the next one: it does nothing, and dropping
+        // it would flash the empty bar on every keystroke.
+        pluginLoaded = pluginLoaded && pluginList.items.isEmpty && pluginStatus == nil
         pluginList = .empty
         pluginStatus = nil
         let query = String(field.stringValue.trimmingCharacters(in: .whitespaces).prefix(Self.maxPluginQuery))
-        guard query.count >= minimum else { return }
+        guard query.count >= minimum else {
+            // The plugin's text shows below the minimum, and can stay while the first answer loads.
+            pluginLoaded = options.emptyText != nil
+            return
+        }
         guard !immediately, debounce > 0 else {
             fetchPluginItems(scope, arguments: args + [query], query: query)
             return
@@ -1101,9 +1116,17 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     private func showPluginItems(_ items: [PluginItem]) {
-        pluginList = PluginList(items: items, filterLocally: pluginScope?.source.isSearch != true)
-        pluginStatus = items.isEmpty ? PluginItem(title: "No results", icon: "magnifyingglass") : nil
+        let source = pluginScope?.source
+        pluginList = PluginList(items: items, filterLocally: source?.isSearch != true,
+                                sorts: source?.options.sorts ?? true)
+        pluginStatus = nil
+        pluginLoaded = true
         refreshPluginRows()
+    }
+
+    /// Stands in for a level with no rows: nothing came back, or typing filtered every row out.
+    private static func pluginEmptyRow(_ text: String) -> PluginItem {
+        PluginItem(id: "spotlite.empty", title: text, icon: "magnifyingglass")
     }
 
     private func refreshPluginRows() {
@@ -2254,10 +2277,16 @@ extension SpotliteController {
                   "Unexpected list: \(items.map(\.title))")
         dumpFrames("plugin-list")
         try? await SettingsForm.captureWindow(panel, name: "plugin-list")
+        // "sort": false keeps the durations in order; "half hour" is a keyword of 30 minutes.
         setQuery("hour")
         updateMatches(for: "hour")
-        try check(items.map(\.title) == ["1 hour", "2 hours"], "Filter gave \(items.map(\.title))")
-        print("DEV plugins: keyword, level and local filtering passed")
+        try check(items.map(\.title) == ["30 minutes", "1 hour", "2 hours"], "Filter gave \(items.map(\.title))")
+        setQuery("zzzz")
+        updateMatches(for: "zzzz")
+        try check(items.map(\.title) == ["No such duration"] && items.first?.pluginAction == nil,
+                  "Filtered-out list showed \(items.map(\.title))")
+        dumpFrames("plugin-empty")
+        print("DEV plugins: keyword, level, unsorted filtering and empty text passed")
 
         // Start a session, then find Turn Off first and the command's new look at the root.
         setQuery("15")
@@ -2287,14 +2316,27 @@ extension SpotliteController {
         try check(pluginScope == nil && field.stringValue == "caffeine" && pluginList.items.isEmpty,
                   "Leaving the level did not restore the root")
 
+        try await runDevPluginRowChecks(pluginID: "caffeinate", check: check)
+        resetNavigation()
+        show()
         guard let github = pluginRow("github") else { return try check(false, "No GitHub command") }
         launch(at: github)
-        try check(pluginScope?.source.isSearch == true && items.isEmpty, "Search level should start empty")
+        let prompt = ["Type a repository name"]
+        try check(pluginScope?.source.isSearch == true && items.map(\.title) == prompt,
+                  "Search level should start with its empty text, not \(items.map(\.title))")
         let editor = field.currentEditor() as! NSTextView
-        editor.insertText("swift", replacementRange: NSRange(location: NSNotFound, length: 0))
-        try check(items.isEmpty && pluginDebounce != nil, "Typing must wait out the debounce")
+        editor.insertText("s", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try check(items.map(\.title) == prompt && pluginDebounce == nil, "Below minQuery keeps the empty text")
+        editor.insertText("wift", replacementRange: NSRange(location: NSNotFound, length: 0))
+        // The text stays while the first answer loads, rather than flashing an empty bar.
+        try check(items.map(\.title) == prompt && pluginDebounce != nil, "Typing must wait out the debounce")
         await settle(4_000)
         print("DEV plugins: GitHub search returned \(items.count) rows; first: \(items.first?.title ?? "none")")
+        if items.count > 1 {
+            try check(items.allSatisfy { if case .plugin(let item, _) = $0 { item.accessory?.hasPrefix("★ ") == true } else { false } },
+                      "GitHub rows lack star accessories")
+            dumpVisibleRows("plugin-search-rows")
+        }
         try check(!bar.isShowingCompletion, "Search rows must not complete the query")
         dumpFrames("plugin-search")
         try? await SettingsForm.captureWindow(panel, name: "plugin-search")
@@ -2302,6 +2344,47 @@ extension SpotliteController {
         await settle(300)
         try check(pluginRun == nil && pluginList.items.isEmpty, "Closing must drop plugin work")
         print("DEV plugins: all checks passed")
+    }
+
+    /// Accessories, default empty text and keyword ranking on fixed rows of a real plugin.
+    private func runDevPluginRowChecks(pluginID: String,
+                                       check: (@autoclosure () -> Bool, @autoclosure () -> String) throws -> Void) async throws {
+        let long = String(repeating: "A very long repository title ", count: 8)
+        let rows = [
+            PluginItem(id: "a", title: "alpha", subtitle: "Swift", accessory: "★ 1.2k", action: .open("https://example.com/a")),
+            PluginItem(id: "b", title: long, accessory: "Nov 14, 2026 at 10:42", action: .menu([PluginItem(title: "Inner")])),
+            PluginItem(id: "c", title: "Gamma", keywords: ["alphabet"], action: .copy("c")),
+            PluginItem(id: "d", title: "Delta", subtitle: "No accessory", action: .copy("d")),
+        ]
+        show()
+        enterScope(.plugin(PluginScope(pluginID: pluginID, title: "Rows", icon: nil, source: .items(rows))))
+        try check(items.count == 4, "Fixed rows did not load: \(items.map(\.title))")
+        try check(items[1].restingHints.map(\.text) == ["Nov 14, 2026 at 10:42"], "Unselected row lacks its accessory")
+        try check(items[3].restingHints.isEmpty, "A row without an accessory shows text while unselected")
+        try check(items[0].hints(modifiers: [], running: false).map(\.text) == ["Swift", "★ 1.2k"],
+                  "Selected row should show subtitle, then accessory")
+        try check(items[1].hints(modifiers: [], running: false).last.map { [$0.text, $0.key ?? ""] }
+                  == ["Nov 14, 2026 at 10:42", "⇥"], "The Tab key should follow the accessory")
+        try? await Task.sleep(for: .milliseconds(400))
+        dumpVisibleRows("plugin-accessory")
+        select(1, as: .navigated)
+        dumpVisibleRows("plugin-accessory-long-selected")
+        // A title match ranks above a keyword-only one; without "sort": false order is by score.
+        setQuery("alpha")
+        updateMatches(for: "alpha")
+        try check(items.map(\.title) == ["alpha", "Gamma"], "Keyword ranking gave \(items.map(\.title))")
+        setQuery("zzzz")
+        updateMatches(for: "zzzz")
+        try check(items.map(\.title) == [PluginSource.defaultEmptyText], "Default empty text missing: \(items.map(\.title))")
+        print("DEV plugins: accessories, keyword ranking and default empty text passed")
+    }
+
+    /// Every visible row's frames, for checking accessories against the layout.
+    private func dumpVisibleRows(_ tag: String) {
+        panel.layoutIfNeeded()
+        for row in 0..<min(items.count, placement.visibleRows) {
+            (table.view(atColumn: 0, row: row, makeIfNecessary: true) as? ResultRowView)?.dumpFrames("\(tag)#\(row)")
+        }
     }
 
     /// Dev harness: show -> type -> clear, logging the panel frame at each step,

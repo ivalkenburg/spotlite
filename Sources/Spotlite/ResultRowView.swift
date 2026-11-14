@@ -32,7 +32,8 @@ final class ResultRowView: HoverResultCellView {
 
         label.font = .systemFont(ofSize: Metrics.titleFontSize, weight: .regular)
         label.lineBreakMode = .byTruncatingTail
-        label.setContentCompressionResistancePriority(.required, for: .horizontal)
+        // Below required only so an accessory's minimum width can win; hints still yield first.
+        label.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
 
         hintStack.orientation = .horizontal
         hintStack.alignment = .centerY
@@ -81,7 +82,12 @@ final class ResultRowView: HoverResultCellView {
 
     #if DEBUG
     func dumpFrames(_ tag: String) {
-        print("[\(tag)] row=\(frame) label=\(label.frame) hints=\(hintStack.frame) title=\(label.stringValue)")
+        print("[\(tag)] row=\(frame) label=\(label.frame) hints=\(hintStack.frame) title=\(label.stringValue.prefix(40))")
+        for case let pair as NSStackView in hintStack.arrangedSubviews {
+            for case let text as NSTextField in pair.arrangedSubviews {
+                print("[\(tag)]   hint=\(text.convert(text.bounds, to: self)) text=\(text.stringValue)")
+            }
+        }
     }
     #endif
 
@@ -125,7 +131,7 @@ final class ResultRowView: HoverResultCellView {
             }
         }
 
-        let hints = selection == .none ? [] : item.hints(modifiers: modifiers, running: running)
+        let hints = selection == .none ? item.restingHints : item.hints(modifiers: modifiers, running: running)
         // Over the blue, hints lighten in both themes: darkening would muddy the accent.
         buildHints(hints, mode: selection == .navigated ? .lighten : mode)
 
@@ -171,14 +177,23 @@ final class ResultRowView: HoverResultCellView {
                 let text = ResultRowView.vibrantLabel(hint.text, size: Metrics.hintFontSize, mode: mode)
                 // The tail of a path ("/Utilities") is what distinguishes it, so it truncates
                 // from the head.
-                text.lineBreakMode = .byTruncatingHead
+                text.lineBreakMode = hint.isAccessory ? .byTruncatingTail : .byTruncatingHead
                 text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+                if hint.isAccessory {
+                    let minimum = min(text.intrinsicContentSize.width, ResultRowView.accessoryMinimumWidth)
+                    let floor = text.widthAnchor.constraint(greaterThanOrEqualToConstant: minimum)
+                    floor.priority = .defaultHigh + 1
+                    floor.isActive = true
+                }
                 pair.addArrangedSubview(text)
             }
             if let key = hint.key { pair.addArrangedSubview(KeyBadge(key, textMode: mode)) }
             hintStack.addArrangedSubview(pair)
         }
     }
+
+    /// How much of an accessory survives beside a title that fills the row.
+    private static let accessoryMinimumWidth: CGFloat = 72
 
     static func vibrantLabel(_ string: String, size: CGFloat, mode: Vibrancy.Mode) -> NSTextField {
         let text = NSTextField(labelWithString: string)

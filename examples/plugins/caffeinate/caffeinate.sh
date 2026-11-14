@@ -31,8 +31,10 @@ look() {
   fi
 }
 
+# The list is "sort": false, so typing narrows it but keeps the durations in order.
 duration() {
-  printf '{"id":"%s","title":"%s","icon":"%s","action":{"type":"run","args":["start","%s"]}}' "$1" "$2" "$3" "$1"
+  printf '{"id":"%s","title":"%s","icon":"%s","keywords":[%s],"action":{"type":"run","args":["start","%s"]}}' \
+    "$1" "$2" "$3" "$4" "$1"
 }
 
 case "$1" in
@@ -62,11 +64,11 @@ case "$1" in
       rm -f "$state"
       update='{"command":"caffeinate"}'
     fi
-    duration 0 "Until turned off" "cup.and.saucer"; printf ','
-    duration 900 "15 minutes" "clock"; printf ','
-    duration 1800 "30 minutes" "clock"; printf ','
-    duration 3600 "1 hour" "clock"; printf ','
-    duration 7200 "2 hours" "clock"
+    duration 0 "Until turned off" "cup.and.saucer" '"forever","indefinitely"'; printf ','
+    duration 900 "15 minutes" "clock" '"quarter"'; printf ','
+    duration 1800 "30 minutes" "clock" '"half hour"'; printf ','
+    duration 3600 "1 hour" "clock" '"60 minutes"'; printf ','
+    duration 7200 "2 hours" "clock" '"120 minutes"'
     printf '],"update":[%s]}\n' "$update"
     ;;
 esac

@@ -10,7 +10,7 @@
       "title": "Caffeinate",
       "keyword": "caffeine",
       "icon": "cup.and.saucer",
-      "action": { "type": "list" }
+      "action": { "type": "list", "sort": false, "emptyText": "No such duration" }
     }
   ]
 }
