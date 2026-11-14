@@ -37,7 +37,9 @@ final class PluginHost {
         } else {
             #if DEBUG
             if let override = ProcessInfo.processInfo.environment["SPOTLITE_DEV_PLUGIN_SETTINGS_DIR"] {
-                self.configurationStore = PluginConfigurationStore(directory: URL(fileURLWithPath: override, isDirectory: true))
+                // Dev checks keep their secrets apart from real plugins' Keychain items.
+                self.configurationStore = PluginConfigurationStore(directory: URL(fileURLWithPath: override, isDirectory: true),
+                                                                   secrets: KeychainSecretStore(prefix: "com.igorv.spotlite.dev.plugin."))
                 return
             }
             #endif
@@ -145,7 +147,7 @@ final class PluginHost {
         let fields = plugin.manifest?.settings ?? []
         var configuration = PluginConfiguration(settings: fields)
         do {
-            let saved = fields.isEmpty ? [:] : try configurationStore.load(for: plugin.id)
+            let saved = fields.isEmpty ? [:] : try configurationStore.load(for: plugin.id, settings: fields)
             configuration = PluginConfiguration(settings: fields, saved: saved)
             if configuration.isValid { configurationJSON[plugin.id] = try configuration.json() }
         } catch {
@@ -156,10 +158,11 @@ final class PluginHost {
     }
 
     func saveConfiguration(_ values: [String: PluginSettingValue], for plugin: InstalledPlugin) throws {
-        let configuration = PluginConfiguration(settings: plugin.manifest?.settings ?? [], saved: values)
+        let fields = plugin.manifest?.settings ?? []
+        let configuration = PluginConfiguration(settings: fields, saved: values)
         guard configuration.isValid else { throw PluginRunError.configurationRequired }
         let json = try configuration.json()
-        try configurationStore.save(configuration.values, for: plugin.id)
+        try configurationStore.save(configuration.values, for: plugin.id, settings: fields)
         configurations[plugin.id] = configuration
         configurationJSON[plugin.id] = json
     }

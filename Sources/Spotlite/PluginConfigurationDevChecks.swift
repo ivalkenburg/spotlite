@@ -145,6 +145,10 @@ enum PluginConfigurationDevChecks {
             try await checkLongForm(on: parent)
             try await Task.sleep(for: .milliseconds(250))
             try await checkChoiceLabels(on: parent)
+            try await Task.sleep(for: .milliseconds(250))
+            try await checkSecrets(on: parent)
+            try await Task.sleep(for: .milliseconds(250))
+            try await checkFieldTypes(on: parent)
         }
         parent?.orderOut(nil)
         try checkCommandUpdates()
@@ -207,6 +211,205 @@ enum PluginConfigurationDevChecks {
         print("DEV configuration: single/batch command updates preserve unknown, duplicate, reset, expiry and captured-manifest behavior")
     }
 
+    /// Uses the real Keychain under a dev-only service prefix and removes its item.
+    private static func checkSecrets(on parent: NSWindow) async throws {
+        func expect(_ condition: Bool, _ message: String) throws {
+            guard condition else {
+                throw NSError(domain: "SpotliteConfigurationChecks", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: message])
+            }
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SpotliteSecrets-" + UUID().uuidString)
+        let folder = root.appendingPathComponent("secret-check")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let manifest = #"""
+        {"id":"secret-check","name":"Secret Fixture","executable":"run.sh","commands":[],"settings":[
+          {"id":"copy","label":"API token","type":"secret","required":true,"description":"A personal access token."},
+          {"id":"spare","label":"Spare token","type":"secret"}]}
+        """#
+        try Data(manifest.utf8).write(to: folder.appendingPathComponent("plugin.json"))
+        let script = folder.appendingPathComponent("run.sh")
+        try Data("#!/bin/sh\nprintf '%s' \"$SPOTLITE_CONFIG\"\n".utf8).write(to: script)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let keychain = KeychainSecretStore(prefix: "com.igorv.spotlite.dev.plugin.")
+        let store = PluginConfigurationStore(directory: root.appendingPathComponent("values"), secrets: keychain)
+        let host = PluginHost(directory: root, configurationStore: store)
+        let plugin = host.plugin(id: "secret-check")!
+        try host.resetConfiguration(for: plugin)
+        defer {
+            try? host.resetConfiguration(for: plugin)
+            try? FileManager.default.removeItem(at: root)
+        }
+        var editor: PluginConfigurationWindowController?
+        func open() async throws -> (NSWindow, NSSecureTextField, NSButton, NSButton) {
+            editor = PluginConfigurationWindowController(plugin: plugin, host: host)
+            let window = editor!.window!
+            parent.beginSheet(window, completionHandler: { _ in })
+            try await Task.sleep(for: .milliseconds(250))
+            let views = descendants(window.contentView!)
+            let field = views.compactMap { $0 as? NSSecureTextField }.first { $0.identifier?.rawValue == "copy" }!
+            let clear = views.compactMap { $0 as? NSButton }.first { $0.title == "Clear" && $0.identifier?.rawValue == "copy" }!
+            let save = views.compactMap { $0 as? NSButton }.first { $0.title == "Save" }!
+            return (window, field, clear, save)
+        }
+        var (window, field, clear, save) = try await open()
+        try expect(!save.isEnabled && !clear.isEnabled && field.placeholderString == "Required", "Unset secret state is wrong")
+        try await capture(window, name: "plugin-configuration-secret-unset")
+        edit(field, text: "hunter2")
+        try expect(save.isEnabled && clear.isEnabled, "Typing a secret did not enable Save and Clear")
+        save.performClick(nil)
+        try await Task.sleep(for: .milliseconds(250))
+        try expect(!host.needsSetup(plugin.id), "Saving a secret did not finish setup")
+        let file = try String(contentsOf: root.appendingPathComponent("values/secret-check.json"), encoding: .utf8)
+        try expect(!file.contains("hunter2") && !file.contains("copy"), "A secret reached the settings file: \(file)")
+        try expect(try keychain.read(plugin: plugin.id, field: "copy") == "hunter2", "The secret is not in the Keychain")
+        try expect(try keychain.read(plugin: plugin.id, field: "spare") == nil, "An unset secret was stored")
+        let response = try await invoke(host, plugin: plugin)
+        try expect(response.copy == "hunter2", "SPOTLITE_CONFIG lacks the secret")
+        host.reload()
+        try expect(host.configuration(for: plugin).values["copy"] == .string("hunter2"), "Reload lost the secret")
+
+        (window, field, clear, save) = try await open()
+        try expect(field.stringValue.isEmpty && field.placeholderString == "Saved. Type to replace."
+                   && clear.isEnabled && save.isEnabled, "Saved secret state is wrong or echoed")
+        try await capture(window, name: "plugin-configuration-secret-saved")
+        clear.performClick(nil)
+        try expect(!save.isEnabled && !clear.isEnabled && field.placeholderString == "Required", "Clear did not unset the secret")
+        edit(field, text: "replaced")
+        save.performClick(nil)
+        try await Task.sleep(for: .milliseconds(250))
+        try expect(try keychain.read(plugin: plugin.id, field: "copy") == "replaced", "Replacing the secret failed")
+        editor = nil
+
+        try host.resetConfiguration(for: plugin)
+        try expect(try keychain.read(plugin: plugin.id, field: "copy") == nil && host.needsSetup(plugin.id),
+                   "Reset did not remove the secret")
+        print("DEV configuration: secrets stay out of the settings file, reach SPOTLITE_CONFIG, survive Reload, clear, replace and reset")
+    }
+
+    /// Paths with Choose…, multi-line text and lists: editing, open panels, layout,
+    /// tilde expansion and `mustExist` on reload.
+    private static func checkFieldTypes(on parent: NSWindow) async throws {
+        func expect(_ condition: Bool, _ message: String) throws {
+            guard condition else {
+                throw NSError(domain: "SpotliteConfigurationChecks", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: message])
+            }
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SpotliteFieldTypes-" + UUID().uuidString)
+        let folder = root.appendingPathComponent("field-types")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manifest = #"""
+        {"id":"field-types","name":"Field Types Fixture","commands":[],"settings":[
+          {"id":"notes","label":"Notes","type":"text","multiline":true,"description":"Several lines of text."},
+          {"id":"hosts","label":"Hosts","type":"list","required":true,"description":"One host per line."},
+          {"id":"config","label":"Config file","type":"file","required":true,"mustExist":true,"extensions":["json"]},
+          {"id":"workspace","label":"Workspace","type":"folder","mustExist":true,"default":"~"}]}
+        """#
+        try Data(manifest.utf8).write(to: folder.appendingPathComponent("plugin.json"))
+        let configFile = root.appendingPathComponent("config.json")
+        try Data("{}".utf8).write(to: configFile)
+        let host = PluginHost(directory: root, configurationStore: PluginConfigurationStore(
+            directory: root.appendingPathComponent("values"), secrets: MemorySecretStore()))
+        let plugin = host.plugin(id: "field-types")!
+        var editor: PluginConfigurationWindowController? = PluginConfigurationWindowController(plugin: plugin, host: host)
+        var window = editor!.window!
+        parent.beginSheet(window, completionHandler: { _ in })
+        try await Task.sleep(for: .milliseconds(250))
+        var views = descendants(window.contentView!)
+        let notes = views.compactMap { $0 as? NSTextView }.first { $0.identifier?.rawValue == "notes" }!
+        let hosts = views.compactMap { $0 as? NSTextView }.first { $0.identifier?.rawValue == "hosts" }!
+        let config = views.compactMap { $0 as? NSTextField }.first { $0.identifier?.rawValue == "config" }!
+        let workspace = views.compactMap { $0 as? NSTextField }.first { $0.identifier?.rawValue == "workspace" }!
+        let buttons = views.compactMap { $0 as? NSButton }
+        let chooseFile = buttons.first { $0.title == "Choose…" && $0.identifier?.rawValue == "config" }!
+        let chooseFolder = buttons.first { $0.title == "Choose…" && $0.identifier?.rawValue == "workspace" }!
+        let save = buttons.first { $0.title == "Save" }!
+        try expect(!save.isEnabled && workspace.stringValue == "~", "Initial field type state is wrong")
+
+        // Layout: each editor fills the 260-point value column, Choose… inside it.
+        let content = window.contentView!
+        for (name, view) in [("notes", notes.enclosingScrollView!), ("hosts", hosts.enclosingScrollView!),
+                             ("config", config.superview!), ("workspace", workspace.superview!)] {
+            let frame = view.convert(view.bounds, to: content)
+            print("DEV configuration field \(name): \(frame)")
+            try expect(abs(frame.width - 260) < 0.5 && content.bounds.contains(frame), "\(name) is not 260 wide inside the form: \(frame)")
+        }
+        for (field, button) in [(config, chooseFile), (workspace, chooseFolder)] {
+            let a = field.convert(field.bounds, to: content), b = button.convert(button.bounds, to: content)
+            try expect(a.maxX <= b.minX && b.maxX <= a.minX + 260.5 && a.width > 120, "Choose… overlaps its field: \(a) \(b)")
+        }
+        try expect(notes.enclosingScrollView!.frame.height == 76, "Multi-line editor height changed")
+        let form = views.compactMap { $0 as? NSScrollView }.first { $0.documentView is FlippedView }!
+        let grid = form.documentView!.subviews.first as! NSGridView
+        for row in 0..<grid.numberOfRows {
+            let label = grid.cell(atColumnIndex: 0, rowIndex: row).contentView!, value = grid.cell(atColumnIndex: 1, rowIndex: row).contentView!
+            let a = label.frame.maxY - label.firstBaselineOffsetFromTop, b = value.frame.maxY - value.firstBaselineOffsetFromTop
+            print("DEV configuration types row \(row): label baseline \(a), value baseline \(b)")
+            try expect(abs(a - b) < 1, "Label \(row) is not on its field's first baseline")
+        }
+
+        func type(_ view: NSTextView, _ text: String) {
+            view.string = text
+            editor!.textDidChange(Notification(name: NSText.didChangeNotification, object: view))
+        }
+        window.makeFirstResponder(notes)
+        notes.doCommand(by: #selector(NSResponder.insertTab(_:)))
+        try expect(window.firstResponder !== notes && notes.string.isEmpty, "Tab did not leave the multi-line field")
+        type(notes, "line one\nline two")
+        type(hosts, " alpha \n\n beta\n")
+        try expect(!save.isEnabled, "A missing required file enabled Save")
+        edit(config, text: root.appendingPathComponent("missing.json").path)
+        try expect(!save.isEnabled, "A missing mustExist file enabled Save")
+        edit(config, text: configFile.path)
+        try expect(save.isEnabled, "Valid field types did not enable Save")
+        for (tag, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+            window.appearance = NSAppearance(named: appearance)
+            try await capture(window, name: "plugin-configuration-types-\(tag)")
+        }
+
+        for (button, folder) in [(chooseFile, false), (chooseFolder, true)] {
+            button.performClick(nil)
+            try await Task.sleep(for: .milliseconds(400))
+            guard let panel = window.attachedSheet as? NSOpenPanel else { throw NSError(domain: "SpotliteConfigurationChecks", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Choose… did not open a panel"]) }
+            try expect(panel.canChooseDirectories == folder && panel.canChooseFiles == !folder
+                       && panel.allowedContentTypes == (folder ? [] : [.json]), "Open panel is configured wrong")
+            panel.cancel(nil)
+            try await Task.sleep(for: .milliseconds(300))
+        }
+        try expect(window.attachedSheet == nil && config.stringValue == configFile.path, "Cancelling the panel changed the path")
+
+        save.performClick(nil)
+        try await Task.sleep(for: .milliseconds(250))
+        let configuration = host.configuration(for: plugin)
+        try expect(configuration.isValid && configuration.values["notes"] == .string("line one\nline two")
+                   && configuration.values["hosts"] == .list(["alpha", "beta"])
+                   && configuration.values["workspace"] == .string("~"), "Saved field type values are wrong")
+        let object = try JSONSerialization.jsonObject(with: Data(configuration.json().utf8)) as! [String: Any]
+        try expect(object["workspace"] as? String == NSHomeDirectory() && object["hosts"] as? [String] == ["alpha", "beta"],
+                   "SPOTLITE_CONFIG has unexpanded paths or a non-array list")
+
+        editor = PluginConfigurationWindowController(plugin: plugin, host: host)
+        window = editor!.window!
+        parent.beginSheet(window, completionHandler: { _ in })
+        try await Task.sleep(for: .milliseconds(250))
+        views = descendants(window.contentView!)
+        let reopened = views.compactMap { $0 as? NSTextView }.first { $0.identifier?.rawValue == "hosts" }!
+        try expect(reopened.string == "alpha\nbeta", "A saved list did not reopen one item per line")
+        parent.endSheet(window)
+        window.orderOut(nil)
+        editor = nil
+
+        try FileManager.default.removeItem(at: configFile)
+        try expect(!host.needsSetup(plugin.id), "Readiness reread the disk outside Reload")
+        host.reload()
+        try expect(host.needsSetup(plugin.id) && host.configuration(for: plugin).errors["config"] != nil,
+                   "A deleted mustExist file did not require setup on Reload")
+        print("DEV configuration: file, folder, multi-line text and list fields edit, lay out, expand ~ and revalidate")
+    }
+
     private static func checkChoiceLabels(on parent: NSWindow) async throws {
         func expect(_ condition: Bool, _ message: String) throws {
             guard condition else {
@@ -255,7 +458,7 @@ enum PluginConfigurationDevChecks {
                    && saved["required"] == .string("choose-option"), "Labels changed the saved option values")
         var invalid = saved
         invalid["duplicate"] = .string("missing")
-        try store.save(invalid, for: plugin.id)
+        try store.save(invalid, for: plugin.id, settings: plugin.manifest?.settings ?? [])
         host.reload()
         let migration = PluginConfigurationWindowController(plugin: plugin, host: host)
         let migrationWindow = migration.window!

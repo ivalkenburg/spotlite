@@ -59,6 +59,9 @@ from an optional `settings` array in the manifest; no script runs to show or val
   { "id": "limit", "label": "Result limit", "type": "number",
     "default": 20, "min": 1, "max": 50 },
   { "id": "archived", "label": "Include archived", "type": "boolean", "default": false },
+  { "id": "token", "label": "Access token", "type": "secret" },
+  { "id": "repos", "label": "Repositories", "type": "list", "default": ["octo/app"] },
+  { "id": "checkout", "label": "Checkout", "type": "folder", "default": "~/Code", "mustExist": true },
   { "id": "sort", "label": "Sort by", "type": "choice", "default": "stars",
     "options": [{ "value": "stars", "label": "Stars" }, { "value": "updated", "label": "Updated" }] }
 ]
@@ -74,6 +77,16 @@ fields are supported.
 | `number` | A finite JSON number, including fractions. Optional `min` and `max` are inclusive. |
 | `boolean` | A JSON boolean, defaulting to `false`. A required toggle can still be `false`. |
 | `choice` | A string matching an option's `value`. Options need unique, nonempty values and nonempty labels. |
+| `secret` | A string kept in the Keychain, never in the settings file. Validated like `text`; no `default`. |
+| `file`, `folder` | A path string, typed or picked with Choose…. Optional `mustExist: true` requires an existing file or folder. `file` takes optional `extensions` (such as `["json"]`) for the open panel. |
+| `list` | A JSON array of strings, edited one item per line; lines are trimmed and blank ones dropped. Required means at least one item. A `default` is an array. |
+
+`"multiline": true` gives a `text` field a multi-line editor; its value is still one string.
+
+A leading `~` in a `file` or `folder` value is kept in the saved value and expanded to the
+home folder in `SPOTLITE_CONFIG`. `mustExist` is checked when saving and when settings are
+read (first use and Reload), not continuously: a path removed later makes the plugin show
+“Setup required” after the next Reload or launch. A missing default path is not a schema error.
 
 A declared default must satisfy the field's type, range, choices, and required rule.
 An invalid schema makes the plugin unusable and Settings explains why.
@@ -87,10 +100,11 @@ Commands with missing required values or invalid saved values remain searchable 
 “Setup required”. Activating one opens configuration without executing its action.
 After a manifest update, Reload revalidates saved values and applies defaults for new
 fields. Invalid values remain visible for correction. Optional values without a default
-are omitted from the effective configuration when unset; an empty text field is a string.
+are omitted from the effective configuration when unset; an empty text field is a string
+and an empty list is `[]`.
 
 Each executable invocation receives the effective configuration as one JSON object in
-`SPOTLITE_CONFIG`, retaining string, number, and boolean types. Only declared keys are
+`SPOTLITE_CONFIG`, retaining string, number, boolean, and array types. Only declared keys are
 included. No settings produces `{}`. Values are literal data: Spotlite does not expand
 them into manifest `args`, `open` targets, or `copy` text.
 
@@ -99,8 +113,16 @@ The GitHub example demonstrates an organization filter and result limit.
 
 Configuration is stored in `~/Library/Application Support/Spotlite/PluginSettings/<id>.json`,
 separate from plugin code and plugin-owned data. It survives disabling, replacement, removal,
-and reinstallation. Saving drops obsolete keys. Settings are ordinary values stored on disk;
-secret fields and Keychain integration are not supported. The JSON object is limited to 64 KB.
+and reinstallation. Saving drops obsolete keys. The JSON object is limited to 64 KB.
+
+A `secret` value is stored as a generic password in the login keychain (service
+`com.igorv.spotlite.plugin.<id>`, account the field id) and appears in `SPOTLITE_CONFIG` as
+a string; it is never written to the settings file, and an optional secret left unset is
+omitted. The form never shows a saved secret: it reads “Saved”, typing replaces it, and
+Clear removes it on Save. Reset Settings removes the plugin's secrets; removing the plugin
+keeps them, like its other settings. Secrets are read with the rest of the configuration,
+not per run. A build signed by a different certificate than the one that saved a secret
+(a self-built copy, for example) asks for Keychain access the first time it reads it.
 
 Changes apply to the next invocation. An already-running process keeps its original
 snapshot. Values are read at first use, on Reload, and after a configuration change;
