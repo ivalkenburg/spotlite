@@ -216,7 +216,9 @@ final class PluginHost {
         let configuration = PluginConfiguration(settings: fields, saved: values)
         guard configuration.isValid else { throw PluginRunError.configurationRequired }
         let json = try configuration.json()
-        try configurationStore.save(configuration.values, for: plugin.id, settings: fields)
+        // Values read with a problem may not be what the Keychain holds, so every secret is written then.
+        let previous = configurations[plugin.id].flatMap { $0.problem == nil ? $0.values : nil }
+        try configurationStore.save(configuration.values, for: plugin.id, settings: fields, previous: previous)
         configurations[plugin.id] = configuration
         configurationJSON[plugin.id] = json
     }

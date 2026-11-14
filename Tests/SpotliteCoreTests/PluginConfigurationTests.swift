@@ -211,6 +211,44 @@ struct PluginConfigurationTests {
         #expect(try store.load(for: "test", settings: fields).isEmpty)
     }
 
+    @Test func savingLeavesUnchangedSecretsAlone() throws {
+        /// Counts what reaches the store, as each call may reach the Keychain.
+        final class Counting: PluginSecretStore, @unchecked Sendable {
+            let inner = MemorySecretStore()
+            private let lock = NSLock()
+            private var calls: [String] = []
+            var log: [String] { lock.withLock { calls } }
+            func read(plugin: String, field: String) throws -> String? { try inner.read(plugin: plugin, field: field) }
+            func write(_ value: String, plugin: String, field: String) throws {
+                lock.withLock { calls.append("write \(field)") }
+                try inner.write(value, plugin: plugin, field: field)
+            }
+            func delete(plugin: String, field: String) throws {
+                lock.withLock { calls.append("delete \(field)") }
+                try inner.delete(plugin: plugin, field: field)
+            }
+            func deleteAll(plugin: String) throws { try inner.deleteAll(plugin: plugin) }
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let secrets = Counting()
+        let store = PluginConfigurationStore(directory: directory, secrets: secrets)
+        let fields = try settings(secretSchema)
+        // Without previous values every secret is written or cleared.
+        try store.save(["token": .string("a")], for: "test", settings: fields)
+        #expect(secrets.log == ["write token", "delete extra"])
+        let saved = try store.load(for: "test", settings: fields)
+        try store.save(saved.merging(["organization": .string("o")]) { $1 }, for: "test", settings: fields, previous: saved)
+        #expect(secrets.log.count == 2, "an unchanged secret is not written again: \(secrets.log)")
+        #expect(try store.load(for: "test", settings: fields) == ["token": .string("a"), "organization": .string("o")])
+        // A changed, added or cleared secret still is; an empty one counts as cleared.
+        try store.save(["token": .string("b"), "extra": .string("x")], for: "test", settings: fields, previous: saved)
+        try store.save(["token": .string("")], for: "test", settings: fields,
+                       previous: ["token": .string("b"), "extra": .string("x")])
+        #expect(Array(secrets.log.dropFirst(2)) == ["write token", "write extra", "delete token", "delete extra"])
+        #expect(secrets.inner.snapshot["test"]?.isEmpty == true)
+    }
+
     @Test func keychainStoreRejectsUnsafeIdentifiers() {
         let keychain = KeychainSecretStore(prefix: "com.igorv.spotlite.tests.")
         #expect(throws: PluginConfigurationStore.Failure.self) { try keychain.read(plugin: "../x", field: "token") }

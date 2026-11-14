@@ -275,8 +275,11 @@ public struct PluginConfigurationStore: Sendable {
         }
     }
 
-    /// An unset or empty secret removes its stored value.
-    public func save(_ values: [String: PluginSettingValue], for id: String, settings: [PluginSetting]) throws {
+    /// An unset or empty secret removes its stored value. `previous` are the values last
+    /// read or saved: a secret that matches its previous value is not written again, so a
+    /// Save that changes other fields leaves the Keychain alone.
+    public func save(_ values: [String: PluginSettingValue], for id: String, settings: [PluginSetting],
+                     previous: [String: PluginSettingValue]? = nil) throws {
         let url = try url(for: id)
         let secretFields = settings.filter { $0.type == .secret }.map(\.id)
         var stored = values
@@ -286,6 +289,7 @@ public struct PluginConfigurationStore: Sendable {
         let data = try encoder.encode(stored)
         guard data.count <= Self.maxBytes else { throw Failure.tooLarge }
         for field in secretFields {
+            if let previous, Self.secret(values[field]) == Self.secret(previous[field]) { continue }
             if case .string(let secret)? = values[field], !secret.isEmpty {
                 try secrets.write(secret, plugin: id, field: field)
             } else {
@@ -294,6 +298,12 @@ public struct PluginConfigurationStore: Sendable {
         }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try data.write(to: url, options: .atomic)
+    }
+
+    /// A secret's stored form: an empty one is none.
+    private static func secret(_ value: PluginSettingValue?) -> String? {
+        guard case .string(let text)? = value, !text.isEmpty else { return nil }
+        return text
     }
 
     public func reset(for id: String) throws {
