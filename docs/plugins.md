@@ -14,54 +14,11 @@ GitHub repository search and Find Files, which streams.
 
 A plugin runs with your user's permissions. Install only ones you trust.
 
-## Installing
-
-Install → From Folder… copies a plugin folder. Install → From URL… takes an address:
-
-| Address | |
-| --- | --- |
-| `https://github.com/owner/repo` | The repository's default branch; `plugin.json` at its top |
-| `https://github.com/owner/repo/tree/<ref>/<folder>` | A branch, tag or commit, and the plugin's folder in it. A ref containing `/` (`feat/x`) is found by trying each split. A `…/blob/<ref>/<folder>/plugin.json` link works too. |
-| `https://example.com/plugin.zip` | A zip archive with `plugin.json` at its top or in its single top folder |
-| `https://example.com/plugin.git#<ref>` | Cloned with `git clone --depth 1`; the optional ref is a branch or tag |
-
-Only `https` is accepted, redirects included. GitHub addresses download GitHub's zip of
-the ref, so they need no git. A `.git` address needs git from Xcode, the Command Line
-Tools or Homebrew; Spotlite never runs `/usr/bin/git`, which would offer to install the
-tools. Only public repositories work: no credentials are sent or asked for.
-
-The download goes to a temporary folder, is checked, and is shown before anything is
-installed. A download over 50 MB, an archive that expands past 200 MB or holds more than
-10,000 items, an entry with an absolute path or `..`, a link that resolves outside the
-plugin's folder, an encrypted or ZIP64 archive, and a folder without a valid
-`plugin.json` are all refused, and the temporary folder is removed. Executable bits are
-kept.
-
-The confirmation lists the name, id, version, author, description, source, each command
-with its action type, the executable and the declared settings. When the id is already
-installed it offers Update (with the old and new version) or Reinstall. Replacing is
-atomic: if anything fails, the installed copy stays. Settings, secrets and
-`SPOTLITE_PLUGIN_DATA` are kept. A plugin whose folder is a symbolic link (a checkout
-under development) is never replaced; update the checkout instead.
-
-A plugin installed from an address keeps a source record in
-`~/Library/Application Support/Spotlite/PluginSources/<id>.json`: the address, the ref,
-the commit when GitHub reports it, and the installed version and date. Settings shows it
-below the buttons. A plugin installed from a folder, or linked, has none, and installing
-it from a folder later removes the record, as does removing the plugin.
-
-Check for Updates asks each recorded source for its version, only when clicked: Spotlite
-never checks on its own. A GitHub source is checked by fetching its `plugin.json` alone
-(GitHub's raw files may lag a push by a few minutes); a zip or git source is downloaded
-again and discarded. Versions compare as semantic versions (`1.10` is newer than `1.9`,
-`1.0.0-beta` precedes `1.0.0`, a leading `v` and `+build` are ignored); a version that is
-not one is offered as an update whenever it differs. Update… goes through the same
-confirmation.
-
 ## Manifest
 
 ```json
 {
+  "$schema": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/docs/plugin.schema.json",
   "id": "kubectx",
   "name": "Kube Context",
   "version": "1.0.0",
@@ -84,14 +41,24 @@ confirmation.
 
 | Key | |
 | --- | --- |
-| `id`, `name`, `commands` | Required. Ids use letters, digits, `.`, `-` and `_`. A plugin id cannot start with `.`, and plugin ids must be unique ignoring letter case. |
+| `id`, `name`, `commands` | Required. Ids use letters, digits, `.`, `-` and `_`, up to 128 characters. A plugin id cannot start with `.`, and plugin ids must be unique ignoring letter case. Command ids are unique within the plugin. |
+| `version`, `description`, `author` | Optional text shown in Settings and when installing. Check for Updates compares `version`. |
 | `executable` | Path inside the plugin's folder; must have the executable bit. Not needed when every action is `open`, `copy` or `menu`. |
 | `timeout` | Seconds a run may take, 1 to 60. Default 10. |
 | `settings` | Optional configuration fields, shared by all of the plugin's commands. See below. |
+| `$schema` | Optional, ignored by Spotlite. See below. |
 
 A command is a root search result. It ranks, hides, takes an alias and learns launch
 history like an app. `keyword` finds it by a name its title lacks, until the user sets an
 alias of their own in Settings → Items.
+
+[`plugin.schema.json`](plugin.schema.json) describes the manifest as a JSON Schema. Set
+`"$schema"` to its address, as above and in the examples, and an editor such as VS Code
+completes keys, shows what each one does and marks mistakes. The schema is stricter than
+Spotlite: it also marks keys Spotlite ignores, such as a misspelled one, and values
+Spotlite would clamp, such as a `timeout` of 90.
+[`plugin-response.schema.json`](plugin-response.schema.json) describes what the executable
+prints (see [Response](#response)).
 
 ## Configuration
 
@@ -115,7 +82,8 @@ from an optional `settings` array in the manifest; no script runs to show or val
 
 Every field needs a unique `id` (the same plain characters as plugin ids), a nonempty
 `label`, and a `type`. `description`, `required`, and `default` are optional. At most 64
-fields are supported.
+fields are supported. `min`, `max`, `options`, `multiline`, `mustExist` and `extensions`
+belong to the types below that name them; on another type they make the manifest invalid.
 
 | Type | Value and validation |
 | --- | --- |
@@ -132,10 +100,10 @@ fields are supported.
 A leading `~` in a `file` or `folder` value is kept in the saved value and expanded to the
 home folder in `SPOTLITE_CONFIG`. `mustExist` is checked when saving and when settings are
 read (first use and Reload), not continuously: a path removed later makes the plugin show
-“Setup required” after the next Reload or launch. A missing default path is not a schema error.
+“Setup required” after the next Reload or launch. A default path that does not exist is not an error.
 
 A declared default must satisfy the field's type, range, choices, and required rule.
-An invalid schema makes the plugin unusable and Settings explains why.
+An invalid `settings` array makes the plugin unusable and Settings explains why.
 
 Save commits valid values together; Cancel discards edits. Reset Settings asks before
 removing the saved configuration and restoring defaults. Reset takes effect immediately,
@@ -187,6 +155,9 @@ A command and every row carry one action, which is what Return does.
 | `{"type":"search","args":[…],"debounce":200,"minQuery":1}` | Enters a list printed for each query | per query, after typing pauses |
 | `{"type":"run","args":[…],"keepOpen":false}` | Closes the panel at once and runs in the background, then applies the response; with `keepOpen` the panel stays and the list reloads | once |
 
+A `search` runs once typing has paused for `debounce` milliseconds (0 to 2000, default
+200), and only when the query has at least `minQuery` characters (default 1).
+
 Tab also enters `menu`, `list` and `search`. Backspace on an empty query or Shift-Tab goes
 back. ⌥↩ on a row whose action is `open` copies its address, unless the row binds ⌥ itself
 (see [Other actions](#other-actions)).
@@ -214,11 +185,12 @@ A command or a row can offer more than Return's action. `actions` lists them, ea
   ] }
 ```
 
-`shortcut` is a modifier held with Return: `cmd`, `opt`, `shift` or `ctrl`, or several
-joined by `+`, such as `cmd+shift`. While it is held, the selected row shows the action's
-title. Only the exact chord matches. The first action to claim a chord gets it; a later one
-is still listed without it. An action without a `shortcut` is reached only from the action
-list. A declared `opt` replaces the built-in ⌥↩ copy.
+`shortcut` is a modifier held with Return: `cmd`, `opt`, `shift` or `ctrl` (also `command`,
+`option`, `alt` and `control`), or several joined by `+`, such as `cmd+shift`. While it is
+held, the selected row shows the action's title. Only the exact chord matches. The first
+action to claim a chord gets it; a later one is still listed without it. An action without
+a `shortcut` is reached only from the action list. A declared `opt` replaces the built-in
+⌥↩ copy.
 
 ⌘K opens the selected row's action list: Return's action first, then the others in order,
 each with its key, then the built-in Copy Link on an `open` row. Typing filters it, Return
@@ -232,7 +204,7 @@ or `shortcut`) is skipped alone; `actions` inside an action are ignored. On rows
 
 ### Confirmation
 
-Any action can ask before it runs with `confirm`, a question or an object:
+Any action can ask before it runs with `confirm` beside its `type`, a question or an object:
 
 ```json
 { "type": "run", "args": ["delete", "main"], "keepOpen": true,
@@ -278,8 +250,9 @@ read them from `SPOTLITE_CONFIG`, which is authoritative and always has every va
 
 A non-zero exit is a failure; the toast shows the last nonempty line on standard error,
 where a traceback or a script under `set -e` leaves the error that stopped it. A run that
-exceeds the timeout, or a search superseded by newer typing, is terminated. Redirect the
-output of anything left running in the background (`cmd >/dev/null 2>&1 &`).
+exceeds the timeout, prints more than 4 MB, or is a search superseded by newer typing, is
+terminated. Redirect the output of anything left running in the background
+(`cmd >/dev/null 2>&1 &`).
 
 Output that is not a JSON object fails with “returned invalid JSON”. Settings shows why,
 with the start of the output (see [Debugging](#debugging)).
@@ -290,12 +263,54 @@ the panel has closed or opened again; a failure shows a failure toast. Without `
 its `items` are ignored, so a late answer never changes the rows of a later search. A late
 `keepOpen` response cannot replace rows after leaving its level or starting a newer action.
 
-## Streaming
+## Response
+
+One JSON object on standard output, described by
+[`plugin-response.schema.json`](plugin-response.schema.json). Every key is optional and
+printing nothing is fine.
+
+```json
+{
+  "items": [
+    { "id": "prod", "title": "prod", "subtitle": "Current", "accessory": "eu-west-1",
+      "keywords": ["production"], "icon": "checkmark.circle.fill",
+      "action": { "type": "run", "args": ["use", "prod"] } }
+  ],
+  "toast": { "text": "Switched to prod", "symbol": "checkmark.circle", "style": "success" },
+  "copy": "text for the clipboard",
+  "open": "https://example.com",
+  "update": [
+    { "command": "switch", "icon": "bolt.fill", "subtitle": "prod", "expires": 1794601717 }
+  ]
+}
+```
+
+- `items`: rows for `list` and `search`, at most 500. A `keepOpen` run's `items` replace
+  the rows of the list it ran from, except in a `search`. `title` is required; a row without an
+  `action` only informs. `subtitle` shows at the right of the selected row. `accessory` is
+  short text at the right of every row, such as `"★ 1.2k"` or a date; on the selected row
+  the subtitle comes before it. It truncates before the title does. `keywords`, up to 8
+  strings, also find the row when typing filters it; a title match ranks above a
+  keyword-only one. The same keys work on `menu` items. A row whose keys have the wrong
+  type is skipped.
+- `actions` work on rows as on commands, and so does `confirm` in a row's `action`; see
+  [Other actions](#other-actions) and [Confirmation](#confirmation).
+- `toast`: a string, or an object. `"style":"failure"` shows even when confirmation
+  messages are off.
+- `update`: changes how one of the plugin's commands looks in root results, until
+  `expires` (seconds since 1970) or the next update. Naming only the `command` restores the
+  manifest's look. Updates live in memory, so report the state again from a `list`.
+
+`icon` is an SF Symbol name, an image file (`icon.png`, relative to the plugin's folder
+unless absolute), or any other path, whose Finder icon is shown (`/Applications/Safari.app`).
+
+### Streaming
 
 With `"stream": true` on a `list` or `search` action, the executable prints one JSON
 object per line ([NDJSON](https://github.com/ndjson/ndjson-spec)) instead of one object,
 and each row shows as soon as its line arrives. A slow source (a network page, `find`,
-`git log`) shows its first rows while the rest are still coming.
+`git log`) shows its first rows while the rest are still coming. A line is described by
+`streamLine` in [`plugin-response.schema.json`](plugin-response.schema.json).
 
 ```sh
 find "$HOME/Documents" -iname "*$1*" |
@@ -322,7 +337,7 @@ no row matches.
 A search superseded by newer typing, or a level the user leaves, stops the program, and
 none of its rows show after that. The timeout covers the whole run. After 500 rows the
 output is still read, for response lines, but further rows are ignored: stop at 500, as
-`limit(500; …)` or `head -n 500` do. The 4 MB output limit applies as for any action.
+`limit(500; …)` or `head -n 500` do. The 4 MB output limit covers the whole run.
 
 A run that fails after rows arrived (a non-zero exit, the timeout, too much output) keeps
 those rows and shows the failure as a toast; its response lines are not applied. A failure
@@ -346,40 +361,48 @@ ends the run; closing the sheet does too.
 Reveal in Finder opens the plugin's folder, and Open Data Folder its
 `SPOTLITE_PLUGIN_DATA` folder.
 
-## Response
+## Installing
 
-One JSON object on standard output. Every key is optional and printing nothing is fine.
+Install → From Folder… copies a plugin folder. Install → From URL… takes an address:
 
-```json
-{
-  "items": [
-    { "id": "prod", "title": "prod", "subtitle": "Current", "accessory": "eu-west-1",
-      "keywords": ["production"], "icon": "checkmark.circle.fill",
-      "action": { "type": "run", "args": ["use", "prod"] } }
-  ],
-  "toast": { "text": "Switched to prod", "symbol": "checkmark.circle", "style": "success" },
-  "copy": "text for the clipboard",
-  "open": "https://example.com",
-  "update": [
-    { "command": "switch", "icon": "bolt.fill", "subtitle": "prod", "expires": 1794601717 }
-  ]
-}
-```
+| Address | |
+| --- | --- |
+| `https://github.com/owner/repo` | The repository's default branch; `plugin.json` at its top |
+| `https://github.com/owner/repo/tree/<ref>/<folder>` | A branch, tag or commit, and the plugin's folder in it. A ref containing `/` (`feat/x`) is found by trying each split. A `…/blob/<ref>/<folder>/plugin.json` link works too. |
+| `https://example.com/plugin.zip` | A zip archive with `plugin.json` at its top or in its single top folder |
+| `https://example.com/plugin.git#<ref>` | Cloned with `git clone --depth 1`; the optional ref is a branch or tag |
 
-- `items`: rows for `list` and `search`, at most 500. `title` is required; a row without an
-  `action` only informs. `subtitle` shows at the right of the selected row. `accessory` is
-  short text at the right of every row, such as `"★ 1.2k"` or a date; on the selected row
-  the subtitle comes before it. It truncates before the title does. `keywords`, up to 8
-  strings, also find the row when typing filters it; a title match ranks above a
-  keyword-only one. The same keys work on `menu` items. A row whose keys have the wrong
-  type is skipped.
-- `actions` and `confirm` work on rows as on commands; see [Other actions](#other-actions)
-  and [Confirmation](#confirmation).
-- `toast`: a string, or an object. `"style":"failure"` shows even when confirmation
-  messages are off.
-- `update`: changes how one of the plugin's commands looks in root results, until
-  `expires` (seconds since 1970) or the next update. Naming only the `command` restores the
-  manifest's look. Updates live in memory, so report the state again from a `list`.
+Only `https` is accepted, redirects included. GitHub addresses download GitHub's zip of
+the ref, so they need no git. A `.git` address needs git from Xcode, the Command Line
+Tools or Homebrew; Spotlite never runs `/usr/bin/git`, which would offer to install the
+tools. Only public repositories work: no credentials are sent or asked for.
 
-`icon` is an SF Symbol name, an image file (`icon.png`, relative to the plugin's folder
-unless absolute), or any other path, whose Finder icon is shown (`/Applications/Safari.app`).
+The download goes to a temporary folder, is checked, and is shown before anything is
+installed. A download over 50 MB, an archive that expands past 200 MB or holds more than
+10,000 items, an entry with an absolute path or `..`, a link that resolves outside the
+plugin's folder, an encrypted or ZIP64 archive, and a folder without a valid
+`plugin.json` are all refused, and the temporary folder is removed. Executable bits are
+kept.
+
+The confirmation lists the name, id, version, author, description, source, each command
+with its action type, the executable and the declared settings. When the id is already
+installed it offers Update (with the old and new version) or Reinstall. Replacing is
+atomic: if anything fails, the installed copy stays. Settings, secrets and
+`SPOTLITE_PLUGIN_DATA` are kept. A plugin whose folder is a symbolic link (a checkout
+under development) is never replaced; update the checkout instead.
+
+A plugin installed from an address keeps a source record in
+`~/Library/Application Support/Spotlite/PluginSources/<id>.json`: the address, the ref,
+the commit when GitHub reports it, and the installed version and date. Settings shows it
+below the buttons. A plugin installed from a folder, or linked, has none, and installing
+it from a folder later removes the record, as does removing the plugin.
+
+Check for Updates asks each recorded source for its version, only when clicked: Spotlite
+never checks on its own. A GitHub source is checked by fetching its `plugin.json` alone
+(GitHub's raw files may lag a push by a few minutes); a zip or git source is downloaded
+again and discarded. Versions compare as semantic versions (`1.10` is newer than `1.9`,
+`1.0.0-beta` precedes `1.0.0`, a leading `v` and `+build` are ignored); a version that is
+not one is offered as an update whenever it differs. Update… goes through the same
+confirmation.
+
+<!-- Gallery: written separately. -->
