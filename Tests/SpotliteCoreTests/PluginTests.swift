@@ -68,6 +68,13 @@ struct PluginModelTests {
         #expect(PluginSource(.search(args: ["s"], debounce: 5, minimumQuery: 2))?.isSearch == true)
     }
 
+    @Test func kindNamesTheDecodedType() throws {
+        for kind in PluginAction.Kind.allCases {
+            let json = #"{"type":"\#(kind.rawValue)","url":"https://example.com","text":"t","items":[]}"#
+            #expect(try JSONDecoder().decode(PluginAction.self, from: Data(json.utf8)).kind == kind)
+        }
+    }
+
     @Test func openTargetsArePathsOrAddressesWithAScheme() {
         #expect(PluginAction.url(for: " https://example.com/a?b=1\n")?.absoluteString == "https://example.com/a?b=1")
         #expect(PluginAction.url(for: "/tmp/a b")?.path == "/tmp/a b")

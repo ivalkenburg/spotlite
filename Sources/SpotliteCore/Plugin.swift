@@ -25,6 +25,18 @@ public enum PluginAction: Sendable, Equatable {
     /// The `type` names an action may have.
     public enum Kind: String, CaseIterable, Sendable { case open, copy, run, list, search, menu }
 
+    /// The action's `type`.
+    public var kind: Kind {
+        switch self {
+        case .open: .open
+        case .copy: .copy
+        case .run: .run
+        case .list: .list
+        case .search: .search
+        case .menu: .menu
+        }
+    }
+
     /// Whether the action opens another level rather than finishing.
     public var entersScope: Bool {
         switch self {

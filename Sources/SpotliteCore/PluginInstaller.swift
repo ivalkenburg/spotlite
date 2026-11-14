@@ -481,16 +481,11 @@ extension StagedPlugin {
         if let description = manifest.description { rows.append(("Description", description)) }
         rows.append(("Source", source.address + (commit.map { " @ " + $0.prefix(12) } ?? "")))
         rows.append(("Commands", manifest.commands.map { command in
-            "\(command.title) (\(Self.kind(of: command.action))" + (command.keyword.map { ", keyword “\($0)”" } ?? "") + ")"
+            "\(command.title) (\(command.action.kind.rawValue)" + (command.keyword.map { ", keyword “\($0)”" } ?? "") + ")"
         }.joined(separator: "\n")))
         rows.append(("Executable", manifest.executable.map { "\($0), runs when a command needs it" } ?? "None"))
         rows.append(("Settings", manifest.settings.isEmpty ? "None"
             : manifest.settings.map { "\($0.label) (\($0.type.rawValue)\($0.required ? ", required" : ""))" }.joined(separator: "\n")))
         return rows
-    }
-
-    /// The manifest's `type`: every action case carries values, so the case's label is it.
-    private static func kind(of action: PluginAction) -> String {
-        Mirror(reflecting: action).children.first?.label ?? String(describing: action)
     }
 }
