@@ -198,11 +198,19 @@ final class PluginHost {
     /// Runs the plugin's executable and reports on the main actor. Nil when the plugin
     /// has nothing to run, after reporting that as a failure. `command` is the manifest
     /// command the user started from, even for a row nested inside its list.
+    ///
+    /// With `rows` the output streams: `rows` receives every row so far as lines
+    /// arrive, at most once per main-queue turn. A failure after some rows arrived
+    /// delivers them all once more before the completion.
     @discardableResult
     func run(_ plugin: InstalledPlugin, arguments: [String], query: String,
              command: String = "", action: PluginRunAction = .run,
+             rows: (@MainActor ([PluginItem]) -> Void)? = nil,
              completion: @escaping @MainActor (Result<PluginResponse, PluginRunError>) -> Void) -> PluginRun? {
-        start(plugin, arguments: arguments, query: query, command: command, action: action) { completion($0.result) }
+        start(plugin, arguments: arguments, query: query, command: command, action: action, rows: rows) { report in
+            if let rows, case .failure = report.result, !report.streamedItems.isEmpty { rows(report.streamedItems) }
+            completion(report.result)
+        }
     }
 
     /// The same run with everything the program wrote, for the debug runner in Settings.
@@ -212,19 +220,23 @@ final class PluginHost {
                   completion: @escaping @MainActor (PluginRunReport) -> Void) -> PluginRun? {
         guard let action = PluginRunAction(command.action) else { return nil }
         var arguments: [String]
+        var streams = false
         switch command.action {
-        case .run(let args, _), .list(let args, _): arguments = args
-        case .search(let args, _, _, _): arguments = args + [query]
+        case .run(let args, _): arguments = args
+        case .list(let args, let options): arguments = args; streams = options.streams
+        case .search(let args, _, _, let options): arguments = args + [query]; streams = options.streams
         case .open, .copy, .menu: return nil
         }
         return start(plugin, arguments: arguments, query: query, command: command.id, action: action,
-                     completion: completion)
+                     streams: streams, completion: completion)
     }
 
     func lastRun(for id: String) -> PluginRunRecord? { lastRuns[id] }
 
+    /// `streams` decodes the output line by line; `rows` also shows them as they come.
     private func start(_ plugin: InstalledPlugin, arguments: [String], query: String, command: String,
-                       action: PluginRunAction, completion: @escaping @MainActor (PluginRunReport) -> Void) -> PluginRun? {
+                       action: PluginRunAction, streams: Bool = false, rows: (@MainActor ([PluginItem]) -> Void)? = nil,
+                       completion: @escaping @MainActor (PluginRunReport) -> Void) -> PluginRun? {
         loadIfNeeded()
         let finish: @MainActor (PluginRunReport) -> Void = { [weak self] report in
             self?.record(report, for: plugin, command: command, action: action, arguments: arguments)
@@ -247,8 +259,14 @@ final class PluginHost {
             for: plugin, query: query, dataDirectory: data, configurationJSON: json,
             configurationVariables: variables, command: command, action: action,
             appearance: dark ? "dark" : "light", version: Self.appVersion)
+        var delivery: PluginRun.Rows?
+        if let rows {
+            // Delivered on the main queue, which is the main actor's.
+            delivery = { items in MainActor.assumeIsolated { rows(items) } }
+        }
         return PluginRun.startReporting(executable: executable, arguments: arguments, environment: environment,
-                                        directory: plugin.directory, timeout: manifest.timeout) { report in
+                                        directory: plugin.directory, timeout: manifest.timeout,
+                                        stream: streams || rows != nil, rows: delivery) { report in
             Task { @MainActor in finish(report) }
         }
     }

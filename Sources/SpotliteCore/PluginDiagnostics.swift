@@ -42,14 +42,21 @@ public struct PluginRunReport: Sendable {
     /// The tail of standard error.
     public let errorOutput: Data
     public let duration: TimeInterval
+    /// For a streamed run: how many rows came and which lines were skipped.
+    public let stream: PluginStreamSummary?
+    /// A streamed run's rows, also when it failed after some arrived.
+    public let streamedItems: [PluginItem]
 
     public init(result: Result<PluginResponse, PluginRunError>, status: Int32? = nil, output: Data = Data(),
-                errorOutput: Data = Data(), duration: TimeInterval = 0) {
+                errorOutput: Data = Data(), duration: TimeInterval = 0,
+                stream: PluginStreamSummary? = nil, streamedItems: [PluginItem] = []) {
         self.result = result
         self.status = status
         self.output = output
         self.errorOutput = errorOutput
         self.duration = duration
+        self.stream = stream
+        self.streamedItems = streamedItems
     }
 
     public var errorText: String { PluginDiagnostics.text(errorOutput) }
@@ -67,6 +74,7 @@ public struct PluginRunRecord: Sendable, Equatable {
     public let duration: TimeInterval
     public let errorOutput: String
     public let outputExcerpt: String
+    public let stream: PluginStreamSummary?
 
     static let outputExcerptBytes = 400
 
@@ -81,6 +89,7 @@ public struct PluginRunRecord: Sendable, Equatable {
         self.duration = report.duration
         self.errorOutput = report.errorText
         self.outputExcerpt = PluginDiagnostics.excerpt(report.output, bytes: Self.outputExcerptBytes)
+        self.stream = report.stream
     }
 
     public var failed: Bool { error != nil }
@@ -92,6 +101,7 @@ public struct PluginRunRecord: Sendable, Equatable {
         lines.append([status.map { "exit \($0)" }, PluginDiagnostics.duration(duration)]
             .compactMap { $0 }.joined(separator: " · "))
         if let error { lines.append("Error: " + error.detail) }
+        if let stream { lines += [stream.text] + stream.errors }
         if !errorOutput.isEmpty { lines += ["", "stderr:", errorOutput.trimmingCharacters(in: .newlines)] }
         if !outputExcerpt.isEmpty { lines += ["", "stdout:", outputExcerpt.trimmingCharacters(in: .newlines)] }
         return lines.joined(separator: "\n")
@@ -124,6 +134,13 @@ public enum PluginDiagnostics {
 
     /// Why a response was not accepted, with how it began, for a plugin author to act on.
     static func invalidOutputDetail(_ error: Error, output: Data) -> String {
+        let reason = reason(for: error)
+        let start = excerpt(output, bytes: 200)
+        return start.isEmpty ? reason : reason + "\nOutput began: " + start
+    }
+
+    /// Why JSON was not accepted, in the decoder's words, with where when it says.
+    static func reason(for error: Error) -> String {
         var reason: String
         switch error as? DecodingError {
         case .dataCorrupted(let context):
@@ -138,8 +155,7 @@ public enum PluginDiagnostics {
         case .keyNotFound(let key, _): reason = "Missing “\(key.stringValue)”."
         default: reason = String(describing: error)
         }
-        let start = excerpt(output, bytes: 200)
-        return start.isEmpty ? reason : reason + "\nOutput began: " + start
+        return reason
     }
 
     public static func duration(_ seconds: TimeInterval) -> String {

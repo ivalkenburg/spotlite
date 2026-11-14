@@ -591,6 +591,100 @@ struct PluginRunTests {
     }
 }
 
+@Suite("Plugin streamed runs")
+struct PluginStreamRunTests {
+    /// Rows delivered so far, and when the first came.
+    private final class Deliveries: @unchecked Sendable {
+        private let lock = NSLock()
+        private var batches: [[PluginItem]] = []
+        private var report: PluginRunReport?
+        var all: [[PluginItem]] { lock.withLock { batches } }
+        var finished: PluginRunReport? { lock.withLock { report } }
+        func add(_ items: [PluginItem]) { lock.withLock { batches.append(items) } }
+        func finish(_ value: PluginRunReport) { lock.withLock { report = value } }
+    }
+
+    private func start(_ script: String, timeout: TimeInterval = 10, deliveries: Deliveries,
+                       fixture: PluginFixture) throws -> (PluginRun, URL) {
+        let plugin = PluginStore.load(try fixture.plugin("demo", manifest: PluginFixture.manifest(), script: script))
+        let queue = DispatchQueue(label: "rows")
+        let run = PluginRun.startReporting(executable: plugin.executableURL!, arguments: [],
+                                           environment: ["PATH": "/usr/bin:/bin"], directory: plugin.directory,
+                                           timeout: timeout, stream: true, rows: { deliveries.add($0) },
+                                           rowsQueue: queue) { deliveries.finish($0) }
+        return (run, plugin.directory)
+    }
+
+    @Test func rowsArriveBeforeTheProgramExits() async throws {
+        let fixture = try PluginFixture()
+        let deliveries = Deliveries()
+        let script = #"""
+        echo '{"title":"one"}'; sleep 0.4
+        echo '{"title":"two"}'; echo 'oops'; sleep 0.4
+        printf '{"title":"three"}\n{"toast":"done"}'
+        """#
+        _ = try start(script, deliveries: deliveries, fixture: fixture)
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(deliveries.all.last?.map(\.title) == ["one"])
+        #expect(deliveries.finished == nil)
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(deliveries.all.last?.map(\.title) == ["one", "two"])
+        for _ in 0..<100 where deliveries.finished == nil { try await Task.sleep(for: .milliseconds(20)) }
+        let report = try #require(deliveries.finished)
+        let response = try report.result.get()
+        #expect(response.items?.map(\.title) == ["one", "two", "three"])
+        #expect(response.toast?.text == "done")
+        #expect(report.stream?.rows == 3 && report.stream?.skipped == 1)
+        #expect(report.stream?.errors.first?.hasPrefix("Line 3:") == true)
+        // Raw output is kept for the debug runner.
+        #expect(String(decoding: report.output, as: UTF8.self).contains("oops"))
+    }
+
+    @Test func cancellingMidStreamStopsTheProgramAndItsRows() async throws {
+        let fixture = try PluginFixture()
+        let deliveries = Deliveries()
+        let script = #"""
+        echo $$ > stream.pid
+        i=0; while [ $i -lt 50 ]; do echo "{\"title\":\"row $i\"}"; i=$((i+1)); sleep 0.1; done
+        """#
+        let (run, directory) = try start(script, deliveries: deliveries, fixture: fixture)
+        try await Task.sleep(for: .milliseconds(350))
+        let delivered = deliveries.all.count
+        #expect(delivered > 0)
+        run.cancel()
+        try await Task.sleep(for: .milliseconds(1_500))
+        let pid = try #require(Int32(try String(contentsOf: directory.appendingPathComponent("stream.pid"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)))
+        #expect(kill(pid, 0) == -1)
+        #expect(deliveries.finished == nil)
+        #expect(deliveries.all.count <= delivered + 1)
+        #expect((deliveries.all.last?.count ?? 0) < 10)
+    }
+
+    @Test func aFailureKeepsTheRowsInTheReport() async throws {
+        let fixture = try PluginFixture()
+        let deliveries = Deliveries()
+        _ = try start(#"echo '{"title":"kept"}'; echo 'gone wrong' >&2; exit 2"#, deliveries: deliveries, fixture: fixture)
+        for _ in 0..<100 where deliveries.finished == nil { try await Task.sleep(for: .milliseconds(20)) }
+        let report = try #require(deliveries.finished)
+        #expect(report.result == .failure(.failed(status: 2, message: "gone wrong")))
+        #expect(report.streamedItems.map(\.title) == ["kept"])
+    }
+
+    @Test func aBurstIsDeliveredInFewBatches() async throws {
+        let fixture = try PluginFixture()
+        let deliveries = Deliveries()
+        let script = #"i=0; while [ $i -lt 500 ]; do echo "{\"title\":\"row $i\"}"; i=$((i+1)); done"#
+        _ = try start(script, deliveries: deliveries, fixture: fixture)
+        for _ in 0..<200 where deliveries.finished == nil { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(try deliveries.finished?.result.get().items?.count == 500)
+        // Coalesced: far fewer deliveries than lines, each holding every row so far.
+        print("streamed 500 rows in \(deliveries.all.count) deliveries")
+        #expect(deliveries.all.count < 500)
+        #expect(zip(deliveries.all, deliveries.all.dropFirst()).allSatisfy { $0.count < $1.count })
+    }
+}
+
 private final class RecordedPluginResult: @unchecked Sendable {
     private let lock = NSLock()
     private var result: Result<PluginResponse, PluginRunError>?
