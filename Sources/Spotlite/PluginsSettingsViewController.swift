@@ -23,6 +23,10 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
     /// Found by the last check, in memory: nothing checks on its own.
     private var availableUpdates: [String: String?] = [:]
     private var installController: PluginInstallWindowController?
+    private var galleryController: PluginGalleryWindowController?
+    /// The last index read while Settings is open, so reopening the gallery doesn't
+    /// fetch again. Freed with Settings.
+    private var galleryIndex: PluginGalleryIndex?
     private var configurationController: PluginConfigurationWindowController?
     private var runnerController: PluginDebugRunnerWindowController?
 
@@ -55,6 +59,11 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
             item.toolTip = tip
             install.menu?.addItem(item)
         }
+        install.menu?.addItem(.separator())
+        let gallery = NSMenuItem(title: "Browse Gallery…", action: #selector(browseGalleryClicked), keyEquivalent: "")
+        gallery.target = self
+        gallery.toolTip = "Plugins listed in Spotlite’s gallery. Loaded only when opened."
+        install.menu?.addItem(gallery)
         install.setAccessibilityLabel("Install")
         removeButton.target = self
         removeButton.action = #selector(removeClicked)
@@ -297,15 +306,39 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
         present(.checkUpdates(plugins.filter { sources[$0.id] != nil && !PluginInstaller.isLinked($0) }))
     }
 
-    /// The address flow in one sheet: what it installs, Settings shows as a folder install.
+    @objc private func browseGalleryClicked() {
+        presentGallery()
+    }
+
+    /// The gallery sheet. Its Install and Update open the install sheet on top of it.
     @discardableResult
-    func present(_ start: PluginInstallWindowController.Start) -> PluginInstallWindowController? {
-        guard let window = view.window, installController == nil, configurationController == nil,
+    func presentGallery() -> PluginGalleryWindowController? {
+        guard let window = view.window, galleryController == nil, installController == nil,
+              configurationController == nil, runnerController == nil else { return nil }
+        let controller = PluginGalleryWindowController(cached: galleryIndex, installed: { PluginHost.shared.plugins },
+                                                       fetch: PluginHost.shared.galleryFetcher())
+        controller.onFetched = { [weak self] index in self?.galleryIndex = index }
+        controller.onInstall = { [weak self, weak controller] entry in
+            guard let self, let source = entry.installSource, let sheet = controller?.window else { return }
+            self.present(.source(source), over: sheet)
+        }
+        galleryController = controller
+        guard let sheet = controller.window else { galleryController = nil; return nil }
+        window.beginSheet(sheet) { [weak self] _ in self?.galleryController = nil }
+        return controller
+    }
+
+    /// The address flow in one sheet: what it installs, Settings shows as a folder install.
+    /// `parent` is the window it attaches to: Settings, or the gallery's sheet.
+    @discardableResult
+    func present(_ start: PluginInstallWindowController.Start, over parent: NSWindow? = nil) -> PluginInstallWindowController? {
+        guard let window = parent ?? view.window, installController == nil, configurationController == nil,
               runnerController == nil else { return nil }
         let controller = PluginInstallWindowController(installer: PluginHost.shared.installer(), start: start)
         controller.onInstalled = { [weak self] installed in
             self?.availableUpdates[installed.id] = nil
             self?.installed(installed)
+            self?.galleryController?.refreshStatus()
         }
         controller.onChecked = { [weak self] checks in
             guard let self else { return }

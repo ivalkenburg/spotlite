@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "plugins": [
+    {
+      "id": "devgallery-new",
+      "name": "Gallery New",
+      "description": "Not installed yet: the gallery offers Install.",
+      "author": "Dev Tester",
+      "version": "1.0.0",
+      "source": "https://example.invalid/devgallery-new.zip",
+      "homepage": "https://example.invalid/new",
+      "icon": "sparkles",
+      "tags": ["fresh", "demo"]
+    },
+    {
+      "id": "devgallery-old",
+      "name": "Gallery Old",
+      "description": "Installed at 1.0.0: the gallery offers Update.",
+      "author": "Dev Tester",
+      "version": "2.0.0",
+      "source": "https://example.invalid/devgallery-old.zip",
+      "icon": "arrow.triangle.2.circlepath",
+      "tags": ["demo"]
+    },
+    {
+      "id": "devgallery-same",
+      "name": "Gallery Same",
+      "description": "Installed at the listed version.",
+      "author": "Dev Tester",
+      "version": "1.0.0",
+      "source": "https://example.invalid/devgallery-same.zip",
+      "icon": "no.such.symbol.anywhere"
+    },
+    {
+      "id": "devgallery-insecure",
+      "name": "Insecure",
+      "description": "An http source: skipped.",
+      "author": "Dev Tester",
+      "version": "1.0.0",
+      "source": "http://example.invalid/insecure.zip"
+    }
+  ]
+}

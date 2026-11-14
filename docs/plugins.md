@@ -16,7 +16,8 @@ A plugin runs with your user's permissions. Install only ones you trust.
 
 ## Installing
 
-Install → From Folder… copies a plugin folder. Install → From URL… takes an address:
+Install → From Folder… copies a plugin folder. Install → Browse Gallery… lists plugins
+to install by name (see [Gallery](#gallery)). Install → From URL… takes an address:
 
 | Address | |
 | --- | --- |
@@ -57,6 +58,60 @@ again and discarded. Versions compare as semantic versions (`1.10` is newer than
 `1.0.0-beta` precedes `1.0.0`, a leading `v` and `+build` are ignored); a version that is
 not one is offered as an update whenever it differs. Update… goes through the same
 confirmation.
+
+### Gallery
+
+Install → Browse Gallery… reads the gallery index,
+[`plugins/index.json`](../plugins/index.json) on the repository's `main` branch, served
+from `raw.githubusercontent.com`. It is fetched only when the sheet opens or Refresh is
+clicked: never at launch, in the background or on a timer. While Settings stays open the
+last index is kept in memory, and nothing is written to disk.
+
+The sheet lists each plugin's name, version, author, description and tags, with a search
+field, and its status: Install… when it is not installed, Update… when the gallery lists a
+newer version (compared as in Check for Updates), Installed otherwise. Install… and
+Update… hand the entry's `source` to the install sheet, so the download is checked and the
+same confirmation, with the manifest and the trust warning, comes before anything is
+installed. A plugin installed from the gallery has a source record like any other.
+
+The gallery lists plugins; it does not review them. A listed plugin is third-party code
+that runs with your permissions, like one installed from any address.
+
+To propose a plugin, open a pull request that adds an entry to `plugins/index.json`:
+
+```json
+{
+  "version": 1,
+  "plugins": [
+    {
+      "id": "timezones",
+      "name": "Time Zones",
+      "description": "Show the time in other cities.",
+      "author": "you",
+      "version": "1.0.0",
+      "source": "https://github.com/you/spotlite-timezones",
+      "homepage": "https://github.com/you/spotlite-timezones",
+      "icon": "globe",
+      "tags": ["time", "travel"]
+    }
+  ]
+}
+```
+
+| Key | |
+| --- | --- |
+| `version` | The index format, `1`. An index with another version is refused with an error. |
+| `id`, `name`, `version` | As in the plugin's `plugin.json`. The id is unique in the index, ignoring letter case. |
+| `description`, `author` | Required. Up to 500 and 100 characters. |
+| `source` | Any address Install → From URL… accepts (see the table above). |
+| `homepage` | Optional https page, opened by the arrow next to the name. |
+| `icon` | Optional SF Symbol name. Images are never downloaded. |
+| `tags` | Optional lowercase words for search; the first 8 are used. |
+
+[`docs/plugin-index.schema.json`](plugin-index.schema.json) is the JSON Schema for the
+file. Spotlite reads at most 1 MB and 500 entries, and skips an entry that is invalid (a
+missing field, an address that is not https, a repeated id) while showing the rest, with
+a count of what it skipped.
 
 ## Manifest
 

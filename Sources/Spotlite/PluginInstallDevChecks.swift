@@ -74,7 +74,8 @@ enum PluginInstallDevChecks {
         let install = views.compactMap { $0 as? NSPopUpButton }.first { $0.pullsDown && $0.itemTitles.contains("From URL…") }
         let updates = views.compactMap { $0 as? NSButton }.first { $0.title == "Check for Updates" }
         let source = views.compactMap { $0 as? NSTextField }.first { $0.accessibilityLabel() == "Source" }
-        try check(install?.itemTitles == ["Install", "From Folder…", "From URL…"], "Install menu: \(install?.itemTitles ?? [])")
+        try check(install?.itemTitles == ["Install", "From Folder…", "From URL…", "", "Browse Gallery…"],
+                  "Install menu: \(install?.itemTitles ?? [])")
         try check(updates?.isEnabled == false, "Check for Updates enabled without a source")
         dumpFrames(pane.view, tag: "plugins-pane-install")
 
@@ -196,16 +197,16 @@ enum PluginInstallDevChecks {
         print("DEV install: linked plugin kept, staging cleaned passed")
     }
 
-    private static func stagingLeftovers() -> [String] {
+    static func stagingLeftovers() -> [String] {
         ((try? FileManager.default.contentsOfDirectory(atPath: FileManager.default.temporaryDirectory.path)) ?? [])
             .filter { $0.hasPrefix("Spotlite-plugin-") }
     }
 
-    private static func folder(_ id: String, version: String, in scratch: URL) throws -> URL {
+    static func folder(_ id: String, version: String, name: String = "Dev Install", in scratch: URL) throws -> URL {
         let folder = scratch.appendingPathComponent("src-\(UUID().uuidString)/\(id)-main")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let manifest = """
-        {"id":"\(id)","name":"Dev Install","version":"\(version)","author":"Dev Tester","description":"Installed by a dev check.",
+        {"id":"\(id)","name":"\(name)","version":"\(version)","author":"Dev Tester","description":"Installed by a dev check.",
          "executable":"run.sh","settings":[{"id":"token","label":"Token","type":"secret"}],
          "commands":[{"id":"run","title":"Run Dev","action":{"type":"run"}},
                      {"id":"list","title":"List Dev","keyword":"devlist","action":{"type":"list"}}]}
@@ -217,8 +218,8 @@ enum PluginInstallDevChecks {
         return folder
     }
 
-    private static func archive(_ id: String, version: String, in scratch: URL) throws -> URL {
-        let source = try folder(id, version: version, in: scratch)
+    static func archive(_ id: String, version: String, name: String = "Dev Install", in scratch: URL) throws -> URL {
+        let source = try folder(id, version: version, name: name, in: scratch)
         let zip = scratch.appendingPathComponent("\(UUID().uuidString).zip")
         let ditto = Process()
         ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
@@ -244,12 +245,12 @@ enum PluginInstallDevChecks {
         return url
     }
 
-    private static func descendants(_ view: NSView) -> [NSView] {
+    static func descendants(_ view: NSView) -> [NSView] {
         view.subviews.flatMap { [$0] + descendants($0) }
     }
 
     /// Frames in the root's coordinates, and any view that pokes outside the root.
-    private static func dumpFrames(_ root: NSView, tag: String) {
+    static func dumpFrames(_ root: NSView, tag: String) {
         root.layoutSubtreeIfNeeded()
         print("DEV frames \(tag): root \(root.bounds.size)")
         for view in descendants(root) where view is NSControl || view is NSScrollView {

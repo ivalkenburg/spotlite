@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/docs/plugin-index.schema.json",
+  "title": "Spotlite plugin gallery index",
+  "description": "The list Settings → Plugins → Browse Gallery… reads. Spotlite skips an entry that breaks these rules and shows the rest.",
+  "type": "object",
+  "required": ["version", "plugins"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": {
+      "description": "Format version. Spotlite refuses an index with a version it doesn't know.",
+      "const": 1
+    },
+    "plugins": {
+      "type": "array",
+      "maxItems": 500,
+      "items": { "$ref": "#/$defs/entry" }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": ["id", "name", "description", "author", "version", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "The plugin's id, as in its plugin.json. Unique in the index, ignoring letter case.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*$",
+          "maxLength": 100
+        },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100, "pattern": "\\S" },
+        "description": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S" },
+        "author": { "type": "string", "minLength": 1, "maxLength": 100, "pattern": "\\S" },
+        "version": {
+          "description": "The version the source holds, as in its plugin.json. Compared with the installed version to offer an update.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50,
+          "pattern": "\\S"
+        },
+        "source": {
+          "description": "Any https address Install → From URL… accepts: a GitHub repository or …/tree/<ref>/<folder>, a .zip, or a .git address.",
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^(https://|github\\.com/)"
+        },
+        "homepage": {
+          "description": "An https page about the plugin.",
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "icon": {
+          "description": "An SF Symbol name. Images are never downloaded.",
+          "type": "string",
+          "pattern": "^[a-z0-9]+(\\.[a-z0-9]+)*$",
+          "maxLength": 100
+        },
+        "tags": {
+          "description": "Lowercase words people may search for. Spotlite shows the first 8.",
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9 .+-]*$", "maxLength": 30 }
+        }
+      }
+    }
+  }
+}

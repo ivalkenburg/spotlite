@@ -1,0 +1,66 @@
+{
+  "$schema": "../docs/plugin-index.schema.json",
+  "version": 1,
+  "plugins": [
+    {
+      "id": "caffeinate",
+      "name": "Caffeinate",
+      "description": "Keep the display awake for a while, or until turned off.",
+      "author": "Spotlite",
+      "version": "1.0.0",
+      "source": "https://github.com/ivalkenburg/spotlite/tree/main/examples/plugins/caffeinate",
+      "homepage": "https://github.com/ivalkenburg/spotlite/tree/main/examples/plugins/caffeinate",
+      "icon": "cup.and.saucer",
+      "tags": [
+        "power",
+        "display",
+        "system"
+      ]
+    },
+    {
+      "id": "findfiles",
+      "name": "Find Files",
+      "description": "Find files by name, showing each as it is found.",
+      "author": "Spotlite",
+      "version": "1.0.0",
+      "source": "https://github.com/ivalkenburg/spotlite/tree/main/examples/plugins/findfiles",
+      "homepage": "https://github.com/ivalkenburg/spotlite/tree/main/examples/plugins/findfiles",
+      "icon": "doc.text.magnifyingglass",
+      "tags": [
+        "files",
+        "search",
+        "streaming"
+      ]
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "description": "Search GitHub repositories and open one in the browser.",
+      "author": "Spotlite",
+      "version": "1.2.0",
+      "source": "https://github.com/ivalkenburg/spotlite/tree/main/examples/plugins/github",
+      "homepage": "https://github.com/ivalkenburg/spotlite/tree/main/examples/plugins/github",
+      "icon": "chevron.left.forwardslash.chevron.right",
+      "tags": [
+        "github",
+        "search",
+        "developer"
+      ]
+    },
+    {
+      "id": "kubectx",
+      "name": "Kube Context",
+      "description": "Switch the current kubectl context.",
+      "author": "Spotlite",
+      "version": "1.0.0",
+      "source": "https://github.com/ivalkenburg/spotlite/tree/main/examples/plugins/kubectx",
+      "homepage": "https://github.com/ivalkenburg/spotlite/tree/main/examples/plugins/kubectx",
+      "icon": "shippingbox",
+      "tags": [
+        "kubernetes",
+        "kubectl",
+        "developer"
+      ]
+    }
+  ]
+}
