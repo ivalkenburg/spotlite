@@ -1,6 +1,6 @@
 #!/bin/sh
 # Lists kubectl contexts, or switches to one.
-#   (no arguments)  list contexts, the current one marked
+#   (no arguments)  list contexts, the current one first, then alphabetical
 #   use <context>   switch to it
 # A failure's last nonempty line on standard error is what Spotlite shows.
 
@@ -15,7 +15,7 @@ case "$1" in
     current=$(kubectl config current-context 2>/dev/null)
     contexts=$(kubectl config get-contexts -o name) || exit 1
     printf '%s\n' "$contexts" | jq -Rn --arg current "$current" '{
-      items: [inputs | select(length > 0) | {
+      items: [[inputs | select(length > 0)] | sort_by(. != $current, ascii_downcase)[] | {
         id: .,
         title: .,
         subtitle: (if . == $current then "Current" else null end),
