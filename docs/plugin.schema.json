@@ -1,0 +1,374 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/docs/plugin.schema.json",
+  "title": "Spotlite plugin manifest",
+  "description": "plugin.json at the top of a Spotlite plugin's folder. See docs/plugins.md.",
+  "type": "object",
+  "required": ["id", "name", "commands"],
+  "properties": {
+    "$schema": {
+      "description": "This schema's address, for editor completion. Spotlite ignores it.",
+      "type": "string"
+    },
+    "id": {
+      "description": "The plugin's id: letters, digits, '.', '-' and '_', up to 128 characters, not starting with '.'. Unique among installed plugins, ignoring letter case.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$"
+    },
+    "name": {
+      "description": "The name Settings shows.",
+      "type": "string"
+    },
+    "version": {
+      "description": "Shown in Settings and compared as a semantic version by Check for Updates.",
+      "type": "string"
+    },
+    "description": {
+      "description": "One sentence about what the plugin does.",
+      "type": "string"
+    },
+    "author": {
+      "type": "string"
+    },
+    "executable": {
+      "description": "Path of the program inside the plugin's folder, with the executable bit. Needed when a command's action is run, list or search, or a menu row's is.",
+      "type": "string",
+      "minLength": 1
+    },
+    "timeout": {
+      "description": "Seconds a run may take. Values outside 1 to 60 are clamped.",
+      "type": "number",
+      "minimum": 1,
+      "maximum": 60,
+      "default": 10
+    },
+    "commands": {
+      "description": "Root search results the plugin adds. Command ids must be unique.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/command" }
+    },
+    "settings": {
+      "description": "Configuration fields shared by all commands, shown by Configure in Settings → Plugins. Ids must be unique.",
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/setting" }
+    }
+  },
+  "additionalProperties": false,
+
+  "$defs": {
+    "plainID": {
+      "description": "Letters, digits, '.', '-' and '_', up to 128 characters.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]{1,128}$",
+      "not": { "enum": [".", ".."] }
+    },
+    "nonblank": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "icon": {
+      "description": "An SF Symbol name, an image file (relative to the plugin's folder unless absolute), or any other path, whose Finder icon is shown.",
+      "type": "string"
+    },
+
+    "command": {
+      "title": "Command",
+      "description": "A root search result. It ranks, hides, takes an alias and learns launch history like an app.",
+      "type": "object",
+      "required": ["id", "title", "action"],
+      "properties": {
+        "id": { "$ref": "#/$defs/plainID", "description": "Unique within the plugin. Keys aliases, hiding and launch history." },
+        "title": { "description": "The name search matches and shows.", "type": "string" },
+        "keyword": { "description": "Another name that finds the command, until the user sets an alias.", "type": "string" },
+        "subtitle": { "type": "string" },
+        "icon": { "$ref": "#/$defs/icon" },
+        "action": { "$ref": "#/$defs/action", "description": "What Return does." },
+        "actions": { "$ref": "#/$defs/actions" }
+      },
+      "additionalProperties": false
+    },
+
+    "item": {
+      "title": "Row",
+      "description": "One row of a list, search or menu. A row without an action only informs.",
+      "type": "object",
+      "required": ["title"],
+      "properties": {
+        "id": { "description": "Tells rows apart for launch history and selection. Defaults to the title.", "type": "string" },
+        "title": { "type": "string" },
+        "subtitle": { "description": "Shown at the right of the selected row.", "type": "string" },
+        "accessory": { "description": "Short text at the right of every row, such as a count or a date.", "type": "string" },
+        "keywords": {
+          "description": "More names that find the row when typing filters it. Only the first 8 are used.",
+          "type": "array",
+          "maxItems": 8,
+          "items": { "type": "string" }
+        },
+        "icon": { "$ref": "#/$defs/icon" },
+        "action": { "$ref": "#/$defs/action", "description": "What Return does." },
+        "actions": { "$ref": "#/$defs/actions" }
+      },
+      "additionalProperties": false
+    },
+
+    "action": {
+      "title": "Action",
+      "description": "What Return, a shortcut or the action list does.",
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "description": "open, copy and menu run in Spotlite; run, list and search start the executable.",
+          "enum": ["open", "copy", "run", "list", "search", "menu"]
+        },
+        "confirm": { "$ref": "#/$defs/confirm" }
+      },
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "open" } }, "required": ["type"] }, "then": { "$ref": "#/$defs/openAction" } },
+        { "if": { "properties": { "type": { "const": "copy" } }, "required": ["type"] }, "then": { "$ref": "#/$defs/copyAction" } },
+        { "if": { "properties": { "type": { "const": "run" } }, "required": ["type"] }, "then": { "$ref": "#/$defs/runAction" } },
+        { "if": { "properties": { "type": { "const": "list" } }, "required": ["type"] }, "then": { "$ref": "#/$defs/listAction" } },
+        { "if": { "properties": { "type": { "const": "search" } }, "required": ["type"] }, "then": { "$ref": "#/$defs/searchAction" } },
+        { "if": { "properties": { "type": { "const": "menu" } }, "required": ["type"] }, "then": { "$ref": "#/$defs/menuAction" } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "openAction": {
+      "description": "Opens a URL or a file path and closes the panel.",
+      "required": ["url"],
+      "properties": {
+        "url": { "description": "A URL with a scheme, or a path starting with / or ~.", "type": "string" }
+      }
+    },
+    "copyAction": {
+      "description": "Copies the text and closes the panel.",
+      "required": ["text"],
+      "properties": {
+        "text": { "type": "string" }
+      }
+    },
+    "runAction": {
+      "description": "Runs the executable and applies its response. The panel closes first unless keepOpen is set.",
+      "properties": {
+        "args": { "$ref": "#/$defs/args" },
+        "keepOpen": { "description": "Keep the panel open and reload the current list after the run.", "type": "boolean", "default": false }
+      }
+    },
+    "listAction": {
+      "description": "Enters a list the executable prints once; Spotlite filters it as you type.",
+      "properties": {
+        "args": { "$ref": "#/$defs/args" },
+        "emptyText": { "$ref": "#/$defs/emptyText" },
+        "sort": { "$ref": "#/$defs/sort" },
+        "stream": { "$ref": "#/$defs/stream" }
+      }
+    },
+    "searchAction": {
+      "description": "Enters a list the executable prints for each query, passed as the last argument.",
+      "properties": {
+        "args": { "$ref": "#/$defs/args" },
+        "debounce": {
+          "description": "Milliseconds typing must pause before a run. Values outside 0 to 2000 are clamped.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2000,
+          "default": 200
+        },
+        "minQuery": {
+          "description": "Characters needed before the first run.",
+          "type": "integer",
+          "minimum": 0,
+          "default": 1
+        },
+        "emptyText": { "$ref": "#/$defs/emptyText" },
+        "stream": { "$ref": "#/$defs/stream" }
+      }
+    },
+    "menuAction": {
+      "description": "Enters a fixed list. No process is started.",
+      "properties": {
+        "items": {
+          "description": "The rows. A malformed row is skipped on its own.",
+          "type": "array",
+          "maxItems": 500,
+          "items": { "$ref": "#/$defs/item" }
+        },
+        "emptyText": { "$ref": "#/$defs/emptyText" },
+        "sort": { "$ref": "#/$defs/sort" }
+      }
+    },
+    "args": {
+      "description": "Arguments passed to the executable.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "emptyText": {
+      "description": "Shown when the level has no rows. Default “No results”.",
+      "type": "string"
+    },
+    "sort": {
+      "description": "false keeps matches in the plugin's order. Default true, best match first.",
+      "type": "boolean",
+      "default": true
+    },
+    "stream": {
+      "description": "Read one JSON object per line (NDJSON) and show rows as they arrive.",
+      "type": "boolean",
+      "default": false
+    },
+
+    "confirm": {
+      "description": "Ask before the action runs: a question, or an object. A malformed confirm drops the row or action rather than running it unasked.",
+      "oneOf": [
+        { "$ref": "#/$defs/nonblank" },
+        {
+          "type": "object",
+          "required": ["title"],
+          "properties": {
+            "title": { "$ref": "#/$defs/nonblank", "description": "The question." },
+            "message": { "description": "Shown beside the button.", "type": "string" },
+            "button": { "description": "The button's title. Default “Confirm”.", "type": "string" },
+            "destructive": { "description": "Mark the button with a warning icon.", "type": "boolean", "default": false }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+
+    "actions": {
+      "description": "Other actions, reached with a shortcut or from the action list (⌘K). At most 16 are read.",
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/secondaryAction" }
+    },
+    "secondaryAction": {
+      "title": "Other action",
+      "type": "object",
+      "required": ["title", "action"],
+      "properties": {
+        "title": { "$ref": "#/$defs/nonblank", "description": "Shown in the action list, and on the row while the shortcut is held." },
+        "shortcut": { "$ref": "#/$defs/shortcut" },
+        "icon": { "$ref": "#/$defs/icon" },
+        "action": { "$ref": "#/$defs/action" }
+      },
+      "additionalProperties": false
+    },
+    "shortcut": {
+      "description": "Modifiers held with Return: cmd, opt, shift or ctrl, or several joined by +, such as cmd+shift. The first action to claim a chord gets it.",
+      "type": "string",
+      "pattern": "^(cmd|command|opt|option|alt|shift|ctrl|control)(\\+(cmd|command|opt|option|alt|shift|ctrl|control))*$"
+    },
+    "shortcutName": {
+      "description": "Every modifier name a shortcut may join. command, option, alt and control are aliases.",
+      "enum": ["cmd", "command", "opt", "option", "alt", "shift", "ctrl", "control"]
+    },
+
+    "setting": {
+      "title": "Setting",
+      "type": "object",
+      "required": ["id", "label", "type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/plainID", "description": "Key in SPOTLITE_CONFIG. Unique within the plugin." },
+        "label": { "$ref": "#/$defs/nonblank" },
+        "type": { "enum": ["text", "number", "boolean", "choice", "secret", "file", "folder", "list"] },
+        "description": { "description": "Shown below the field.", "type": "string" },
+        "required": { "type": "boolean", "default": false }
+      },
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "text" } }, "required": ["type"] }, "then": { "$ref": "#/$defs/textSetting" } },
+        { "if": { "properties": { "type": { "const": "number" } }, "required": ["type"] }, "then": { "$ref": "#/$defs/numberSetting" } },
+        { "if": { "properties": { "type": { "const": "boolean" } }, "required": ["type"] }, "then": { "$ref": "#/$defs/booleanSetting" } },
+        { "if": { "properties": { "type": { "const": "choice" } }, "required": ["type"] }, "then": { "$ref": "#/$defs/choiceSetting" } },
+        { "if": { "properties": { "type": { "const": "secret" } }, "required": ["type"] }, "then": { "$ref": "#/$defs/secretSetting" } },
+        { "if": { "properties": { "type": { "const": "file" } }, "required": ["type"] }, "then": { "$ref": "#/$defs/fileSetting" } },
+        { "if": { "properties": { "type": { "const": "folder" } }, "required": ["type"] }, "then": { "$ref": "#/$defs/folderSetting" } },
+        { "if": { "properties": { "type": { "const": "list" } }, "required": ["type"] }, "then": { "$ref": "#/$defs/listSetting" } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "requiredNonblankDefault": {
+      "if": { "properties": { "required": { "const": true } }, "required": ["required", "default"] },
+      "then": { "properties": { "default": { "pattern": "\\S" } } }
+    },
+    "textSetting": {
+      "description": "A string.",
+      "properties": {
+        "default": { "type": "string" },
+        "multiline": { "description": "A multi-line editor. The value is still one string.", "type": "boolean", "default": false }
+      },
+      "$ref": "#/$defs/requiredNonblankDefault"
+    },
+    "numberSetting": {
+      "description": "A finite number, fractions included. The default must lie within min and max.",
+      "properties": {
+        "default": { "type": "number" },
+        "min": { "description": "Inclusive lower bound.", "type": "number" },
+        "max": { "description": "Inclusive upper bound, at least min.", "type": "number" }
+      }
+    },
+    "booleanSetting": {
+      "description": "A toggle, false unless a default says otherwise.",
+      "properties": {
+        "default": { "type": "boolean" }
+      }
+    },
+    "choiceSetting": {
+      "description": "One of the options' values. The default must be one of them.",
+      "required": ["options"],
+      "properties": {
+        "default": { "type": "string" },
+        "options": {
+          "description": "Values must be unique.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["value", "label"],
+            "properties": {
+              "value": { "type": "string", "minLength": 1 },
+              "label": { "$ref": "#/$defs/nonblank" }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "secretSetting": {
+      "description": "A string kept in the Keychain, never in the settings file. Takes no default.",
+      "properties": {}
+    },
+    "fileSetting": {
+      "description": "A file path. A leading ~ is expanded in SPOTLITE_CONFIG.",
+      "properties": {
+        "default": { "type": "string" },
+        "mustExist": { "description": "Require an existing file.", "type": "boolean", "default": false },
+        "extensions": {
+          "description": "Extensions the Choose… panel offers, such as json. A leading dot is dropped.",
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[^/]+$", "not": { "const": "." } }
+        }
+      },
+      "$ref": "#/$defs/requiredNonblankDefault"
+    },
+    "folderSetting": {
+      "description": "A folder path. A leading ~ is expanded in SPOTLITE_CONFIG.",
+      "properties": {
+        "default": { "type": "string" },
+        "mustExist": { "description": "Require an existing folder.", "type": "boolean", "default": false }
+      },
+      "$ref": "#/$defs/requiredNonblankDefault"
+    },
+    "listSetting": {
+      "description": "An array of strings, edited one per line.",
+      "properties": {
+        "default": {
+          "type": "array",
+          "items": { "description": "One nonblank line.", "type": "string", "pattern": "^[^\\r\\n]*\\S[^\\r\\n]*$" }
+        }
+      },
+      "if": { "properties": { "required": { "const": true } }, "required": ["required", "default"] },
+      "then": { "properties": { "default": { "minItems": 1 } } }
+    }
+  }
+}
