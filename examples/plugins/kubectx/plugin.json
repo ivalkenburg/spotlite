@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/docs/plugin.schema.json",
   "id": "kubectx",
   "name": "Kube Context",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Switch the current kubectl context.",
   "executable": "kubectx.sh",
   "commands": [
