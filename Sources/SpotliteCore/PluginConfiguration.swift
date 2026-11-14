@@ -1,6 +1,7 @@
 import Foundation
 
-/// The ordinary JSON values supported by plugin settings. No credentials or secrets.
+/// The JSON values supported by plugin settings. A secret is a string here; only where
+/// it is stored differs.
 public enum PluginSettingValue: Codable, Sendable, Equatable {
     case string(String)
     case number(Double)
@@ -34,7 +35,7 @@ public enum PluginSettingValue: Codable, Sendable, Equatable {
 }
 
 public struct PluginSetting: Decodable, Sendable, Equatable {
-    public enum Kind: String, Decodable, Sendable { case text, number, boolean, choice }
+    public enum Kind: String, Decodable, Sendable { case text, number, boolean, choice, secret }
     public struct Option: Decodable, Sendable, Equatable {
         public let value: String
         public let label: String
@@ -86,6 +87,9 @@ public struct PluginSetting: Decodable, Sendable, Equatable {
         } else if !options.isEmpty {
             throw invalid("Only choice settings can have options: \(id).")
         }
+        guard type != .secret || defaultValue == nil else {
+            throw invalid("Secret setting \(id) cannot have a default.")
+        }
         if let defaultValue, let error = validationError(for: defaultValue) {
             throw invalid("Invalid default for setting \(id): \(error)")
         }
@@ -99,7 +103,7 @@ public struct PluginSetting: Decodable, Sendable, Equatable {
     public func validationError(for value: PluginSettingValue?) -> String? {
         guard let value else { return required ? "Enter a value for \(label)." : nil }
         switch (type, value) {
-        case (.text, .string(let text)):
+        case (.text, .string(let text)), (.secret, .string(let text)):
             return required && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? "Enter a value for \(label)." : nil
         case (.number, .number(let number)):
@@ -122,6 +126,8 @@ public struct PluginConfiguration: Sendable, Equatable {
     public let values: [String: PluginSettingValue]
     public let errors: [String: String]
     public let problem: String?
+    /// Fields whose values never leave memory except for the Keychain and the plugin.
+    public let secretIDs: Set<String>
     public var isValid: Bool { problem == nil && errors.isEmpty }
 
     public init(settings: [PluginSetting], saved: [String: PluginSettingValue] = [:], problem: String? = nil) {
@@ -135,10 +141,16 @@ public struct PluginConfiguration: Sendable, Equatable {
         self.values = values
         self.errors = errors
         self.problem = problem
+        self.secretIDs = Set(settings.filter { $0.type == .secret }.map(\.id))
     }
 
     /// Only declared values cross the process boundary; obsolete saved keys stay private.
-    public func json() throws -> String {
+    /// Redacting replaces each set secret with a placeholder, for anything shown or logged.
+    public func json(redactingSecrets: Bool = false) throws -> String {
+        var values = values
+        if redactingSecrets {
+            for id in secretIDs where values[id] != nil { values[id] = .string("<redacted>") }
+        }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(values)
@@ -148,9 +160,11 @@ public struct PluginConfiguration: Sendable, Equatable {
 }
 
 /// Host-owned, persistent settings, independent of both installed code and plugin-owned data.
+/// Secret fields go to `secrets` and are never written to the JSON file.
 public struct PluginConfigurationStore: Sendable {
     public static let maxBytes = 64 * 1024
     public let directory: URL
+    public let secrets: any PluginSecretStore
 
     public enum Failure: Error, LocalizedError {
         case invalidID, tooLarge
@@ -162,8 +176,10 @@ public struct PluginConfigurationStore: Sendable {
         }
     }
 
-    public init(directory: URL = Storage.supportDirectory.appendingPathComponent("PluginSettings", isDirectory: true)) {
+    public init(directory: URL = Storage.supportDirectory.appendingPathComponent("PluginSettings", isDirectory: true),
+                secrets: any PluginSecretStore = KeychainSecretStore()) {
         self.directory = directory
+        self.secrets = secrets
     }
 
     private func url(for id: String) throws -> URL {
@@ -171,7 +187,17 @@ public struct PluginConfigurationStore: Sendable {
         return directory.appendingPathComponent(id).appendingPathExtension("json")
     }
 
-    public func load(for id: String) throws -> [String: PluginSettingValue] {
+    /// The saved values of `settings`' secret fields come from the secret store; the file's
+    /// own copies of them, if someone wrote any, are ignored.
+    public func load(for id: String, settings: [PluginSetting]) throws -> [String: PluginSettingValue] {
+        var values = try loadFile(for: id)
+        for setting in settings where setting.type == .secret {
+            values[setting.id] = try secrets.read(plugin: id, field: setting.id).map(PluginSettingValue.string)
+        }
+        return values
+    }
+
+    private func loadFile(for id: String) throws -> [String: PluginSettingValue] {
         let url = try url(for: id)
         do {
             let file = try FileHandle(forReadingFrom: url)
@@ -184,18 +210,30 @@ public struct PluginConfigurationStore: Sendable {
         }
     }
 
-    public func save(_ values: [String: PluginSettingValue], for id: String) throws {
+    /// An unset or empty secret removes its stored value.
+    public func save(_ values: [String: PluginSettingValue], for id: String, settings: [PluginSetting]) throws {
         let url = try url(for: id)
+        let secretFields = settings.filter { $0.type == .secret }.map(\.id)
+        var stored = values
+        for field in secretFields { stored[field] = nil }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        let data = try encoder.encode(values)
+        let data = try encoder.encode(stored)
         guard data.count <= Self.maxBytes else { throw Failure.tooLarge }
+        for field in secretFields {
+            if case .string(let secret)? = values[field], !secret.isEmpty {
+                try secrets.write(secret, plugin: id, field: field)
+            } else {
+                try secrets.delete(plugin: id, field: field)
+            }
+        }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try data.write(to: url, options: .atomic)
     }
 
     public func reset(for id: String) throws {
         let url = try url(for: id)
+        try secrets.deleteAll(plugin: id)
         do { try FileManager.default.removeItem(at: url) }
         catch CocoaError.fileNoSuchFile { }
     }

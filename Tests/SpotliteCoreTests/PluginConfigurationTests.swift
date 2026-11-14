@@ -69,7 +69,7 @@ struct PluginConfigurationTests {
     @Test(arguments: [
         #"[{"id":"../bad","label":"Bad","type":"text"}]"#,
         #"[{"id":"x","label":" ","type":"text"}]"#,
-        #"[{"id":"x","label":"X","type":"secret"}]"#,
+        #"[{"id":"x","label":"X","type":"secret","default":"hunter2"}]"#,
         #"[{"id":"x","label":"X","type":"number","min":3,"max":2}]"#,
         #"[{"id":"x","label":"X","type":"text","min":1}]"#,
         #"[{"id":"x","label":"X","type":"boolean","default":"true"}]"#,
@@ -94,29 +94,29 @@ struct PluginConfigurationTests {
     @Test func settingsPersistIndependentlyAndResetOnlyTheChosenPlugin() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let store = PluginConfigurationStore(directory: directory.appendingPathComponent("PluginSettings"))
-        #expect(try store.load(for: "test").isEmpty)
+        let store = PluginConfigurationStore(directory: directory.appendingPathComponent("PluginSettings"), secrets: MemorySecretStore())
+        #expect(try store.load(for: "test", settings: []).isEmpty)
         try store.reset(for: "test")
         let configuration = PluginConfiguration(settings: try settings(schema), saved: ["organization": .string("openai")])
-        try store.save(configuration.values, for: "test")
-        try store.save(["keep": .boolean(true)], for: "other")
+        try store.save(configuration.values, for: "test", settings: [])
+        try store.save(["keep": .boolean(true)], for: "other", settings: [])
         // A fresh store after reinstalling reads the same host-owned values.
-        let reinstalled = PluginConfigurationStore(directory: store.directory)
-        #expect(try reinstalled.load(for: "test") == configuration.values)
+        let reinstalled = PluginConfigurationStore(directory: store.directory, secrets: MemorySecretStore())
+        #expect(try reinstalled.load(for: "test", settings: []) == configuration.values)
         try reinstalled.reset(for: "test")
-        #expect(try reinstalled.load(for: "test").isEmpty)
-        #expect(try reinstalled.load(for: "other") == ["keep": .boolean(true)])
-        #expect(throws: PluginConfigurationStore.Failure.self) { try store.save([:], for: "../escape") }
+        #expect(try reinstalled.load(for: "test", settings: []).isEmpty)
+        #expect(try reinstalled.load(for: "other", settings: []) == ["keep": .boolean(true)])
+        #expect(throws: PluginConfigurationStore.Failure.self) { try store.save([:], for: "../escape", settings: []) }
     }
 
     @Test func unreadableSettingsAreNotSilentlyTreatedAsConfigured() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let store = PluginConfigurationStore(directory: directory)
+        let store = PluginConfigurationStore(directory: directory, secrets: MemorySecretStore())
         let file = directory.appendingPathComponent("test.json")
         try Data("{".utf8).write(to: file)
-        #expect(throws: (any Error).self) { try store.load(for: "test") }
+        #expect(throws: (any Error).self) { try store.load(for: "test", settings: []) }
         #expect(try Data(contentsOf: file) == Data("{".utf8))
         #expect(!PluginConfiguration(settings: [], problem: "Unreadable settings").isValid)
     }
@@ -124,20 +124,87 @@ struct PluginConfigurationTests {
     @Test func oversizedSettingsAreRejectedBeforeReplacingThePreviousFile() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let store = PluginConfigurationStore(directory: directory)
-        try store.save(["text": .string("original")], for: "test")
+        let store = PluginConfigurationStore(directory: directory, secrets: MemorySecretStore())
+        try store.save(["text": .string("original")], for: "test", settings: [])
         let oversized = ["text": PluginSettingValue.string(String(repeating: "x", count: PluginConfigurationStore.maxBytes))]
-        #expect(throws: PluginConfigurationStore.Failure.self) { try store.save(oversized, for: "test") }
-        #expect(try store.load(for: "test") == ["text": .string("original")])
+        #expect(throws: PluginConfigurationStore.Failure.self) { try store.save(oversized, for: "test", settings: []) }
+        #expect(try store.load(for: "test", settings: []) == ["text": .string("original")])
     }
 
     @Test func oversizedExternalFilesAreRejectedOnRead() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let store = PluginConfigurationStore(directory: directory)
+        let store = PluginConfigurationStore(directory: directory, secrets: MemorySecretStore())
         try Data(repeating: 32, count: PluginConfigurationStore.maxBytes + 1)
             .write(to: directory.appendingPathComponent("test.json"))
-        #expect(throws: PluginConfigurationStore.Failure.self) { try store.load(for: "test") }
+        #expect(throws: PluginConfigurationStore.Failure.self) { try store.load(for: "test", settings: []) }
+    }
+
+    // MARK: - Secrets
+
+    private let secretSchema = #"""
+    [{"id":"token","label":"Token","type":"secret","required":true},
+     {"id":"extra","label":"Extra","type":"secret"},
+     {"id":"organization","label":"Organization","type":"text"}]
+    """#
+
+    @Test func secretsValidateLikeTextAndReachThePluginAsStrings() throws {
+        let fields = try settings(secretSchema)
+        #expect(fields[0].type == .secret)
+        let missing = PluginConfiguration(settings: fields)
+        #expect(missing.errors.keys.sorted() == ["token"])
+        #expect(PluginConfiguration(settings: fields, saved: ["token": .string(" \n")]).errors["token"] != nil)
+        let configured = PluginConfiguration(settings: fields, saved: ["token": .string("hunter2"), "organization": .string("o")])
+        #expect(configured.isValid)
+        #expect(configured.secretIDs == ["token", "extra"])
+        let object = try #require(JSONSerialization.jsonObject(with: Data(configured.json().utf8)) as? [String: Any])
+        #expect(object["token"] as? String == "hunter2")
+        #expect(object["extra"] == nil)
+        let redacted = try configured.json(redactingSecrets: true)
+        #expect(!redacted.contains("hunter2") && redacted.contains("\"organization\":\"o\""))
+    }
+
+    @Test func secretsAreNeverWrittenToTheSettingsFile() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let secrets = MemorySecretStore()
+        let store = PluginConfigurationStore(directory: directory, secrets: secrets)
+        let fields = try settings(secretSchema)
+        try store.save(["token": .string("hunter2"), "organization": .string("o")], for: "test", settings: fields)
+        let file = try String(contentsOf: directory.appendingPathComponent("test.json"), encoding: .utf8)
+        #expect(!file.contains("hunter2") && !file.contains("token"))
+        #expect(secrets.snapshot == ["test": ["token": "hunter2"]])
+        #expect(try store.load(for: "test", settings: fields) == ["token": .string("hunter2"), "organization": .string("o")])
+        // A secret someone wrote into the file by hand does not override the stored one.
+        try Data(#"{"token":"from-file"}"#.utf8).write(to: directory.appendingPathComponent("test.json"))
+        #expect(try store.load(for: "test", settings: fields)["token"] == .string("hunter2"))
+        // Clearing an optional secret, or saving without it, removes the stored value.
+        try store.save(["token": .string("new"), "extra": .string("x")], for: "test", settings: fields)
+        #expect(secrets.snapshot["test"] == ["token": "new", "extra": "x"])
+        try store.save(["token": .string("new")], for: "test", settings: fields)
+        #expect(secrets.snapshot["test"] == ["token": "new"])
+    }
+
+    @Test func resetClearsSecretsAndRemovalKeepsThem() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let secrets = MemorySecretStore()
+        let store = PluginConfigurationStore(directory: directory, secrets: secrets)
+        let fields = try settings(secretSchema)
+        try store.save(["token": .string("a")], for: "test", settings: fields)
+        try store.save(["token": .string("b")], for: "other", settings: fields)
+        try secrets.write("obsolete", plugin: "test", field: "removed")
+        // A reinstalled plugin finds its secret again.
+        #expect(try PluginConfigurationStore(directory: directory, secrets: secrets).load(for: "test", settings: fields)["token"] == .string("a"))
+        try store.reset(for: "test")
+        #expect(secrets.snapshot == ["other": ["token": "b"]])
+        #expect(try store.load(for: "test", settings: fields).isEmpty)
+    }
+
+    @Test func keychainStoreRejectsUnsafeIdentifiers() {
+        let keychain = KeychainSecretStore(prefix: "com.igorv.spotlite.tests.")
+        #expect(throws: PluginConfigurationStore.Failure.self) { try keychain.read(plugin: "../x", field: "token") }
+        #expect(throws: PluginConfigurationStore.Failure.self) { try keychain.write("x", plugin: "test", field: "a b") }
     }
 }

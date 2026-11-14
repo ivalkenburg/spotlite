@@ -7,8 +7,13 @@ final class PluginConfigurationWindowController: NSWindowController, NSTextField
     private let plugin: InstalledPlugin
     private let host: PluginHost
     private let settings: [PluginSetting]
-    private var controls: [String: NSControl] = [:]
+    private var controls: [String: NSView] = [:]
     private var errors: [String: NSTextField] = [:]
+    /// Saved secrets are never shown: the field stays empty unless the user types a
+    /// replacement, and Clear removes the saved value on Save.
+    private var savedSecrets: [String: PluginSettingValue] = [:]
+    private var clearedSecrets: Set<String> = []
+    private var clearButtons: [String: NSButton] = [:]
     /// Preserve incompatible saved types until the user edits that particular field.
     private var incompatible: [String: PluginSettingValue] = [:]
     private let summary = SettingsForm.hint("", color: .systemRed)
@@ -46,6 +51,10 @@ final class PluginConfigurationWindowController: NSWindowController, NSTextField
                 input.delegate = self
                 input.placeholderString = setting.initialValue?.text ?? (setting.required ? "Required" : "Optional")
                 control = input
+            case .secret:
+                let input = ConfigurationSecureField(string: "")
+                input.delegate = self
+                control = input
             case .boolean:
                 control = ConfigurationCheckbox(checkboxWithTitle: "", target: self, action: #selector(fieldChanged))
             case .choice:
@@ -68,14 +77,26 @@ final class PluginConfigurationWindowController: NSWindowController, NSTextField
             control.action = control is NSTextField ? #selector(saveClicked) : #selector(fieldChanged)
             control.setAccessibilityLabel(setting.label + (setting.required ? ", required" : ""))
             control.setAccessibilityHelp(setting.description)
-            if setting.type != .boolean { control.widthAnchor.constraint(equalToConstant: 260).isActive = true }
+            var field: NSView = control
+            if setting.type == .secret {
+                let clear = NSButton(title: "Clear", target: self, action: #selector(clearSecret))
+                clear.bezelStyle = .rounded
+                clear.identifier = control.identifier
+                clear.setAccessibilityLabel("Clear \(setting.label)")
+                clearButtons[setting.id] = clear
+                field = SettingsForm.row([control, clear])
+            }
+            if setting.type != .boolean { field.widthAnchor.constraint(equalToConstant: 260).isActive = true }
             controls[setting.id] = control
             let error = SettingsForm.hint("", color: .systemRed)
             error.preferredMaxLayoutWidth = 260
             error.widthAnchor.constraint(equalToConstant: 260).isActive = true
             errors[setting.id] = error
-            var views: [NSView] = [control]
-            if let description = setting.description, !description.isEmpty {
+            var views: [NSView] = [field]
+            let description = setting.type == .secret
+                ? [setting.description, "Stored in your keychain."].compactMap { $0 }.joined(separator: " ")
+                : setting.description
+            if let description, !description.isEmpty {
                 let hint = SettingsForm.hint(description)
                 hint.preferredMaxLayoutWidth = 260
                 hint.widthAnchor.constraint(equalToConstant: 260).isActive = true
@@ -154,10 +175,15 @@ final class PluginConfigurationWindowController: NSWindowController, NSTextField
     private func readConfiguration() {
         let configuration = host.configuration(for: plugin)
         incompatible = [:]
+        savedSecrets = configuration.values.filter { configuration.secretIDs.contains($0.key) }
+        clearedSecrets = []
         for setting in settings {
             let value = configuration.values[setting.id]
             let control = controls[setting.id]!
             switch control {
+            case let input as NSSecureTextField:
+                input.stringValue = ""
+                updateSecret(setting.id)
             case let input as NSTextField: input.stringValue = value?.text ?? ""
             case let picker as NSPopUpButton:
                 for item in picker.itemArray where item.tag == -1 { picker.menu?.removeItem(item) }
@@ -186,6 +212,10 @@ final class PluginConfigurationWindowController: NSWindowController, NSTextField
         var values = incompatible
         for setting in settings where incompatible[setting.id] == nil {
             switch controls[setting.id] {
+            case let input as NSSecureTextField:
+                values[setting.id] = input.stringValue.isEmpty
+                    ? (clearedSecrets.contains(setting.id) ? nil : savedSecrets[setting.id])
+                    : .string(input.stringValue)
             case let input as NSTextField:
                 let text = input.stringValue
                 if setting.type == .number {
@@ -215,9 +245,27 @@ final class PluginConfigurationWindowController: NSWindowController, NSTextField
     }
 
     @objc private func fieldChanged(_ sender: NSControl) {
-        if let id = sender.identifier?.rawValue { incompatible[id] = nil }
+        if let id = sender.identifier?.rawValue {
+            incompatible[id] = nil
+            if controls[id] is NSSecureTextField { updateSecret(id) }
+        }
         if let toggle = sender as? NSButton, !(toggle is NSPopUpButton) { toggle.allowsMixedState = false }
         validate()
+    }
+
+    private func updateSecret(_ id: String) {
+        guard let input = controls[id] as? NSSecureTextField,
+              let setting = settings.first(where: { $0.id == id }) else { return }
+        let saved = savedSecrets[id] != nil && !clearedSecrets.contains(id)
+        input.placeholderString = saved ? "Saved. Type to replace." : (setting.required ? "Required" : "Not set")
+        clearButtons[id]?.isEnabled = saved || !input.stringValue.isEmpty
+    }
+
+    @objc private func clearSecret(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue, let input = controls[id] as? NSSecureTextField else { return }
+        clearedSecrets.insert(id)
+        input.stringValue = ""
+        fieldChanged(input)
     }
 
     func controlTextDidChange(_ obj: Notification) {
@@ -270,6 +318,13 @@ final class PluginConfigurationWindowController: NSWindowController, NSTextField
 /// AppKit's field editor can take focus outside a nested scrolling grid without
 /// revealing its control. Scroll only when keyboard focus moves, never on a timer.
 private final class ConfigurationTextField: NSTextField {
+    override func becomeFirstResponder() -> Bool {
+        _ = scrollToVisible(bounds.insetBy(dx: 0, dy: -4))
+        return super.becomeFirstResponder()
+    }
+}
+
+private final class ConfigurationSecureField: NSSecureTextField {
     override func becomeFirstResponder() -> Bool {
         _ = scrollToVisible(bounds.insetBy(dx: 0, dy: -4))
         return super.becomeFirstResponder()

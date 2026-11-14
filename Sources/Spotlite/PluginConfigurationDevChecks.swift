@@ -145,6 +145,8 @@ enum PluginConfigurationDevChecks {
             try await checkLongForm(on: parent)
             try await Task.sleep(for: .milliseconds(250))
             try await checkChoiceLabels(on: parent)
+            try await Task.sleep(for: .milliseconds(250))
+            try await checkSecrets(on: parent)
         }
         parent?.orderOut(nil)
         try checkCommandUpdates()
@@ -207,6 +209,82 @@ enum PluginConfigurationDevChecks {
         print("DEV configuration: single/batch command updates preserve unknown, duplicate, reset, expiry and captured-manifest behavior")
     }
 
+    /// Uses the real Keychain under a dev-only service prefix and removes its item.
+    private static func checkSecrets(on parent: NSWindow) async throws {
+        func expect(_ condition: Bool, _ message: String) throws {
+            guard condition else {
+                throw NSError(domain: "SpotliteConfigurationChecks", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: message])
+            }
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SpotliteSecrets-" + UUID().uuidString)
+        let folder = root.appendingPathComponent("secret-check")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let manifest = #"""
+        {"id":"secret-check","name":"Secret Fixture","executable":"run.sh","commands":[],"settings":[
+          {"id":"copy","label":"API token","type":"secret","required":true,"description":"A personal access token."},
+          {"id":"spare","label":"Spare token","type":"secret"}]}
+        """#
+        try Data(manifest.utf8).write(to: folder.appendingPathComponent("plugin.json"))
+        let script = folder.appendingPathComponent("run.sh")
+        try Data("#!/bin/sh\nprintf '%s' \"$SPOTLITE_CONFIG\"\n".utf8).write(to: script)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let keychain = KeychainSecretStore(prefix: "com.igorv.spotlite.dev.plugin.")
+        let store = PluginConfigurationStore(directory: root.appendingPathComponent("values"), secrets: keychain)
+        let host = PluginHost(directory: root, configurationStore: store)
+        let plugin = host.plugin(id: "secret-check")!
+        try host.resetConfiguration(for: plugin)
+        defer {
+            try? host.resetConfiguration(for: plugin)
+            try? FileManager.default.removeItem(at: root)
+        }
+        var editor: PluginConfigurationWindowController?
+        func open() async throws -> (NSWindow, NSSecureTextField, NSButton, NSButton) {
+            editor = PluginConfigurationWindowController(plugin: plugin, host: host)
+            let window = editor!.window!
+            parent.beginSheet(window, completionHandler: { _ in })
+            try await Task.sleep(for: .milliseconds(250))
+            let views = descendants(window.contentView!)
+            let field = views.compactMap { $0 as? NSSecureTextField }.first { $0.identifier?.rawValue == "copy" }!
+            let clear = views.compactMap { $0 as? NSButton }.first { $0.title == "Clear" && $0.identifier?.rawValue == "copy" }!
+            let save = views.compactMap { $0 as? NSButton }.first { $0.title == "Save" }!
+            return (window, field, clear, save)
+        }
+        var (window, field, clear, save) = try await open()
+        try expect(!save.isEnabled && !clear.isEnabled && field.placeholderString == "Required", "Unset secret state is wrong")
+        try await capture(window, name: "plugin-configuration-secret-unset")
+        edit(field, text: "hunter2")
+        try expect(save.isEnabled && clear.isEnabled, "Typing a secret did not enable Save and Clear")
+        save.performClick(nil)
+        try await Task.sleep(for: .milliseconds(250))
+        try expect(!host.needsSetup(plugin.id), "Saving a secret did not finish setup")
+        let file = try String(contentsOf: root.appendingPathComponent("values/secret-check.json"), encoding: .utf8)
+        try expect(!file.contains("hunter2") && !file.contains("copy"), "A secret reached the settings file: \(file)")
+        try expect(try keychain.read(plugin: plugin.id, field: "copy") == "hunter2", "The secret is not in the Keychain")
+        try expect(try keychain.read(plugin: plugin.id, field: "spare") == nil, "An unset secret was stored")
+        let response = try await invoke(host, plugin: plugin)
+        try expect(response.copy == "hunter2", "SPOTLITE_CONFIG lacks the secret")
+        host.reload()
+        try expect(host.configuration(for: plugin).values["copy"] == .string("hunter2"), "Reload lost the secret")
+
+        (window, field, clear, save) = try await open()
+        try expect(field.stringValue.isEmpty && field.placeholderString == "Saved. Type to replace."
+                   && clear.isEnabled && save.isEnabled, "Saved secret state is wrong or echoed")
+        try await capture(window, name: "plugin-configuration-secret-saved")
+        clear.performClick(nil)
+        try expect(!save.isEnabled && !clear.isEnabled && field.placeholderString == "Required", "Clear did not unset the secret")
+        edit(field, text: "replaced")
+        save.performClick(nil)
+        try await Task.sleep(for: .milliseconds(250))
+        try expect(try keychain.read(plugin: plugin.id, field: "copy") == "replaced", "Replacing the secret failed")
+        editor = nil
+
+        try host.resetConfiguration(for: plugin)
+        try expect(try keychain.read(plugin: plugin.id, field: "copy") == nil && host.needsSetup(plugin.id),
+                   "Reset did not remove the secret")
+        print("DEV configuration: secrets stay out of the settings file, reach SPOTLITE_CONFIG, survive Reload, clear, replace and reset")
+    }
+
     private static func checkChoiceLabels(on parent: NSWindow) async throws {
         func expect(_ condition: Bool, _ message: String) throws {
             guard condition else {
@@ -255,7 +333,7 @@ enum PluginConfigurationDevChecks {
                    && saved["required"] == .string("choose-option"), "Labels changed the saved option values")
         var invalid = saved
         invalid["duplicate"] = .string("missing")
-        try store.save(invalid, for: plugin.id)
+        try store.save(invalid, for: plugin.id, settings: plugin.manifest?.settings ?? [])
         host.reload()
         let migration = PluginConfigurationWindowController(plugin: plugin, host: host)
         let migrationWindow = migration.window!
