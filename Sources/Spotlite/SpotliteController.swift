@@ -1186,6 +1186,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                 guard self.panel.isVisible, !self.isDismissing else { return }
                 if keepOpen, self.pluginActionGeneration == generation, let scope, scope == self.pluginScope {
                     if let items = response.items, !scope.source.isSearch {
+                        // The level's own list may still be loading or streaming; its rows are older.
+                        self.cancelPluginWork()
                         self.showPluginItems(items)
                         return // showPluginItems already refreshes the rows and chrome.
                     } else {
@@ -2902,6 +2904,15 @@ extension SpotliteController {
         try check(titles == ["kept row"] && pluginStatus == nil, "Failed stream showed \(titles)")
         toasts.checkDevMessage("stream broke")
         print("DEV stream: a failure keeps its rows and shows a toast")
+
+        // A keepOpen run's rows replace the list it ran from, even one still streaming.
+        enter(["list"])
+        await settle(250)
+        try check(pluginRun != nil && !titles.isEmpty, "The stream to replace showed \(titles)")
+        runPlugin(fixture, arguments: ["replace"], keepOpen: true, commandID: "list")
+        await settle(1_600)
+        try check(pluginRun == nil && titles == ["replaced row"], "The stream overwrote the run's rows: \(titles)")
+        print("DEV stream: a keepOpen run's rows replace a list that is still streaming")
 
         // A newer query cancels the older stream; none of its rows show, then or later.
         enter(["search"], search: true)

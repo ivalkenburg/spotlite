@@ -9,6 +9,7 @@ case "$1" in
         printf '{"title":"alpha five"}\n{"toast":"stream finished"}'
         ;;
     late) sleep 0.6; echo '{"title":"late row"}' ;;
+    replace) printf '{"items":[{"title":"replaced row"}]}' ;;
     empty) sleep 0.6 ;;
     fail) echo '{"title":"kept row"}'; sleep 0.2; echo "stream broke" >&2; exit 4 ;;
     many)
