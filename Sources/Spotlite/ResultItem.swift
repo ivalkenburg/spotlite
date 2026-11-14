@@ -140,6 +140,9 @@ enum ResultItem {
     struct Hint: Equatable {
         let text: String
         let key: String?
+        /// A plugin row's accessory keeps a little width beside a long title rather than
+        /// yielding all of it, and loses its end rather than its start.
+        var isAccessory = false
     }
 
     /// An app shows where it lives, which tells two copies of the same app apart.
@@ -159,7 +162,7 @@ enum ResultItem {
             if modifiers.contains(.option), case .open = item.action {
                 return [Hint(text: "Copy Link", key: "⌥↩")]
             }
-            return ResultItem.pluginHints(subtitle: item.subtitle, action: item.action)
+            return ResultItem.pluginHints(subtitle: item.subtitle, accessory: item.accessory, action: item.action)
         }
         guard case .app(let match) = self else { return [] }
         let entry = match.entry
@@ -204,11 +207,20 @@ enum ResultItem {
                      key: nil)]
     }
 
-    /// A plugin row's subtitle, and the key that opens its next level.
-    private static func pluginHints(subtitle: String?, action: PluginAction?) -> [Hint] {
+    /// A plugin row's subtitle and accessory, and the key that opens its next level.
+    /// The accessory stays last, where it sits on every other row, so selecting a row
+    /// adds the subtitle beside it rather than moving it.
+    private static func pluginHints(subtitle: String?, accessory: String? = nil, action: PluginAction?) -> [Hint] {
         let key = action?.entersScope == true ? "⇥" : nil
         let text = subtitle ?? ""
-        return text.isEmpty && key == nil ? [] : [Hint(text: text, key: key)]
+        guard let accessory else { return text.isEmpty && key == nil ? [] : [Hint(text: text, key: key)] }
+        return (text.isEmpty ? [] : [Hint(text: text, key: nil)]) + [Hint(text: accessory, key: key, isAccessory: true)]
+    }
+
+    /// What an unselected row shows at its right: only a plugin row's accessory.
+    var restingHints: [Hint] {
+        guard case .plugin(let item, _) = self, let accessory = item.accessory else { return [] }
+        return [Hint(text: accessory, key: nil, isAccessory: true)]
     }
 
     /// Running instances of this row's app, matched by bundle location rather than

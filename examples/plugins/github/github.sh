@@ -18,11 +18,14 @@ response="$(curl -sS --max-time 8 -G "https://api.github.com/search/repositories
 
 printf '%s' "$response" |
 jq '
+  def short: if . >= 1000000 then "\((. / 100000 | floor) / 10)m"
+             elif . >= 1000 then "\((. / 100 | floor) / 10)k" else "\(.)" end;
   if (.items | type) == "array" then {
     items: [.items[] | {
       id: .full_name,
       title: .full_name,
-      subtitle: ("★ \(.stargazers_count)" + (if .language then " · " + .language else "" end)),
+      subtitle: .language,
+      accessory: "★ \(.stargazers_count | short)",
       icon: (if .private then "lock" elif .fork then "arrow.triangle.branch" else "book.closed" end),
       action: {type: "open", url: .html_url}
     }]

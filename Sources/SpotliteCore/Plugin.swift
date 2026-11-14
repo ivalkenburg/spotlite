@@ -13,11 +13,11 @@ public enum PluginAction: Sendable, Equatable {
     /// panel stays and the current list reloads; otherwise it closes first.
     case run(args: [String], keepOpen: Bool)
     /// Enters a list the executable prints once; Spotlite filters it as the user types.
-    case list(args: [String])
+    case list(args: [String], options: PluginListOptions = .init())
     /// Enters a list the executable prints for each query, which follows `args`.
-    case search(args: [String], debounce: Int, minimumQuery: Int)
+    case search(args: [String], debounce: Int, minimumQuery: Int, options: PluginListOptions = .init())
     /// Enters a fixed list. No process is started.
-    case menu([PluginItem])
+    case menu([PluginItem], options: PluginListOptions = .init())
 
     public static let defaultDebounce = 200
     static let debounceRange = 0...2_000
@@ -43,30 +43,49 @@ public enum PluginAction: Sendable, Equatable {
 
 extension PluginAction: Decodable {
     private enum CodingKeys: String, CodingKey {
-        case type, url, text, args, keepOpen, debounce, minQuery, items
+        case type, url, text, args, keepOpen, debounce, minQuery, items, sort, emptyText
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let type = try c.decode(String.self, forKey: .type)
         let args = try c.decodeIfPresent([String].self, forKey: .args) ?? []
+        let emptyText = try c.decodeIfPresent(String.self, forKey: .emptyText)
+        // Read only where Spotlite filters: a search's rows already answer the query.
+        let filtered = PluginListOptions(sorts: try c.decodeIfPresent(Bool.self, forKey: .sort) ?? true,
+                                         emptyText: emptyText)
         switch type {
         case "open": self = .open(try c.decode(String.self, forKey: .url))
         case "copy": self = .copy(try c.decode(String.self, forKey: .text))
         case "run": self = .run(args: args, keepOpen: try c.decodeIfPresent(Bool.self, forKey: .keepOpen) ?? false)
-        case "list": self = .list(args: args)
+        case "list": self = .list(args: args, options: filtered)
         case "search":
             let debounce = try c.decodeIfPresent(Int.self, forKey: .debounce) ?? PluginAction.defaultDebounce
             let range = PluginAction.debounceRange
             self = .search(args: args,
                            debounce: min(max(debounce, range.lowerBound), range.upperBound),
-                           minimumQuery: max(0, try c.decodeIfPresent(Int.self, forKey: .minQuery) ?? 1))
+                           minimumQuery: max(0, try c.decodeIfPresent(Int.self, forKey: .minQuery) ?? 1),
+                           options: PluginListOptions(emptyText: emptyText))
         case "menu":
-            self = .menu(PluginItem.decodeList(from: c, forKey: .items))
+            self = .menu(PluginItem.decodeList(from: c, forKey: .items), options: filtered)
         default:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c,
                                                    debugDescription: "Unknown action type \(type)")
         }
+    }
+}
+
+/// How a `list`, `search` or `menu` level presents its rows.
+public struct PluginListOptions: Sendable, Equatable {
+    /// Whether typing ranks matches by score. Off, matches keep the plugin's order.
+    public var sorts: Bool
+    /// Shown when the level has no rows; nil for the default.
+    public var emptyText: String?
+
+    /// Blank text counts as none, so the default still shows.
+    public init(sorts: Bool = true, emptyText: String? = nil) {
+        self.sorts = sorts
+        self.emptyText = emptyText.flatMap { $0.allSatisfy(\.isWhitespace) ? nil : $0 }
     }
 }
 
@@ -75,6 +94,10 @@ public struct PluginItem: Sendable, Equatable, Decodable {
     public let id: String
     public let title: String
     public let subtitle: String?
+    /// Short text at the right of every row, selected or not: a count, a date, stars.
+    public let accessory: String?
+    /// More names that find the row. A title match still ranks above a keyword-only one.
+    public let keywords: [String]
     /// An SF Symbol name, an image file, or any other file whose Finder icon to show.
     public let icon: String?
     public let action: PluginAction?
@@ -82,14 +105,18 @@ public struct PluginItem: Sendable, Equatable, Decodable {
     /// A response larger than this is cut off: nobody scrolls further, and each row
     /// costs matching metadata.
     public static let maxItems = 500
+    /// Each keyword is matched like a title, so a row's are capped as its count is.
+    public static let maxKeywords = 8
 
-    private enum CodingKeys: String, CodingKey { case id, title, subtitle, icon, action }
+    private enum CodingKeys: String, CodingKey { case id, title, subtitle, accessory, keywords, icon, action }
 
-    public init(id: String? = nil, title: String, subtitle: String? = nil, icon: String? = nil,
-                action: PluginAction? = nil) {
+    public init(id: String? = nil, title: String, subtitle: String? = nil, accessory: String? = nil,
+                keywords: [String] = [], icon: String? = nil, action: PluginAction? = nil) {
         self.id = id ?? title
         self.title = title
         self.subtitle = subtitle
+        self.accessory = accessory.flatMap { $0.allSatisfy(\.isWhitespace) ? nil : $0 }
+        self.keywords = Array(keywords.lazy.filter { !$0.allSatisfy(\.isWhitespace) }.prefix(PluginItem.maxKeywords))
         self.icon = icon
         self.action = action
     }
@@ -99,6 +126,8 @@ public struct PluginItem: Sendable, Equatable, Decodable {
         let title = try c.decode(String.self, forKey: .title)
         self.init(id: try c.decodeIfPresent(String.self, forKey: .id), title: title,
                   subtitle: try c.decodeIfPresent(String.self, forKey: .subtitle),
+                  accessory: try c.decodeIfPresent(String.self, forKey: .accessory),
+                  keywords: try c.decodeIfPresent([String].self, forKey: .keywords) ?? [],
                   icon: try c.decodeIfPresent(String.self, forKey: .icon),
                   action: try c.decodeIfPresent(PluginAction.self, forKey: .action))
     }
@@ -257,18 +286,41 @@ public struct PluginResponse: Sendable, Equatable, Decodable {
 
 /// Where a plugin level's rows come from.
 public enum PluginSource: Sendable, Equatable {
-    case items([PluginItem])
-    case list(args: [String])
-    case search(args: [String], debounce: Int, minimumQuery: Int)
+    case items([PluginItem], options: PluginListOptions = .init())
+    case list(args: [String], options: PluginListOptions = .init())
+    case search(args: [String], debounce: Int, minimumQuery: Int, options: PluginListOptions = .init())
 
     public init?(_ action: PluginAction) {
         switch action {
-        case .menu(let items): self = .items(items)
-        case .list(let args): self = .list(args: args)
-        case .search(let args, let debounce, let minimumQuery):
-            self = .search(args: args, debounce: debounce, minimumQuery: minimumQuery)
+        case .menu(let items, let options): self = .items(items, options: options)
+        case .list(let args, let options): self = .list(args: args, options: options)
+        case .search(let args, let debounce, let minimumQuery, let options):
+            self = .search(args: args, debounce: debounce, minimumQuery: minimumQuery, options: options)
         case .open, .copy, .run: return nil
         }
+    }
+
+    public var options: PluginListOptions {
+        switch self {
+        case .items(_, let options), .list(_, let options), .search(_, _, _, let options): options
+        }
+    }
+
+    /// What Spotlite says when nothing came back or typing filtered every row out.
+    public static let defaultEmptyText = "No results"
+
+    /// The text standing in for a level with no rows, or nil to show nothing.
+    ///
+    /// `loaded` says whether rows have arrived for what is on screen; until they do, an
+    /// empty level is still waiting, not empty. A search shorter than its minimum has
+    /// nothing to wait for and shows only the plugin's own text: an empty bar is what an
+    /// empty root query shows too.
+    public func emptyText(query: String, loaded: Bool) -> String? {
+        if case .search(_, _, let minimum, let options) = self,
+           query.trimmingCharacters(in: .whitespaces).count < minimum {
+            return options.emptyText
+        }
+        return loaded ? options.emptyText ?? PluginSource.defaultEmptyText : nil
     }
 
     /// A search's rows answer the query already; the others are filtered by Spotlite.
@@ -297,32 +349,62 @@ public struct PluginScope: Sendable, Equatable {
 public struct PluginList: Sendable {
     public let items: [PluginItem]
     private let corpus: SearchCorpus?
+    /// One entry per keyword, named by its row's position; nil when no row has one, so a
+    /// list without keywords matches exactly as before.
+    private let keywordCorpus: SearchCorpus?
+    private let sorts: Bool
     private let occurrences: [Int]
 
     public static let empty = PluginList(items: [])
 
-    public init(items: [PluginItem], filterLocally: Bool = true) {
+    public init(items: [PluginItem], filterLocally: Bool = true, sorts: Bool = true) {
         self.items = items
+        self.sorts = sorts
         var counts: [String: Int] = [:]
         occurrences = items.map {
             let occurrence = counts[$0.id, default: 0]
             counts[$0.id] = occurrence + 1
             return occurrence
         }
-        guard filterLocally else { corpus = nil; return }
+        guard filterLocally else { corpus = nil; keywordCorpus = nil; return }
         // The position stands in for an id: a plugin's own ids need not be unique.
         corpus = SearchCorpus(entries: items.enumerated().map { index, item in
             AppEntry(url: PluginList.entryURL, name: item.title, bundleID: String(index), kind: .command)
         })
+        let keywords = items.enumerated().flatMap { index, item in
+            item.keywords.map { AppEntry(url: PluginList.entryURL, name: $0, bundleID: String(index), kind: .command) }
+        }
+        keywordCorpus = keywords.isEmpty ? nil : SearchCorpus(entries: keywords)
     }
 
     private static let entryURL = URL(string: "spotlite-plugin-item:")!
 
     /// Original list positions survive filtering; ids and titles need not be unique.
+    ///
+    /// Title matches rank first and keyword-only matches follow, each by score. Without
+    /// sorting, the same matches keep the plugin's order.
     public func matchingIndices(_ query: String, matcher: Matcher) -> [Int] {
         // Remote search rows already answer the query and retain the plugin's order.
         guard !items.isEmpty, let corpus, !query.allSatisfy(\.isWhitespace) else { return Array(items.indices) }
-        return matcher.search(query, in: corpus, limit: items.count).compactMap { Int($0.entry.id) }
+        if !sorts {
+            var matched = [Bool](repeating: false, count: items.count)
+            for match in matcher.matches(query, in: corpus) { Int(match.entry.id).map { matched[$0] = true } }
+            if let keywordCorpus {
+                for match in matcher.matches(query, in: keywordCorpus) { Int(match.entry.id).map { matched[$0] = true } }
+            }
+            return items.indices.filter { matched[$0] }
+        }
+        var ranked = matcher.search(query, in: corpus, limit: items.count).compactMap { Int($0.entry.id) }
+        guard let keywordCorpus else { return ranked }
+        var seen = [Bool](repeating: false, count: items.count)
+        for index in ranked { seen[index] = true }
+        // A row with several matching keywords appears once, at its best.
+        for match in matcher.search(query, in: keywordCorpus, limit: keywordCorpus.entries.count) {
+            guard let index = Int(match.entry.id), !seen[index] else { continue }
+            seen[index] = true
+            ranked.append(index)
+        }
+        return ranked
     }
 
     public func occurrence(at index: Int) -> Int {
