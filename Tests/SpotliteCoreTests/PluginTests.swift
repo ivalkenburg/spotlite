@@ -265,6 +265,20 @@ struct PluginStoreTests {
         #expect(PluginStore.load(try fixture.plugin("links", manifest: nested(#"{"type":"copy","text":"x"}"#))).isUsable)
     }
 
+    @Test func secondaryActionsThatRunTheProgramNeedAnExecutable() throws {
+        let fixture = try PluginFixture()
+        let secondary = #"[{"title":"Refresh","action":{"type":"run"}}]"#
+        // On a command, and on a menu row whose own Return only copies.
+        let command = #"{"id":"c","name":"C","commands":[{"id":"x","title":"X","action":{"type":"copy","text":"x"},"actions":"#
+            + secondary + "}]}"
+        #expect(PluginStore.load(try fixture.plugin("c", manifest: command)).problem?.contains("no executable") == true)
+        let row = #"{"id":"r","name":"R","commands":[{"id":"x","title":"X","action":{"type":"menu","items":[{"title":"A","action":{"type":"copy","text":"a"},"actions":"#
+            + secondary + "}]}}]}"
+        #expect(PluginStore.load(try fixture.plugin("r", manifest: row)).problem?.contains("no executable") == true)
+        let links = command.replacingOccurrences(of: #"{"type":"run"}"#, with: #"{"type":"open","url":"https://example.com"}"#)
+        #expect(PluginStore.load(try fixture.plugin("l", manifest: links)).isUsable)
+    }
+
     @Test func duplicateCommandIDsAreRejected() throws {
         let fixture = try PluginFixture()
         let manifest = #"""

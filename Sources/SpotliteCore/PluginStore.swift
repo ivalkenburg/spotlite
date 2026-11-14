@@ -115,7 +115,9 @@ public enum PluginStore {
                   !isDirectory.boolValue, FileManager.default.isExecutableFile(atPath: executable.path) else {
                 return broken("\(manifest.executable ?? "") is missing or not executable.", manifest)
             }
-        } else if manifest.commands.contains(where: { needsExecutable($0.action) }) {
+        } else if manifest.commands.contains(where: { command in
+            needsExecutable(command.action) || command.actions.contains { needsExecutable($0.action) }
+        }) {
             return broken("A command runs the plugin, but the manifest names no executable.", manifest)
         }
         return plugin
@@ -202,7 +204,10 @@ public enum PluginStore {
         switch action {
         case .run, .list, .search: true
         case .open, .copy: false
-        case .menu(let items, _): items.contains { $0.action.map(needsExecutable) ?? false }
+        // A menu row's secondary actions run the plugin as surely as its Return does.
+        case .menu(let items, _): items.contains { item in
+            (item.action.map(needsExecutable) ?? false) || item.actions.contains { needsExecutable($0.action) }
+        }
         }
     }
 
