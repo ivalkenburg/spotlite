@@ -135,7 +135,8 @@ public enum PluginStore {
     /// Copies a plugin folder into the store, replacing its installed copy. The copy is
     /// checked before it is used, and the old one survives a failed replacement.
     @discardableResult
-    public static func install(from source: URL, into directory: URL = directory) throws(InstallError) -> InstalledPlugin {
+    public static func install(from source: URL, into directory: URL = directory,
+                               beforeReplace: ((URL) throws -> Void)? = nil) throws(InstallError) -> InstalledPlugin {
         // Copy the folder itself, even when the selected path is a symbolic link.
         // Copying a relative link would make it point somewhere else after installing.
         let source = source.standardizedFileURL.resolvingSymlinksInPath()
@@ -166,6 +167,7 @@ public enum PluginStore {
             guard staged.isUsable, staged.id == candidate.id else {
                 throw InstallError.invalid(staged.problem ?? "The plugin changed while it was being installed.")
             }
+            try beforeReplace?(staging)
             if !isLink(destination), files.fileExists(atPath: destination.path) {
                 _ = try files.replaceItemAt(destination, withItemAt: staging)
             } else {
@@ -192,7 +194,7 @@ public enum PluginStore {
     }
 
     /// By path, which has no trailing slash: with one, a link would answer for its target.
-    private static func isLink(_ url: URL) -> Bool {
+    static func isLink(_ url: URL) -> Bool {
         (try? FileManager.default.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType == .typeSymbolicLink
     }
 
