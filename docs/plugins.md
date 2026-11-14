@@ -8,7 +8,7 @@ plugin costs its manifest in memory: no process, timer or watcher.
 
 Install a plugin in Settings → Plugins from a folder or an address (see
 [Installing](#installing)), or put (or symlink) it in
-`~/Library/Application Support/Spotlite/Plugins/` and press Reload. Working examples are
+`~/Library/Application Support/Spotlite/Plugins/` and choose ⋯ → Reload Plugins. Working examples are
 in [`examples/plugins`](../examples/plugins): Caffeinate, a kubectl context switcher, a
 GitHub repository search and Find Files, which streams.
 
@@ -345,12 +345,13 @@ before any row replaces the list with the error, as without streaming.
 
 ## Debugging
 
-Select a plugin in Settings → Plugins to see its last run since Spotlite started: the
+In Settings → Plugins, the ⋯ button and a right click on a plugin hold its less frequent
+actions. Select a plugin to see its last run since Spotlite started: the
 command, action and arguments, the exit status or error, how long it took, the last
 16 KB of standard error, the start of standard output and, for a streamed run, how many
 rows came and which lines were skipped. It is kept in memory only.
 
-Run… starts one of the plugin's `run`, `list` or `search` commands the same way search
+Run Command… starts one of the plugin's `run`, `list` or `search` commands the same way search
 does, with the same environment and configuration. The query field is `SPOTLITE_QUERY`
 and, for `search`, the last argument. The sheet shows standard output (indented when it
 is JSON) with what Spotlite understood from it, standard error, the exit status and the
@@ -363,8 +364,9 @@ Reveal in Finder opens the plugin's folder, and Open Data Folder its
 
 ## Installing
 
-Install → From Folder… copies a plugin folder. Install → Browse Gallery… lists plugins
-to install by name (see [Gallery](#gallery)). Install → From URL… takes an address:
+The + button in Settings → Plugins installs: Install from Folder… copies a plugin folder,
+Browse Gallery… lists plugins to install by name (see [Gallery](#gallery)), and Install
+from URL… takes an address:
 
 | Address | |
 | --- | --- |
@@ -398,7 +400,7 @@ the commit when GitHub reports it, and the installed version and date. Settings 
 below the buttons. A plugin installed from a folder, or linked, has none, and installing
 it from a folder later removes the record, as does removing the plugin.
 
-Check for Updates asks each recorded source for its version, only when clicked: Spotlite
+⋯ → Check for Updates asks each recorded source for its version, only when clicked: Spotlite
 never checks on its own. A GitHub source is checked by fetching its `plugin.json` alone
 (GitHub's raw files may lag a push by a few minutes); a zip or git source is downloaded
 again and discarded. Versions compare as semantic versions (`1.10` is newer than `1.9`,
@@ -408,7 +410,7 @@ confirmation.
 
 ### Gallery
 
-Install → Browse Gallery… reads the gallery index,
++ → Browse Gallery… reads the gallery index,
 [`plugins/index.json`](../plugins/index.json) on the repository's `main` branch, served
 from `raw.githubusercontent.com`. It is fetched only when the sheet opens or Refresh is
 clicked: never at launch, in the background or on a timer. While Settings stays open the
@@ -450,7 +452,7 @@ To propose a plugin, open a pull request that adds an entry to `plugins/index.js
 | `version` | The index format, `1`. An index with another version is refused with an error. |
 | `id`, `name`, `version` | As in the plugin's `plugin.json`. The id is unique in the index, ignoring letter case. |
 | `description`, `author` | Required. Up to 500 and 100 characters. |
-| `source` | Any address Install → From URL… accepts (see the table above). |
+| `source` | Any address Install from URL… accepts (see the table above). |
 | `homepage` | Optional https page, opened by the arrow next to the name. |
 | `icon` | Optional SF Symbol name. Images are never downloaded. |
 | `tags` | Optional lowercase words for search; the first 8 are used. |

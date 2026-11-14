@@ -64,8 +64,8 @@ enum PluginGalleryDevChecks {
         try await Task.sleep(for: .milliseconds(300))
         settingsWindow = pane.view.window
         guard let window = settingsWindow else { return try check(false, "Settings has no window") }
-        let install = PluginInstallDevChecks.descendants(pane.view).compactMap { $0 as? NSPopUpButton }
-            .first { $0.pullsDown && $0.itemTitles.contains("Browse Gallery…") }
+        let install = PluginInstallDevChecks.descendants(pane.view).compactMap { $0 as? NSButton }
+            .first { $0.accessibilityLabel() == "Add Plugin" }?.menu
         try check(install != nil, "No Browse Gallery… in the Install menu")
         PluginInstallDevChecks.dumpFrames(pane.view, tag: "plugins-pane-gallery")
 
@@ -110,7 +110,7 @@ enum PluginGalleryDevChecks {
         }
 
         // An index in an unknown format: a clear error, then Retry reads it again.
-        install!.menu!.performActionForItem(at: install!.indexOfItem(withTitle: "Browse Gallery…"))
+        install!.performActionForItem(at: install!.indexOfItem(withTitle: "Browse Gallery…"))
         let gallery = try await sheet(on: window)
         let retry = try await page("Retry", in: gallery)
         try check(texts(gallery).contains("format version 99"), "Error page: \(texts(gallery))")
@@ -191,7 +191,7 @@ enum PluginGalleryDevChecks {
         button("Done", in: gallery)!.performClick(nil)
         try await closed(window)
         try Data("not json".utf8).write(to: index)
-        install!.menu!.performActionForItem(at: install!.indexOfItem(withTitle: "Browse Gallery…"))
+        install!.performActionForItem(at: install!.indexOfItem(withTitle: "Browse Gallery…"))
         let reopened = try await sheet(on: window)
         _ = try await page("Done", in: reopened)
         try check(table(reopened)?.numberOfRows == 3, "Reopened without the kept index")

@@ -71,12 +71,17 @@ enum PluginInstallDevChecks {
         settingsWindow = pane.view.window
         guard let window = settingsWindow else { return try check(false, "Settings has no window") }
         let views = descendants(pane.view)
-        let install = views.compactMap { $0 as? NSPopUpButton }.first { $0.pullsDown && $0.itemTitles.contains("From URL…") }
-        let updates = views.compactMap { $0 as? NSButton }.first { $0.title == "Check for Updates" }
+        let install = views.compactMap { $0 as? NSButton }.first { $0.accessibilityLabel() == "Add Plugin" }?.menu
+        let more = views.compactMap { $0 as? NSButton }.first { $0.accessibilityLabel() == "More" }
+        /// Enabled as the menu opens, by the pane's validation.
+        func updatesEnabled() -> Bool? {
+            more?.menu?.update()
+            return more?.menu?.item(withTitle: "Check for Updates")?.isEnabled
+        }
         let source = views.compactMap { $0 as? NSTextField }.first { $0.accessibilityLabel() == "Source" }
-        try check(install?.itemTitles == ["Install", "From Folder…", "From URL…", "", "Browse Gallery…"],
-                  "Install menu: \(install?.itemTitles ?? [])")
-        try check(updates?.isEnabled == false, "Check for Updates enabled without a source")
+        try check(install?.items.map(\.title) == ["Install from Folder…", "Install from URL…", "", "Browse Gallery…"],
+                  "Install menu: \(install?.items.map(\.title) ?? [])")
+        try check(updatesEnabled() == false, "Check for Updates enabled without a source")
         dumpFrames(pane.view, tag: "plugins-pane-install")
 
         func sheet() async throws -> NSWindow {
@@ -103,7 +108,7 @@ enum PluginInstallDevChecks {
                           userInfo: [NSLocalizedDescriptionKey: "No \(title) button; sheet shows: \(texts(sheet))"])
         }
         func enter(_ address: String) async throws -> NSWindow {
-            install!.menu!.performActionForItem(at: 2)
+            install!.performActionForItem(at: 1)
             let entry = try await sheet()
             let field = controls(entry).compactMap { $0 as? NSTextField }.first { $0.isEditable }!
             field.stringValue = address
@@ -146,9 +151,9 @@ enum PluginInstallDevChecks {
         try check(window.attachedSheet == nil, "Install left the sheet open")
         try check(host.plugin(id: "devinstall")?.manifest?.version == "1.0.0", "Not installed")
         try check(host.sources.load(for: "devinstall")?.address == "https://example.invalid/v1.zip", "No source record")
-        try check(source?.stringValue.hasPrefix("Source: https://example.invalid/v1.zip") == true,
+        try check(source?.stringValue.hasPrefix("From https://example.invalid/v1.zip") == true,
                   "Source line: \(source?.stringValue ?? "")")
-        try check(updates?.isEnabled == true, "Check for Updates disabled with a source")
+        try check(updatesEnabled() == true, "Check for Updates disabled with a source")
         // Settings saved for the plugin survive its update.
         let plugin = host.plugin(id: "devinstall")!
         try host.saveConfiguration(["token": .string("dev-secret")], for: plugin)
@@ -156,7 +161,7 @@ enum PluginInstallDevChecks {
 
         // Check for Updates finds the newer archive, and Update… goes through the confirmation.
         loader.serve("v1.zip", try archive("devinstall", version: "1.1.0", in: scratch))
-        updates!.performClick(nil)
+        more!.menu!.performActionForItem(at: more!.menu!.indexOfItem(withTitle: "Check for Updates"))
         current = try await sheet()
         let update = try await page("Update…", in: current)
         try check(texts(current).contains("1.0.0 → 1.1.0") && texts(current).contains("1 update available."),

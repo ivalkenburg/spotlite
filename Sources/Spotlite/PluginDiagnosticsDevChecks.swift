@@ -57,19 +57,22 @@ enum PluginDiagnosticsDevChecks {
         settingsWindow = pane.view.window
         let views = descendants(pane.view)
         let table = views.compactMap { $0 as? NSTableView }.first!
-        func button(_ title: String) throws -> NSButton {
-            guard let found = descendants(pane.view).compactMap({ $0 as? NSButton }).first(where: { $0.title == title }) else {
-                throw NSError(domain: "SpotliteDiagnosticsChecks", code: 1, userInfo: [NSLocalizedDescriptionKey: "Missing \(title)"])
-            }
-            return found
+        // The per-plugin actions live in the More menu, enabled by validation as it opens.
+        guard let more = views.compactMap({ $0 as? NSButton }).first(where: { $0.accessibilityLabel() == "More" }) else {
+            return try check(false, "No More menu")
         }
-        let buttons = try ["Run…", "Reveal in Finder", "Open Data Folder", "Open Folder"].map(button)
+        func items() -> [NSMenuItem] {
+            more.menu!.update()
+            return ["Run Command…", "Reveal in Finder", "Open Data Folder", "Open Plugins Folder"].map { more.menu!.item(withTitle: $0)! }
+        }
         table.deselectAll(nil)
-        try check(buttons.prefix(3).allSatisfy { !$0.isEnabled } && buttons[3].isEnabled,
-                  "Plugin buttons enabled without a selection")
+        try check(items().prefix(3).allSatisfy { !$0.isEnabled } && items()[3].isEnabled,
+                  "Plugin actions enabled without a selection")
         let row = PluginHost.shared.plugins.firstIndex { $0.id == plugin.id }!
         table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-        try check(buttons.allSatisfy(\.isEnabled), "Plugin buttons disabled with a selection")
+        try check(items().allSatisfy(\.isEnabled), "Plugin actions disabled with a selection")
+        try check(table.menu?.items.map(\.title) == ["Configure…", "Run Command…", "Reveal in Finder", "Open Data Folder", "", "Remove…"],
+                  "Row menu: \(table.menu?.items.map(\.title) ?? [])")
         let lastRun = views.compactMap { $0 as? NSTextView }.first { $0.enclosingScrollView?.accessibilityLabel() == "Last run" }!
         let title = views.compactMap { $0 as? NSTextField }.first { $0.stringValue.hasPrefix("Last error ·") }
         try check(title != nil && lastRun.string.contains("invalid · list · invalid") && lastRun.string.contains("not json"),
@@ -79,12 +82,12 @@ enum PluginDiagnosticsDevChecks {
         try check(lastRun.string.hasPrefix("env · run · env\nexit 0"), "Last run did not refresh: \(lastRun.string)")
         dumpFrames(pane.view, tag: "plugins-pane")
         if let window = settingsWindow { try await SettingsForm.captureWindow(window, name: "plugins-pane") }
-        print("DEV diagnostics: Settings buttons and last run passed")
+        print("DEV diagnostics: Settings actions and last run passed")
 
         // The debug runner shows raw output and applies nothing.
         pasteboard.clearContents()
         pasteboard.setString("untouched", forType: .string)
-        buttons[0].performClick(nil)
+        more.menu!.performActionForItem(at: more.menu!.indexOfItem(withTitle: "Run Command…"))
         try await Task.sleep(for: .milliseconds(300))
         guard let sheet = settingsWindow?.attachedSheet else { return try check(false, "Run… did not open a sheet") }
         let controls = descendants(sheet.contentView!)

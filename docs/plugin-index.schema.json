@@ -40,7 +40,7 @@
           "pattern": "\\S"
         },
         "source": {
-          "description": "Any https address Install → From URL… accepts: a GitHub repository or …/tree/<ref>/<folder>, a .zip, or a .git address.",
+          "description": "Any https address Install from URL… accepts: a GitHub repository or …/tree/<ref>/<folder>, a .zip, or a .git address.",
           "type": "string",
           "maxLength": 2048,
           "pattern": "^(https://|github\\.com/)"

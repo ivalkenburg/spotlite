@@ -5,18 +5,19 @@ import SpotliteCore
 /// updates, remove, or reload after editing one. A plugin that cannot be used is listed
 /// with the reason.
 @MainActor
-final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDataSource, NSTableViewDelegate {
+final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDataSource, NSTableViewDelegate,
+                                           NSMenuItemValidation, NSMenuDelegate {
     private let table = NSTableView()
-    private let removeButton = NSButton(title: "Remove…", target: nil, action: nil)
+    private let addButton = NSButton()
+    private let removeButton = NSButton()
+    private let moreButton = NSButton()
     private let configureButton = NSButton(title: "Configure…", target: nil, action: nil)
-    private let runButton = NSButton(title: "Run…", target: nil, action: nil)
-    private let revealButton = NSButton(title: "Reveal in Finder", target: nil, action: nil)
-    private let dataButton = NSButton(title: "Open Data Folder", target: nil, action: nil)
+    /// The selected plugin's actions on a right click, beside the ones the buttons show.
+    private let rowMenu = NSMenu()
     private let emptyLabel = SettingsForm.hint("No plugins installed.")
     private let lastRunTitle = NSTextField(labelWithString: "Last run")
     private let lastRun = NSTextView.scrollableTextView()
     private let sourceLabel = NSTextField(labelWithString: "")
-    private let updatesButton = NSButton(title: "Check for Updates", target: nil, action: nil)
     private var plugins: [InstalledPlugin] = []
     /// Read with the list, only while Settings shows it.
     private var sources: [String: PluginSourceRecord] = [:]
@@ -50,63 +51,54 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
         scroll.addSubview(emptyLabel)
 
-        let install = NSPopUpButton(frame: .zero, pullsDown: true)
-        install.addItem(withTitle: "Install")
-        for (title, action, tip) in [("From Folder…", #selector(installClicked), "Choose a folder that contains a plugin.json"),
-                                     ("From URL…", #selector(installFromURLClicked), "A GitHub repository, an https .zip or a git address")] {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-            item.target = self
-            item.toolTip = tip
-            install.menu?.addItem(item)
-        }
-        install.menu?.addItem(.separator())
-        let gallery = NSMenuItem(title: "Browse Gallery…", action: #selector(browseGalleryClicked), keyEquivalent: "")
-        gallery.target = self
-        gallery.toolTip = "Plugins listed in Spotlite’s gallery. Loaded only when opened."
-        install.menu?.addItem(gallery)
-        install.setAccessibilityLabel("Install")
+        // Few buttons: add, remove, the rest of what a plugin or the folder can do in
+        // one menu, and Configure, which is what a selected plugin most often needs.
+        menuButton(addButton, symbol: "plus", label: "Add Plugin", items: [
+            item("Install from Folder…", #selector(installClicked), tip: "Choose a folder that contains a plugin.json"),
+            item("Install from URL…", #selector(installFromURLClicked),
+                 tip: "A GitHub repository, an https .zip or a git address"),
+            .separator(),
+            item("Browse Gallery…", #selector(browseGalleryClicked),
+                 tip: "Plugins listed in Spotlite’s gallery. Loaded only when opened."),
+        ])
+        removeButton.image = NSImage(systemSymbolName: "minus", accessibilityDescription: "Remove Plugin")
+        removeButton.bezelStyle = .rounded
         removeButton.target = self
         removeButton.action = #selector(removeClicked)
-        removeButton.bezelStyle = .rounded
+        removeButton.toolTip = "Move the selected plugin to the Trash"
+        removeButton.widthAnchor.constraint(equalToConstant: Self.symbolWidth).isActive = true
+        menuButton(moreButton, symbol: "ellipsis", label: "More", items: [
+            item("Run Command…", #selector(runClicked), tip: "Run a command and see its raw output, without applying it"),
+            item("Reveal in Finder", #selector(revealClicked), tip: "Show the plugin’s folder in Finder"),
+            item("Open Data Folder", #selector(openDataClicked), tip: "Open the folder where the plugin keeps its own data"),
+            .separator(),
+            item("Check for Updates", #selector(checkUpdatesClicked),
+                 tip: "Ask each plugin’s source for a newer version. Spotlite never checks on its own."),
+            item("Reload Plugins", #selector(reloadClicked), tip: "Read every plugin again, after editing one"),
+            item("Open Plugins Folder", #selector(openFolderClicked), tip: nil),
+        ])
         configureButton.target = self
         configureButton.action = #selector(configureClicked)
         configureButton.bezelStyle = .rounded
-        for (control, action) in [(runButton, #selector(runClicked)), (revealButton, #selector(revealClicked)),
-                                  (dataButton, #selector(openDataClicked))] {
-            control.target = self
-            control.action = action
-            control.bezelStyle = .rounded
+        for menuItem in [item("Configure…", #selector(configureClicked)), item("Run Command…", #selector(runClicked)),
+                         item("Reveal in Finder", #selector(revealClicked)), item("Open Data Folder", #selector(openDataClicked)),
+                         .separator(), item("Remove…", #selector(removeClicked))] {
+            rowMenu.addItem(menuItem)
         }
-        runButton.toolTip = "Run a command and see its raw output, without applying it"
-        revealButton.toolTip = "Show the plugin’s folder in Finder"
-        dataButton.toolTip = "Open the folder where the plugin keeps its own data"
-        let reloadButton = button("Reload", #selector(reloadClicked))
-        reloadButton.toolTip = "Read every plugin again, after editing one"
-        let folder = button("Open Folder", #selector(openFolderClicked))
+        rowMenu.delegate = self
+        table.menu = rowMenu
+
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let buttons = NSStackView(views: [install, removeButton, spacer, runButton, configureButton])
+        let buttons = NSStackView(views: [addButton, removeButton, spacer, moreButton, configureButton])
         buttons.orientation = .horizontal
         buttons.spacing = 8
-        let utilitySpacer = NSView()
-        utilitySpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let utilities = NSStackView(views: [reloadButton, folder, utilitySpacer, revealButton, dataButton])
-        utilities.orientation = .horizontal
-        utilities.spacing = 8
+        buttons.setCustomSpacing(4, after: addButton)
         sourceLabel.font = .systemFont(ofSize: 11)
         sourceLabel.textColor = .secondaryLabelColor
         sourceLabel.lineBreakMode = .byTruncatingMiddle
         sourceLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         sourceLabel.setAccessibilityLabel("Source")
-        updatesButton.target = self
-        updatesButton.action = #selector(checkUpdatesClicked)
-        updatesButton.bezelStyle = .rounded
-        updatesButton.toolTip = "Ask each plugin’s source for a newer version. Spotlite never checks on its own."
-        let originSpacer = NSView()
-        originSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let origin = NSStackView(views: [sourceLabel, originSpacer, updatesButton])
-        origin.orientation = .horizontal
-        origin.spacing = 8
 
         lastRunTitle.font = .systemFont(ofSize: 11, weight: .semibold)
         lastRunTitle.textColor = .secondaryLabelColor
@@ -118,7 +110,7 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
         lastRunText.textContainerInset = NSSize(width: 3, height: 3)
         lastRun.borderType = .bezelBorder
         lastRun.setAccessibilityLabel("Last run")
-        lastRun.heightAnchor.constraint(equalToConstant: 110).isActive = true
+        lastRun.heightAnchor.constraint(equalToConstant: 96).isActive = true
         // A run that finishes while Settings is open shows without polling.
         PluginHost.shared.onRunRecorded = { [weak self] id in self?.runRecorded(id) }
 
@@ -126,15 +118,16 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
             "Plugins add commands to search. A plugin is a program that runs with your permissions when you use it: install only ones you trust.")
         caption.preferredMaxLayoutWidth = SettingsForm.width - 40
 
-        let stack = NSStackView(views: [scroll, buttons, utilities, origin, lastRunTitle, lastRun, caption])
+        let stack = NSStackView(views: [scroll, buttons, sourceLabel, lastRunTitle, lastRun, caption])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
         stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
-        stack.setCustomSpacing(14, after: origin)
+        stack.setCustomSpacing(6, after: buttons)
+        stack.setCustomSpacing(16, after: sourceLabel)
         stack.setCustomSpacing(4, after: lastRunTitle)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        for fullWidth in [scroll, buttons, utilities, origin, lastRunTitle, lastRun, caption] as [NSView] {
+        for fullWidth in [scroll, buttons, sourceLabel, lastRunTitle, lastRun, caption] as [NSView] {
             fullWidth.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
         }
         NSLayoutConstraint.activate([
@@ -147,11 +140,33 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
         reload()
     }
 
-    private func button(_ title: String, _ action: Selector) -> NSButton {
-        let button = NSButton(title: title, target: self, action: action)
-        button.bezelStyle = .rounded
-        return button
+    private func item(_ title: String, _ action: Selector, tip: String? = nil) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.toolTip = tip
+        return item
     }
+
+    /// A symbol button that opens a menu below itself, the same size as the plain
+    /// buttons beside it. Its items are enabled by `validateMenuItem`.
+    private func menuButton(_ button: NSButton, symbol: String, label: String, items: [NSMenuItem]) {
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+        button.bezelStyle = .rounded
+        button.target = self
+        button.action = #selector(showButtonMenu(_:))
+        button.setAccessibilityLabel(label)
+        button.toolTip = label
+        let menu = NSMenu()
+        for item in items { menu.addItem(item) }
+        button.menu = menu
+        button.widthAnchor.constraint(equalToConstant: Self.symbolWidth).isActive = true
+    }
+
+    @objc private func showButtonMenu(_ sender: NSButton) {
+        sender.menu?.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+    }
+
+    private static let symbolWidth: CGFloat = 36
 
     /// Shows what the host has now. The host itself is read again only on request.
     func reload() {
@@ -160,7 +175,6 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
         let store = PluginHost.shared.sources
         sources = Dictionary(plugins.compactMap { plugin in store.load(for: plugin.id).map { (plugin.id, $0) } },
                              uniquingKeysWith: { first, _ in first })
-        updatesButton.isEnabled = !sources.isEmpty
         table.reloadData()
         emptyLabel.isHidden = !plugins.isEmpty
         updateRemoveButton()
@@ -173,19 +187,39 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
     private func updateRemoveButton() {
         let selected = selectedPlugin
         removeButton.isEnabled = selected != nil
-        configureButton.isEnabled = selected?.isUsable == true && selected?.manifest?.settings.isEmpty == false
-        runButton.isEnabled = selected?.isUsable == true
-            && selected?.manifest?.commands.contains { PluginRunAction($0.action) != nil } == true
-        revealButton.isEnabled = selected != nil
-        dataButton.isEnabled = selected?.isUsable == true
+        configureButton.isEnabled = canConfigure(selected)
         showSource()
         showLastRun()
+    }
+
+    private func canConfigure(_ plugin: InstalledPlugin?) -> Bool {
+        plugin?.isUsable == true && plugin?.manifest?.settings.isEmpty == false
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        let selected = selectedPlugin
+        switch menuItem.action {
+        case #selector(configureClicked): return canConfigure(selected)
+        case #selector(runClicked):
+            return selected?.isUsable == true
+                && selected?.manifest?.commands.contains { PluginRunAction($0.action) != nil } == true
+        case #selector(revealClicked), #selector(removeClicked): return selected != nil
+        case #selector(openDataClicked): return selected?.isUsable == true
+        case #selector(checkUpdatesClicked): return !sources.isEmpty
+        default: return true
+        }
+    }
+
+    /// A right click acts on the row under the pointer, so it becomes the selection.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === rowMenu, table.clickedRow >= 0, table.clickedRow != table.selectedRow else { return }
+        table.selectRowIndexes(IndexSet(integer: table.clickedRow), byExtendingSelection: false)
     }
 
     /// Where the selected plugin came from, which decides whether it can be updated.
     private func showSource() {
         guard let plugin = selectedPlugin else {
-            sourceLabel.stringValue = sources.isEmpty ? "" : "Select a plugin to see its source."
+            sourceLabel.stringValue = ""
             sourceLabel.toolTip = nil
             return
         }
@@ -193,13 +227,13 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
             let target = (try? FileManager.default.destinationOfSymbolicLink(atPath: plugin.directory.path)) ?? ""
             sourceLabel.stringValue = "Linked folder " + (target as NSString).abbreviatingWithTildeInPath
         } else if let record = sources[plugin.id] {
-            var parts = ["Source: " + record.address]
+            var parts = ["From " + record.address]
             if let commit = record.commit { parts.append(String(commit.prefix(7))) }
             parts.append("Installed " + record.installedAt.formatted(date: .abbreviated, time: .omitted))
             if let update = availableUpdates[plugin.id] { parts.append("Update available: " + (update ?? "new version")) }
             sourceLabel.stringValue = parts.joined(separator: " · ")
         } else {
-            sourceLabel.stringValue = "Installed from a folder, so it has no update check."
+            sourceLabel.stringValue = "Installed from a folder"
         }
         sourceLabel.toolTip = sourceLabel.stringValue
     }
