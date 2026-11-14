@@ -242,7 +242,7 @@ last argument. The working directory is the plugin's folder. Environment:
 
 `SPOTLITE_CONFIG_<ID>` takes the setting's id in upper case, with every character other
 than `A`–`Z` and `0`–`9` replaced by `_`: `resultLimit` is `SPOTLITE_CONFIG_RESULTLIMIT`.
-Strings are passed as they are, numbers as written in the form (`20`, `0.5`), booleans
+Strings are passed as they are, `file` and `folder` paths expanded as in `SPOTLITE_CONFIG`, numbers as written in the form (`20`, `0.5`), booleans
 as `true` or `false`. A value that is unset is not exported, and other kinds of value
 only appear in `SPOTLITE_CONFIG`. When two ids map to the same name (`api-key` and
 `api_key`), neither is exported, so a name never depends on the order of the fields;

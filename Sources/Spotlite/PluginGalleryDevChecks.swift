@@ -64,12 +64,12 @@ enum PluginGalleryDevChecks {
         try await Task.sleep(for: .milliseconds(300))
         settingsWindow = pane.view.window
         guard let window = settingsWindow else { return try check(false, "Settings has no window") }
-        let install = PluginInstallDevChecks.descendants(pane.view).compactMap { $0 as? NSButton }
+        let install = DevViews.descendants(pane.view).compactMap { $0 as? NSButton }
             .first { $0.accessibilityLabel() == "Add Plugin" }?.menu
         try check(install != nil, "No Browse Gallery… in the Install menu")
-        PluginInstallDevChecks.dumpFrames(pane.view, tag: "plugins-pane-gallery")
+        DevViews.dumpFrames(pane.view, tag: "plugins-pane-gallery")
 
-        func views(_ sheet: NSWindow) -> [NSView] { PluginInstallDevChecks.descendants(sheet.contentView!) }
+        func views(_ sheet: NSWindow) -> [NSView] { DevViews.descendants(sheet.contentView!) }
         func button(_ title: String, in sheet: NSWindow) -> NSButton? {
             views(sheet).compactMap { $0 as? NSButton }.first { $0.title == title }
         }
@@ -114,7 +114,7 @@ enum PluginGalleryDevChecks {
         let gallery = try await sheet(on: window)
         let retry = try await page("Retry", in: gallery)
         try check(texts(gallery).contains("format version 99"), "Error page: \(texts(gallery))")
-        PluginInstallDevChecks.dumpFrames(gallery.contentView!, tag: "gallery-error")
+        DevViews.dumpFrames(gallery.contentView!, tag: "gallery-error")
         try await SettingsForm.captureWindow(gallery, name: "gallery-error")
         try good.write(to: index)
         retry.performClick(nil)
@@ -133,7 +133,7 @@ enum PluginGalleryDevChecks {
         let same = rowButton("devgallery-same", in: gallery)
         try check(same?.title == "Installed" && same?.isEnabled == false, "Same: \(same?.title ?? "none")")
         try check(!listed.contains("Insecure"), "The http entry is listed")
-        PluginInstallDevChecks.dumpFrames(gallery.contentView!, tag: "gallery-list")
+        DevViews.dumpFrames(gallery.contentView!, tag: "gallery-list")
         try await SettingsForm.captureWindow(gallery, name: "gallery-list")
         print("DEV gallery: list, statuses, skipped entry, trust warning passed")
 
@@ -144,7 +144,7 @@ enum PluginGalleryDevChecks {
         try check(table(gallery)?.numberOfRows == 2, "Search tag demo: \(table(gallery)?.numberOfRows ?? -1)")
         search("zzz", in: gallery)
         try check(table(gallery)?.numberOfRows == 0 && texts(gallery).contains("No plugins match “zzz”."), "Search zzz: \(texts(gallery))")
-        PluginInstallDevChecks.dumpFrames(gallery.contentView!, tag: "gallery-empty-search")
+        DevViews.dumpFrames(gallery.contentView!, tag: "gallery-empty-search")
         search("", in: gallery)
         try check(table(gallery)?.numberOfRows == 3, "Cleared search")
         print("DEV gallery: search passed")
@@ -159,7 +159,7 @@ enum PluginGalleryDevChecks {
             try check(false, "Confirmation lacks \(expected): \(details)")
         }
         try check(host.plugin(id: "devgallery-new") == nil, "Installed before confirming")
-        PluginInstallDevChecks.dumpFrames(confirmation.contentView!, tag: "gallery-confirm")
+        DevViews.dumpFrames(confirmation.contentView!, tag: "gallery-confirm")
         try await SettingsForm.captureWindow(confirmation, name: "gallery-confirm")
         confirm.performClick(nil)
         try await closed(gallery)

@@ -216,7 +216,9 @@ final class PluginHost {
         let configuration = PluginConfiguration(settings: fields, saved: values)
         guard configuration.isValid else { throw PluginRunError.configurationRequired }
         let json = try configuration.json()
-        try configurationStore.save(configuration.values, for: plugin.id, settings: fields)
+        // Values read with a problem may not be what the Keychain holds, so every secret is written then.
+        let previous = configurations[plugin.id].flatMap { $0.problem == nil ? $0.values : nil }
+        try configurationStore.save(configuration.values, for: plugin.id, settings: fields, previous: previous)
         configurations[plugin.id] = configuration
         configurationJSON[plugin.id] = json
     }
@@ -254,7 +256,7 @@ final class PluginHost {
     /// command the user started from, even for a row nested inside its list.
     ///
     /// With `rows` the output streams: `rows` receives every row so far as lines
-    /// arrive, at most once per main-queue turn. A failure after some rows arrived
+    /// arrive, at most once per frame. A failure after some rows arrived
     /// delivers them all once more before the completion.
     @discardableResult
     func run(_ plugin: InstalledPlugin, arguments: [String], query: String,
@@ -306,12 +308,10 @@ final class PluginHost {
         }
         let data = PluginStore.dataDirectory(for: plugin.id)
         try? FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
-        let variables = PluginEnvironment.configurationVariables(
-            ids: manifest.settings.map(\.id), values: configurations[plugin.id]?.values ?? [:])
         let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         let environment = PluginEnvironment.make(
             for: plugin, query: query, dataDirectory: data, configurationJSON: json,
-            configurationVariables: variables, command: command, action: action,
+            configurationVariables: configurations[plugin.id]?.variables ?? [:], command: command, action: action,
             appearance: dark ? "dark" : "light", version: Self.appVersion)
         var delivery: PluginRun.Rows?
         if let rows {

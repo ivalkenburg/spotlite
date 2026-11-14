@@ -179,6 +179,8 @@ public struct PluginConfiguration: Sendable, Equatable {
     /// Fields whose values never leave memory except for the Keychain and the plugin.
     public let secretIDs: Set<String>
     private let pathIDs: Set<String>
+    /// Every declared field, in the manifest's order.
+    private let ids: [String]
     public var isValid: Bool { problem == nil && errors.isEmpty }
 
     public init(settings: [PluginSetting], saved: [String: PluginSettingValue] = [:], problem: String? = nil) {
@@ -194,24 +196,31 @@ public struct PluginConfiguration: Sendable, Equatable {
         self.problem = problem
         self.secretIDs = Set(settings.filter { $0.type == .secret }.map(\.id))
         self.pathIDs = Set(settings.filter { $0.type == .file || $0.type == .folder }.map(\.id))
+        self.ids = settings.map(\.id)
     }
 
-    /// Only declared values cross the process boundary; obsolete saved keys stay private.
-    /// Paths are expanded, as plugins receive them. Redacting replaces each set secret
-    /// with a placeholder, for anything shown or logged.
-    public func json(redactingSecrets: Bool = false) throws -> String {
+    /// The values as the plugin receives them: paths expanded. Only declared values
+    /// cross the process boundary; obsolete saved keys stay private.
+    private var pluginValues: [String: PluginSettingValue] {
         var values = values
         for id in pathIDs {
             if case .string(let path)? = values[id] { values[id] = .string(PluginSetting.expandedPath(path)) }
         }
-        if redactingSecrets {
-            for id in secretIDs where values[id] != nil { values[id] = .string("<redacted>") }
-        }
+        return values
+    }
+
+    /// `SPOTLITE_CONFIG`.
+    public func json() throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        let data = try encoder.encode(values)
+        let data = try encoder.encode(pluginValues)
         guard data.count <= PluginConfigurationStore.maxBytes else { throw PluginConfigurationStore.Failure.tooLarge }
         return String(decoding: data, as: UTF8.self)
+    }
+
+    /// `SPOTLITE_CONFIG_<ID>`, with the same values as `json()`.
+    public var variables: [String: String] {
+        PluginEnvironment.configurationVariables(ids: ids, values: pluginValues)
     }
 }
 
@@ -266,8 +275,11 @@ public struct PluginConfigurationStore: Sendable {
         }
     }
 
-    /// An unset or empty secret removes its stored value.
-    public func save(_ values: [String: PluginSettingValue], for id: String, settings: [PluginSetting]) throws {
+    /// An unset or empty secret removes its stored value. `previous` are the values last
+    /// read or saved: a secret that matches its previous value is not written again, so a
+    /// Save that changes other fields leaves the Keychain alone.
+    public func save(_ values: [String: PluginSettingValue], for id: String, settings: [PluginSetting],
+                     previous: [String: PluginSettingValue]? = nil) throws {
         let url = try url(for: id)
         let secretFields = settings.filter { $0.type == .secret }.map(\.id)
         var stored = values
@@ -277,6 +289,7 @@ public struct PluginConfigurationStore: Sendable {
         let data = try encoder.encode(stored)
         guard data.count <= Self.maxBytes else { throw Failure.tooLarge }
         for field in secretFields {
+            if let previous, Self.secret(values[field]) == Self.secret(previous[field]) { continue }
             if case .string(let secret)? = values[field], !secret.isEmpty {
                 try secrets.write(secret, plugin: id, field: field)
             } else {
@@ -285,6 +298,12 @@ public struct PluginConfigurationStore: Sendable {
         }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try data.write(to: url, options: .atomic)
+    }
+
+    /// A secret's stored form: an empty one is none.
+    private static func secret(_ value: PluginSettingValue?) -> String? {
+        guard case .string(let text)? = value, !text.isEmpty else { return nil }
+        return text
     }
 
     public func reset(for id: String) throws {

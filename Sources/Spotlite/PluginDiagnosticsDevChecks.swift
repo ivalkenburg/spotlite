@@ -55,7 +55,7 @@ enum PluginDiagnosticsDevChecks {
         let pane = settings.devShowPlugins()
         try await Task.sleep(for: .milliseconds(300))
         settingsWindow = pane.view.window
-        let views = descendants(pane.view)
+        let views = DevViews.descendants(pane.view)
         let table = views.compactMap { $0 as? NSTableView }.first!
         // The per-plugin actions live in the More menu, enabled by validation as it opens.
         guard let more = views.compactMap({ $0 as? NSButton }).first(where: { $0.accessibilityLabel() == "More" }) else {
@@ -80,7 +80,7 @@ enum PluginDiagnosticsDevChecks {
         // A run that finishes while Settings is open replaces what it shows.
         _ = await invoke(host, plugin, ["env"], command: "env", action: .run)
         try check(lastRun.string.hasPrefix("env · run · env\nexit 0"), "Last run did not refresh: \(lastRun.string)")
-        dumpFrames(pane.view, tag: "plugins-pane")
+        DevViews.dumpFrames(pane.view, tag: "plugins-pane")
         if let window = settingsWindow { try await SettingsForm.captureWindow(window, name: "plugins-pane") }
         print("DEV diagnostics: Settings actions and last run passed")
 
@@ -90,7 +90,7 @@ enum PluginDiagnosticsDevChecks {
         more.menu!.performActionForItem(at: more.menu!.indexOfItem(withTitle: "Run Command…"))
         try await Task.sleep(for: .milliseconds(300))
         guard let sheet = settingsWindow?.attachedSheet else { return try check(false, "Run… did not open a sheet") }
-        let controls = descendants(sheet.contentView!)
+        let controls = DevViews.descendants(sheet.contentView!)
         let picker = controls.compactMap { $0 as? NSPopUpButton }.first!
         let query = controls.compactMap { $0 as? NSTextField }.first { $0.isEditable }!
         let runButton = controls.compactMap { $0 as? NSButton }.first { $0.title == "Run" }!
@@ -108,7 +108,7 @@ enum PluginDiagnosticsDevChecks {
                   "Runner output: \(texts[0].string)")
         try check(texts[1].string == "debug note\n", "Runner stderr: \(texts[1].string)")
         try check(pasteboard.string(forType: .string) == "untouched", "The debug runner applied the response")
-        dumpFrames(sheet.contentView!, tag: "debug-runner")
+        DevViews.dumpFrames(sheet.contentView!, tag: "debug-runner")
         try await SettingsForm.captureWindow(sheet, name: "debug-runner")
 
         picker.selectItem(at: 2)
@@ -154,24 +154,6 @@ enum PluginDiagnosticsDevChecks {
             host.run(plugin, arguments: arguments, query: "", command: command, action: action) {
                 continuation.resume(returning: $0)
             }
-        }
-    }
-
-    private static func descendants(_ view: NSView) -> [NSView] {
-        view.subviews.flatMap { [$0] + descendants($0) }
-    }
-
-    /// Frames in the root's coordinates, and any view that pokes outside the root.
-    private static func dumpFrames(_ root: NSView, tag: String) {
-        root.layoutSubtreeIfNeeded()
-        print("DEV frames \(tag): root \(root.bounds.size)")
-        for view in descendants(root) where view is NSControl || view is NSScrollView {
-            guard !view.isHidden, view.enclosingScrollView == nil || view is NSScrollView else { continue }
-            let frame = view.convert(view.bounds, to: root)
-            let label = (view as? NSButton)?.title ?? (view as? NSTextField)?.stringValue.prefix(30).description
-                ?? String(describing: type(of: view))
-            let outside = root.bounds.insetBy(dx: -0.5, dy: -0.5).contains(frame) ? "" : "  OUTSIDE"
-            print("  \(label): \(frame.integral)\(outside)")
         }
     }
 }

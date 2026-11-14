@@ -68,6 +68,13 @@ struct PluginModelTests {
         #expect(PluginSource(.search(args: ["s"], debounce: 5, minimumQuery: 2))?.isSearch == true)
     }
 
+    @Test func kindNamesTheDecodedType() throws {
+        for kind in PluginAction.Kind.allCases {
+            let json = #"{"type":"\#(kind.rawValue)","url":"https://example.com","text":"t","items":[]}"#
+            #expect(try JSONDecoder().decode(PluginAction.self, from: Data(json.utf8)).kind == kind)
+        }
+    }
+
     @Test func openTargetsArePathsOrAddressesWithAScheme() {
         #expect(PluginAction.url(for: " https://example.com/a?b=1\n")?.absoluteString == "https://example.com/a?b=1")
         #expect(PluginAction.url(for: "/tmp/a b")?.path == "/tmp/a b")
@@ -638,11 +645,14 @@ struct PluginStreamRunTests {
         printf '{"title":"three"}\n{"toast":"done"}'
         """#
         _ = try start(script, deliveries: deliveries, fixture: fixture)
-        try await Task.sleep(for: .milliseconds(250))
-        #expect(deliveries.all.last?.map(\.title) == ["one"])
+        // Polled rather than slept: a busy test run can start the shell late.
+        func titles() -> [String]? { deliveries.all.last?.map(\.title) }
+        for _ in 0..<200 where titles() == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(titles() == ["one"])
         #expect(deliveries.finished == nil)
-        try await Task.sleep(for: .milliseconds(400))
-        #expect(deliveries.all.last?.map(\.title) == ["one", "two"])
+        for _ in 0..<200 where titles() == ["one"] { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(titles() == ["one", "two"])
+        #expect(deliveries.finished == nil)
         for _ in 0..<100 where deliveries.finished == nil { try await Task.sleep(for: .milliseconds(20)) }
         let report = try #require(deliveries.finished)
         let response = try report.result.get()
@@ -683,6 +693,18 @@ struct PluginStreamRunTests {
         let report = try #require(deliveries.finished)
         #expect(report.result == .failure(.failed(status: 2, message: "gone wrong")))
         #expect(report.streamedItems.map(\.title) == ["kept"])
+    }
+
+    @Test func aStoppedRunDropsAHalfWrittenLine() async throws {
+        let fixture = try PluginFixture()
+        let deliveries = Deliveries()
+        _ = try start(#"printf '{"title":"whole"}\n{"title":"half"}'; sleep 5"#, timeout: 1,
+                      deliveries: deliveries, fixture: fixture)
+        for _ in 0..<150 where deliveries.finished == nil { try await Task.sleep(for: .milliseconds(20)) }
+        let report = try #require(deliveries.finished)
+        #expect(report.result == .failure(.timedOut))
+        // The last line is complete only if the program ended it, by a newline or by exiting.
+        #expect(report.streamedItems.map(\.title) == ["whole"])
     }
 
     @Test func aBurstIsDeliveredInFewBatches() async throws {

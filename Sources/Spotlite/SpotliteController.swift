@@ -1186,6 +1186,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                 guard self.panel.isVisible, !self.isDismissing else { return }
                 if keepOpen, self.pluginActionGeneration == generation, let scope, scope == self.pluginScope {
                     if let items = response.items, !scope.source.isSearch {
+                        // The level's own list may still be loading or streaming; its rows are older.
+                        self.cancelPluginWork()
                         self.showPluginItems(items)
                         return // showPluginItems already refreshes the rows and chrome.
                     } else {
@@ -1850,10 +1852,6 @@ extension SpotliteController {
         }
     }
 
-    private func devDescendants(of view: NSView) -> [NSView] {
-        view.subviews.flatMap { [$0] + devDescendants(of: $0) }
-    }
-
     /// Check key-equivalent routing without changing preferences or the live editor.
     private func runDevUndoShortcutChecks() {
         let search = SearchField(frame: .zero)
@@ -1931,7 +1929,7 @@ extension SpotliteController {
         let page = settingsController.view
         page.setFrameSize(page.fittingSize)
         page.layoutSubtreeIfNeeded()
-        let picker = devDescendants(of: page).compactMap { $0 as? NSPopUpButton }
+        let picker = DevViews.descendants(page).compactMap { $0 as? NSPopUpButton }
             .first { $0.itemTitles == ["Off", "Prefix matches only", "All matches"] }!
         let frame = picker.convert(picker.bounds, to: page)
         precondition(picker.titleOfSelectedItem == "All matches" && page.bounds.contains(frame))
@@ -2041,7 +2039,7 @@ extension SpotliteController {
         precondition(cursor == 0 && scroll.contentView.bounds.minY == 0)
         precondition(viewport.firstRow(showing: cursor, offset: scroll.contentView.bounds.minY,
                                       height: listHeight.constant) == nil)
-        precondition(devDescendants(of: table).allSatisfy { !($0 is NSSwitch) })
+        precondition(DevViews.descendants(table).allSatisfy { !($0 is NSSwitch) })
         dumpFrames("submenu-active-four-rows")
         _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
         preferences.visibleRows = savedRows
@@ -2148,7 +2146,7 @@ extension SpotliteController {
         let page = controller.view
         page.setFrameSize(page.fittingSize)
         page.layoutSubtreeIfNeeded()
-        let views = devDescendants(of: page)
+        let views = DevViews.descendants(page)
         let webMode = views.compactMap { $0 as? NSPopUpButton }
             .first { $0.itemTitles == WebSearchMode.allCases.map(\.title) }!
         let engine = views.compactMap { $0 as? NSPopUpButton }
@@ -2204,12 +2202,12 @@ extension SpotliteController {
         let itemsPage = itemsController.view
         itemsPage.setFrameSize(itemsPage.fittingSize)
         itemsPage.layoutSubtreeIfNeeded()
-        let kindPicker = devDescendants(of: itemsPage).compactMap { $0 as? NSSegmentedControl }.first!
+        let kindPicker = DevViews.descendants(itemsPage).compactMap { $0 as? NSSegmentedControl }.first!
         kindPicker.selectedSegment = 1  // Alias checks apply to indexed apps, not utilities.
         kindPicker.sendAction(kindPicker.action, to: kindPicker.target)
-        let itemsTable = devDescendants(of: itemsPage).compactMap { $0 as? NSTableView }.first!
+        let itemsTable = DevViews.descendants(itemsPage).compactMap { $0 as? NSTableView }.first!
         let row = itemsTable.view(atColumn: 0, row: 0, makeIfNecessary: true) as! SettingsRowView
-        let alias = devDescendants(of: row).compactMap { $0 as? NSTextField }.first { $0.placeholderString == "alias" }!
+        let alias = DevViews.descendants(row).compactMap { $0 as? NSTextField }.first { $0.placeholderString == "alias" }!
         try checkUtility(alias.toolTip?.contains(second.name) == true)
         alias.stringValue = "different"
         row.controlTextDidChange(Notification(name: NSText.didChangeNotification))
@@ -2229,7 +2227,7 @@ extension SpotliteController {
         let page = controller.view
         page.setFrameSize(page.fittingSize)
         page.layoutSubtreeIfNeeded()
-        let views = devDescendants(of: page)
+        let views = DevViews.descendants(page)
         let table = views.compactMap { $0 as? NSTableView }.first!
         let picker = views.compactMap { $0 as? NSSegmentedControl }.first!
         let filter = views.compactMap { $0 as? NSSearchField }.first!
@@ -2243,16 +2241,16 @@ extension SpotliteController {
         try checkUtility(table.numberOfRows == 4)
         for index in 0..<4 {
             let row = table.view(atColumn: 0, row: index, makeIfNecessary: true) as! SettingsRowView
-            let fields = devDescendants(of: row).compactMap { $0 as? NSTextField }
+            let fields = DevViews.descendants(row).compactMap { $0 as? NSTextField }
             let alias = fields.first { $0.placeholderString == "alias" }!
             let name = fields.first { $0 !== alias }!.stringValue
             let utility = SearchUtility.allCases.first { $0.name == name }!
-            let checkbox = devDescendants(of: row).compactMap { $0 as? NSButton }.first!
+            let checkbox = DevViews.descendants(row).compactMap { $0 as? NSButton }.first!
             try checkUtility(alias.isHidden && checkbox.isEnabled && checkbox.state == .on)
             checkbox.performClick(nil)
             try checkUtility(model.preferences.hiddenUtilities.contains(utility))
             let refreshed = table.view(atColumn: 0, row: index, makeIfNecessary: true) as! SettingsRowView
-            devDescendants(of: refreshed).compactMap { $0 as? NSButton }.first!.performClick(nil)
+            DevViews.descendants(refreshed).compactMap { $0 as? NSButton }.first!.performClick(nil)
             try checkUtility(!model.preferences.hiddenUtilities.contains(utility))
             print("DEV settings: Utility row=\(row.frame) name=\(name) aliasHidden=\(alias.isHidden)")
         }
@@ -2262,7 +2260,7 @@ extension SpotliteController {
         select(1)
         try checkUtility(table.numberOfRows == 1)
         let appRow = table.view(atColumn: 0, row: 0, makeIfNecessary: true) as! SettingsRowView
-        try checkUtility(!devDescendants(of: appRow).compactMap { $0 as? NSTextField }
+        try checkUtility(!DevViews.descendants(appRow).compactMap { $0 as? NSTextField }
             .first { $0.placeholderString == "alias" }!.isHidden)
         select(5)
         filter.stringValue = "UUID"
@@ -2428,7 +2426,7 @@ extension SpotliteController {
         let page = settingsController.view
         page.setFrameSize(page.fittingSize)
         page.layoutSubtreeIfNeeded()
-        let picker = devDescendants(of: page).compactMap { $0 as? NSPopUpButton }
+        let picker = DevViews.descendants(page).compactMap { $0 as? NSPopUpButton }
             .first { $0.itemTitles == ["Restore previous query", "Clear query"] }!
         let pickerFrame = picker.convert(picker.bounds, to: page)
         precondition(picker.titleOfSelectedItem == "Clear query" && page.bounds.contains(pickerFrame))
@@ -2903,6 +2901,15 @@ extension SpotliteController {
         toasts.checkDevMessage("stream broke")
         print("DEV stream: a failure keeps its rows and shows a toast")
 
+        // A keepOpen run's rows replace the list it ran from, even one still streaming.
+        enter(["list"])
+        await settle(250)
+        try check(pluginRun != nil && !titles.isEmpty, "The stream to replace showed \(titles)")
+        runPlugin(fixture, arguments: ["replace"], keepOpen: true, commandID: "list")
+        await settle(1_600)
+        try check(pluginRun == nil && titles == ["replaced row"], "The stream overwrote the run's rows: \(titles)")
+        print("DEV stream: a keepOpen run's rows replace a list that is still streaming")
+
         // A newer query cancels the older stream; none of its rows show, then or later.
         enter(["search"], search: true)
         type("old")
@@ -2967,7 +2974,7 @@ extension SpotliteController {
 
         // The debug runner shows the raw lines and says what was decoded from them.
         let runner = PluginDebugRunnerWindowController(plugin: fixture, host: plugins)
-        let controls = devDescendants(of: runner.window!.contentView!)
+        let controls = DevViews.descendants(runner.window!.contentView!)
         let identified = { (id: String) in controls.first { $0.identifier?.rawValue == id } }
         let status = identified("status") as! NSTextField
         let output = identified("stdout") as! NSTextView
