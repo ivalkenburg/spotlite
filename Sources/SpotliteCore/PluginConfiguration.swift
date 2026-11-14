@@ -6,11 +6,13 @@ public enum PluginSettingValue: Codable, Sendable, Equatable {
     case string(String)
     case number(Double)
     case boolean(Bool)
+    case list([String])
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         if let value = try? c.decode(Bool.self) { self = .boolean(value) }
         else if let value = try? c.decode(Double.self), value.isFinite { self = .number(value) }
+        else if let value = try? c.decode([String].self) { self = .list(value) }
         else { self = .string(try c.decode(String.self)) }
     }
 
@@ -20,7 +22,15 @@ public enum PluginSettingValue: Codable, Sendable, Equatable {
         case .string(let value): try c.encode(value)
         case .number(let value): try c.encode(value)
         case .boolean(let value): try c.encode(value)
+        case .list(let value): try c.encode(value)
         }
+    }
+
+    /// A list edited one item per line: lines are trimmed and blank ones dropped.
+    public static func list(lines text: String) -> PluginSettingValue {
+        .list(text.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty })
     }
 
     public var text: String {
@@ -30,12 +40,13 @@ public enum PluginSettingValue: Codable, Sendable, Equatable {
             let text = String(value)
             return text.hasSuffix(".0") ? String(text.dropLast(2)) : text
         case .boolean(let value): return value ? "true" : "false"
+        case .list(let value): return value.joined(separator: "\n")
         }
     }
 }
 
 public struct PluginSetting: Decodable, Sendable, Equatable {
-    public enum Kind: String, Decodable, Sendable { case text, number, boolean, choice, secret }
+    public enum Kind: String, Decodable, Sendable { case text, number, boolean, choice, secret, file, folder, list }
     public struct Option: Decodable, Sendable, Equatable {
         public let value: String
         public let label: String
@@ -50,9 +61,15 @@ public struct PluginSetting: Decodable, Sendable, Equatable {
     public let min: Double?
     public let max: Double?
     public let options: [Option]
+    /// A multi-line editor for `text`.
+    public let multiline: Bool
+    /// A `file` or `folder` path must name an existing item of that kind.
+    public let mustExist: Bool
+    /// Filename extensions offered by a `file` field's open panel, without dots.
+    public let extensions: [String]
 
     private enum CodingKeys: String, CodingKey {
-        case id, label, type, description, required, min, max, options
+        case id, label, type, description, required, min, max, options, multiline, mustExist, extensions
         case defaultValue = "default"
     }
 
@@ -67,6 +84,11 @@ public struct PluginSetting: Decodable, Sendable, Equatable {
         min = try c.decodeIfPresent(Double.self, forKey: .min)
         max = try c.decodeIfPresent(Double.self, forKey: .max)
         options = try c.decodeIfPresent([Option].self, forKey: .options) ?? []
+        multiline = try c.decodeIfPresent(Bool.self, forKey: .multiline) ?? false
+        mustExist = try c.decodeIfPresent(Bool.self, forKey: .mustExist) ?? false
+        extensions = try (c.decodeIfPresent([String].self, forKey: .extensions) ?? []).map {
+            $0.hasPrefix(".") ? String($0.dropFirst()) : $0
+        }
 
         func invalid(_ reason: String) -> DecodingError {
             .dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: reason))
@@ -87,10 +109,18 @@ public struct PluginSetting: Decodable, Sendable, Equatable {
         } else if !options.isEmpty {
             throw invalid("Only choice settings can have options: \(id).")
         }
+        guard !multiline || type == .text, !mustExist || type == .file || type == .folder,
+              extensions.isEmpty || type == .file else {
+            throw invalid("multiline, mustExist or extensions do not apply to setting \(id).")
+        }
+        guard extensions.allSatisfy({ !$0.isEmpty && !$0.contains("/") }) else {
+            throw invalid("File setting \(id) has an invalid extension.")
+        }
         guard type != .secret || defaultValue == nil else {
             throw invalid("Secret setting \(id) cannot have a default.")
         }
-        if let defaultValue, let error = validationError(for: defaultValue) {
+        // Whether a default path exists depends on the machine, not the schema.
+        if let defaultValue, let error = validationError(for: defaultValue, checkingFiles: false) {
             throw invalid("Invalid default for setting \(id): \(error)")
         }
     }
@@ -100,12 +130,32 @@ public struct PluginSetting: Decodable, Sendable, Equatable {
         defaultValue ?? (type == .boolean ? .boolean(false) : nil)
     }
 
-    public func validationError(for value: PluginSettingValue?) -> String? {
+    /// A leading `~` in a `file` or `folder` value stands for the home folder.
+    public static func expandedPath(_ path: String) -> String {
+        (path as NSString).expandingTildeInPath
+    }
+
+    /// `checkingFiles` checks `mustExist` paths on disk, so this runs at load and save
+    /// boundaries and while editing the form, never while matching.
+    public func validationError(for value: PluginSettingValue?, checkingFiles: Bool = true) -> String? {
         guard let value else { return required ? "Enter a value for \(label)." : nil }
         switch (type, value) {
         case (.text, .string(let text)), (.secret, .string(let text)):
             return required && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? "Enter a value for \(label)." : nil
+        case (.file, .string(let path)), (.folder, .string(let path)):
+            if path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return required ? "Choose a \(type.rawValue) for \(label)." : nil
+            }
+            guard mustExist, checkingFiles else { return nil }
+            var isFolder: ObjCBool = false
+            let exists = FileManager.default.fileExists(atPath: Self.expandedPath(path), isDirectory: &isFolder)
+            return exists && isFolder.boolValue == (type == .folder) ? nil : "Choose an existing \(type.rawValue) for \(label)."
+        case (.list, .list(let items)):
+            if items.contains(where: { $0.contains(where: \.isNewline) || $0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+                return "Each item in \(label) must be one nonblank line."
+            }
+            return required && items.isEmpty ? "Enter at least one item for \(label)." : nil
         case (.number, .number(let number)):
             guard number.isFinite else { return "Enter a finite number." }
             if let min, number < min { return "Enter a number of at least \(PluginSettingValue.number(min).text)." }
@@ -128,6 +178,7 @@ public struct PluginConfiguration: Sendable, Equatable {
     public let problem: String?
     /// Fields whose values never leave memory except for the Keychain and the plugin.
     public let secretIDs: Set<String>
+    private let pathIDs: Set<String>
     public var isValid: Bool { problem == nil && errors.isEmpty }
 
     public init(settings: [PluginSetting], saved: [String: PluginSettingValue] = [:], problem: String? = nil) {
@@ -142,12 +193,17 @@ public struct PluginConfiguration: Sendable, Equatable {
         self.errors = errors
         self.problem = problem
         self.secretIDs = Set(settings.filter { $0.type == .secret }.map(\.id))
+        self.pathIDs = Set(settings.filter { $0.type == .file || $0.type == .folder }.map(\.id))
     }
 
     /// Only declared values cross the process boundary; obsolete saved keys stay private.
-    /// Redacting replaces each set secret with a placeholder, for anything shown or logged.
+    /// Paths are expanded, as plugins receive them. Redacting replaces each set secret
+    /// with a placeholder, for anything shown or logged.
     public func json(redactingSecrets: Bool = false) throws -> String {
         var values = values
+        for id in pathIDs {
+            if case .string(let path)? = values[id] { values[id] = .string(PluginSetting.expandedPath(path)) }
+        }
         if redactingSecrets {
             for id in secretIDs where values[id] != nil { values[id] = .string("<redacted>") }
         }

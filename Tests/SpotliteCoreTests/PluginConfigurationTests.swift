@@ -70,6 +70,15 @@ struct PluginConfigurationTests {
         #"[{"id":"../bad","label":"Bad","type":"text"}]"#,
         #"[{"id":"x","label":" ","type":"text"}]"#,
         #"[{"id":"x","label":"X","type":"secret","default":"hunter2"}]"#,
+        #"[{"id":"x","label":"X","type":"number","multiline":true}]"#,
+        #"[{"id":"x","label":"X","type":"text","mustExist":true}]"#,
+        #"[{"id":"x","label":"X","type":"folder","extensions":["json"]}]"#,
+        #"[{"id":"x","label":"X","type":"file","extensions":[""]}]"#,
+        #"[{"id":"x","label":"X","type":"file","default":3}]"#,
+        #"[{"id":"x","label":"X","type":"list","default":"a"}]"#,
+        #"[{"id":"x","label":"X","type":"list","required":true,"default":[]}]"#,
+        #"[{"id":"x","label":"X","type":"list","default":["a",""]}]"#,
+        #"[{"id":"x","label":"X","type":"list","default":["a\nb"]}]"#,
         #"[{"id":"x","label":"X","type":"number","min":3,"max":2}]"#,
         #"[{"id":"x","label":"X","type":"text","min":1}]"#,
         #"[{"id":"x","label":"X","type":"boolean","default":"true"}]"#,
@@ -206,5 +215,76 @@ struct PluginConfigurationTests {
         let keychain = KeychainSecretStore(prefix: "com.igorv.spotlite.tests.")
         #expect(throws: PluginConfigurationStore.Failure.self) { try keychain.read(plugin: "../x", field: "token") }
         #expect(throws: PluginConfigurationStore.Failure.self) { try keychain.write("x", plugin: "test", field: "a b") }
+    }
+
+    // MARK: - Paths, multi-line text and lists
+
+    @Test func pathsExpandTildeForThePluginAndValidateExistenceOnlyWhenAsked() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("config.json")
+        try Data("{}".utf8).write(to: file)
+        let fields = try settings(#"""
+        [{"id":"config","label":"Config","type":"file","mustExist":true,"extensions":[".json","yaml"],"default":"~/missing.json"},
+         {"id":"workspace","label":"Workspace","type":"folder","required":true,"default":"~"},
+         {"id":"loose","label":"Loose","type":"folder"}]
+        """#)
+        #expect(fields[0].type == .file && fields[0].mustExist && fields[0].extensions == ["json", "yaml"])
+        // A missing default path is a setup problem on this machine, not a schema error.
+        let initial = PluginConfiguration(settings: fields)
+        #expect(initial.errors.keys.sorted() == ["config"])
+        #expect(initial.values["workspace"] == .string("~"))
+        let configured = PluginConfiguration(settings: fields, saved: ["config": .string(file.path), "loose": .string("~/nowhere")])
+        #expect(configured.isValid)
+        let object = try #require(JSONSerialization.jsonObject(with: Data(configured.json().utf8)) as? [String: Any])
+        #expect(object["workspace"] as? String == NSHomeDirectory())
+        #expect(object["loose"] as? String == NSHomeDirectory() + "/nowhere")
+        #expect(configured.values["workspace"] == .string("~"))
+        // A folder is not a file and vice versa; empty optional paths need not exist.
+        #expect(fields[0].validationError(for: .string(directory.path)) != nil)
+        #expect(fields[1].validationError(for: .string(file.path)) == nil)
+        #expect(fields[1].validationError(for: .string(" ")) != nil)
+        let optional = try settings(#"[{"id":"x","label":"X","type":"file","mustExist":true}]"#)[0]
+        #expect(optional.validationError(for: .string("")) == nil)
+        try FileManager.default.removeItem(at: file)
+        #expect(!PluginConfiguration(settings: fields, saved: ["config": .string(file.path)]).isValid)
+    }
+
+    @Test func multilineTextIsAString() throws {
+        let fields = try settings(#"[{"id":"notes","label":"Notes","type":"text","multiline":true,"required":true,"default":"a\nb"}]"#)
+        #expect(fields[0].multiline)
+        let configuration = PluginConfiguration(settings: fields)
+        #expect(configuration.isValid && configuration.values["notes"] == .string("a\nb"))
+        #expect(try configuration.json() == #"{"notes":"a\nb"}"#)
+        #expect(fields[0].validationError(for: .string("\n \n")) != nil)
+    }
+
+    @Test func listsAreJSONArraysEditedOnePerLine() throws {
+        let fields = try settings(#"""
+        [{"id":"hosts","label":"Hosts","type":"list","required":true},
+         {"id":"repos","label":"Repos","type":"list","default":["a/b","c/d"]}]
+        """#)
+        let initial = PluginConfiguration(settings: fields)
+        #expect(initial.errors.keys.sorted() == ["hosts"])
+        #expect(initial.values["repos"] == .list(["a/b", "c/d"]))
+        #expect(initial.values["repos"]?.text == "a/b\nc/d")
+        let edited = PluginSettingValue.list(lines: " one \n\n  \r\ntwo\n")
+        #expect(edited == .list(["one", "two"]))
+        #expect(PluginSettingValue.list(lines: "\n ") == .list([]))
+        #expect(fields[0].validationError(for: .list([])) != nil)
+        #expect(fields[0].validationError(for: .list(["ok", " "])) != nil)
+        #expect(fields[0].validationError(for: .string("one")) != nil)
+        let configured = PluginConfiguration(settings: fields, saved: ["hosts": edited])
+        #expect(configured.isValid)
+        let object = try #require(JSONSerialization.jsonObject(with: Data(configured.json().utf8)) as? [String: Any])
+        #expect(object["hosts"] as? [String] == ["one", "two"])
+        // Lists round-trip through the settings file next to other types.
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PluginConfigurationStore(directory: directory, secrets: MemorySecretStore())
+        let values: [String: PluginSettingValue] = ["hosts": edited, "empty": .list([]), "flag": .boolean(true), "name": .string("x")]
+        try store.save(values, for: "test", settings: fields)
+        #expect(try store.load(for: "test", settings: fields) == values)
     }
 }

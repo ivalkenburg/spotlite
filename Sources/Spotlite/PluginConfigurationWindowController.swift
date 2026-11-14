@@ -1,9 +1,10 @@
 import AppKit
 import SpotliteCore
+import UniformTypeIdentifiers
 
 /// A transactional editor: scripts never participate in constructing or validating it.
 @MainActor
-final class PluginConfigurationWindowController: NSWindowController, NSTextFieldDelegate {
+final class PluginConfigurationWindowController: NSWindowController, NSTextFieldDelegate, NSTextViewDelegate {
     private let plugin: InstalledPlugin
     private let host: PluginHost
     private let settings: [PluginSetting]
@@ -44,9 +45,11 @@ final class PluginConfigurationWindowController: NSWindowController, NSTextField
 
         var rows: [(String, NSView)] = []
         for setting in settings {
-            let control: NSControl
+            let control: NSView
             switch setting.type {
-            case .text, .number:
+            case .text where setting.multiline, .list:
+                control = ConfigurationTextView.make(delegate: self)
+            case .text, .number, .file, .folder:
                 let input = ConfigurationTextField(string: "")
                 input.delegate = self
                 input.placeholderString = setting.initialValue?.text ?? (setting.required ? "Required" : "Optional")
@@ -73,12 +76,20 @@ final class PluginConfigurationWindowController: NSWindowController, NSTextField
                 control = picker
             }
             control.identifier = NSUserInterfaceItemIdentifier(setting.id)
-            control.target = self
-            control.action = control is NSTextField ? #selector(saveClicked) : #selector(fieldChanged)
+            if let control = control as? NSControl {
+                control.target = self
+                control.action = control is NSTextField ? #selector(saveClicked) : #selector(fieldChanged)
+            }
             control.setAccessibilityLabel(setting.label + (setting.required ? ", required" : ""))
             control.setAccessibilityHelp(setting.description)
-            var field: NSView = control
-            if setting.type == .secret {
+            var field: NSView = (control as? NSTextView)?.enclosingScrollView ?? control
+            if setting.type == .file || setting.type == .folder {
+                let choose = NSButton(title: "Choose…", target: self, action: #selector(choosePath))
+                choose.bezelStyle = .rounded
+                choose.identifier = control.identifier
+                choose.setAccessibilityLabel("Choose \(setting.label)")
+                field = SettingsForm.row([control, choose])
+            } else if setting.type == .secret {
                 let clear = NSButton(title: "Clear", target: self, action: #selector(clearSecret))
                 clear.bezelStyle = .rounded
                 clear.identifier = control.identifier
@@ -169,6 +180,8 @@ final class PluginConfigurationWindowController: NSWindowController, NSTextField
         scroll.heightAnchor.constraint(equalToConstant: min(max(grid.fittingSize.height + 8, 100), min(420, max(100, available)))).isActive = true
         root.setFrameSize(NSSize(width: max(480, grid.fittingSize.width + 52), height: root.fittingSize.height))
         window?.setContentSize(root.frame.size)
+        // Setting an initial responder stops AppKit from building a Tab order on its own.
+        window?.autorecalculatesKeyViewLoop = true
         window?.initialFirstResponder = settings.compactMap { controls[$0.id] }.first
     }
 
@@ -181,6 +194,7 @@ final class PluginConfigurationWindowController: NSWindowController, NSTextField
             let value = configuration.values[setting.id]
             let control = controls[setting.id]!
             switch control {
+            case let view as NSTextView: view.string = value?.text ?? ""
             case let input as NSSecureTextField:
                 input.stringValue = ""
                 updateSecret(setting.id)
@@ -212,6 +226,8 @@ final class PluginConfigurationWindowController: NSWindowController, NSTextField
         var values = incompatible
         for setting in settings where incompatible[setting.id] == nil {
             switch controls[setting.id] {
+            case let view as NSTextView:
+                values[setting.id] = setting.type == .list ? .list(lines: view.string) : .string(view.string)
             case let input as NSSecureTextField:
                 values[setting.id] = input.stringValue.isEmpty
                     ? (clearedSecrets.contains(setting.id) ? nil : savedSecrets[setting.id])
@@ -244,13 +260,49 @@ final class PluginConfigurationWindowController: NSWindowController, NSTextField
         saveButton.isEnabled = configuration.isValid
     }
 
-    @objc private func fieldChanged(_ sender: NSControl) {
+    @objc private func fieldChanged(_ sender: NSView) {
         if let id = sender.identifier?.rawValue {
             incompatible[id] = nil
             if controls[id] is NSSecureTextField { updateSecret(id) }
         }
         if let toggle = sender as? NSButton, !(toggle is NSPopUpButton) { toggle.allowsMixedState = false }
         validate()
+    }
+
+    func textDidChange(_ notification: Notification) {
+        if let view = notification.object as? NSTextView { fieldChanged(view) }
+    }
+
+    /// Tab moves between fields; a multi-line field keeps Return for new lines.
+    func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        switch selector {
+        case #selector(NSResponder.insertTab(_:)): textView.window?.selectNextKeyView(nil)
+        case #selector(NSResponder.insertBacktab(_:)): textView.window?.selectPreviousKeyView(nil)
+        default: return false
+        }
+        return true
+    }
+
+    @objc private func choosePath(_ sender: NSButton) {
+        guard let window, let id = sender.identifier?.rawValue, let input = controls[id] as? NSTextField,
+              let setting = settings.first(where: { $0.id == id }) else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = setting.type == .file
+        panel.canChooseDirectories = setting.type == .folder
+        panel.canCreateDirectories = setting.type == .folder
+        panel.allowsMultipleSelection = false
+        let types = setting.extensions.compactMap { UTType(filenameExtension: $0) }
+        if !types.isEmpty { panel.allowedContentTypes = types }
+        let current = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !current.isEmpty {
+            let url = URL(fileURLWithPath: PluginSetting.expandedPath(current))
+            panel.directoryURL = setting.type == .folder ? url : url.deletingLastPathComponent()
+        }
+        panel.beginSheetModal(for: window) { [weak self, weak input] response in
+            guard response == .OK, let url = panel.url, let input else { return }
+            input.stringValue = (url.path as NSString).abbreviatingWithTildeInPath
+            self?.fieldChanged(input)
+        }
     }
 
     private func updateSecret(_ id: String) {
@@ -329,6 +381,50 @@ private final class ConfigurationSecureField: NSSecureTextField {
         _ = scrollToVisible(bounds.insetBy(dx: 0, dy: -4))
         return super.becomeFirstResponder()
     }
+}
+
+/// A bordered, scrolling plain-text editor for multi-line text and lists.
+private final class ConfigurationTextView: NSTextView {
+    static func make(delegate: NSTextViewDelegate) -> ConfigurationTextView {
+        let scroll = BaselineScrollView(frame: NSRect(x: 0, y: 0, width: 260, height: 76))
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.borderType = .bezelBorder
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.heightAnchor.constraint(equalToConstant: 76).isActive = true
+        let size = scroll.contentSize
+        let view = ConfigurationTextView(frame: NSRect(origin: .zero, size: size))
+        view.minSize = NSSize(width: 0, height: size.height)
+        view.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        view.isVerticallyResizable = true
+        view.isHorizontallyResizable = false
+        view.autoresizingMask = .width
+        view.textContainer?.containerSize = NSSize(width: size.width, height: .greatestFiniteMagnitude)
+        view.textContainer?.widthTracksTextView = true
+        view.textContainerInset = NSSize(width: 1, height: 3)
+        view.isRichText = false
+        view.allowsUndo = true
+        view.font = .systemFont(ofSize: NSFont.systemFontSize)
+        view.isAutomaticQuoteSubstitutionEnabled = false
+        view.isAutomaticDashSubstitutionEnabled = false
+        view.isAutomaticTextReplacementEnabled = false
+        view.isContinuousSpellCheckingEnabled = false
+        view.delegate = delegate
+        scroll.documentView = view
+        scroll.baseline = 1 + view.textContainerInset.height + NSLayoutManager().defaultBaselineOffset(for: view.font!)
+        return view
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        if let scroll = enclosingScrollView { _ = scroll.scrollToVisible(scroll.bounds.insetBy(dx: 0, dy: -4)) }
+        return super.becomeFirstResponder()
+    }
+}
+
+/// Aligns a multi-line editor's first line with its label in the form's baseline grid.
+private final class BaselineScrollView: NSScrollView {
+    var baseline: CGFloat = 0
+    override var firstBaselineOffsetFromTop: CGFloat { baseline }
 }
 
 private final class ConfigurationCheckbox: NSButton {
