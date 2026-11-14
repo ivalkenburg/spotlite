@@ -170,8 +170,8 @@ struct PluginConfigurationTests {
         let object = try #require(JSONSerialization.jsonObject(with: Data(configured.json().utf8)) as? [String: Any])
         #expect(object["token"] as? String == "hunter2")
         #expect(object["extra"] == nil)
-        let redacted = try configured.json(redactingSecrets: true)
-        #expect(!redacted.contains("hunter2") && redacted.contains("\"organization\":\"o\""))
+        // A set secret is a string setting like any other; an unset one is not exported.
+        #expect(configured.variables == ["SPOTLITE_CONFIG_TOKEN": "hunter2", "SPOTLITE_CONFIG_ORGANIZATION": "o"])
     }
 
     @Test func secretsAreNeverWrittenToTheSettingsFile() throws {
@@ -241,6 +241,9 @@ struct PluginConfigurationTests {
         #expect(object["workspace"] as? String == NSHomeDirectory())
         #expect(object["loose"] as? String == NSHomeDirectory() + "/nowhere")
         #expect(configured.values["workspace"] == .string("~"))
+        // The per-field variables hold the same expanded paths: no shell expands them.
+        #expect(configured.variables["SPOTLITE_CONFIG_WORKSPACE"] == NSHomeDirectory())
+        #expect(configured.variables["SPOTLITE_CONFIG_LOOSE"] == NSHomeDirectory() + "/nowhere")
         // A folder is not a file and vice versa; empty optional paths need not exist.
         #expect(fields[0].validationError(for: .string(directory.path)) != nil)
         #expect(fields[1].validationError(for: .string(file.path)) == nil)
