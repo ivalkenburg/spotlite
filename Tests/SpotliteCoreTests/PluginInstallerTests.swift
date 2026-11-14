@@ -331,6 +331,40 @@ final class PluginInstallerTests {
         #expect(throws: PluginInstallError.self) { try PluginArchive.verifyTree(limited, limit: 0) }
     }
 
+    @Test func refusesArchivesItCannotReadSafely() throws {
+        func failure(_ data: Data) -> String? {
+            let name = UUID().uuidString
+            let url = root.appendingPathComponent(name + ".zip")
+            do {
+                try data.write(to: url)
+                try PluginArchive.extract(url, to: root.appendingPathComponent(name))
+                return nil
+            } catch let error as PluginInstallError { return error.message } catch { return "\(error)" }
+        }
+        var plain = ZipBuilder()
+        plain.file("plugin.json", "{}")
+        let good = plain.build()
+        #expect(failure(good) == nil)
+        let central = try #require(good.range(of: Data([0x50, 0x4B, 0x01, 0x02]))).lowerBound
+        let end = try #require(good.range(of: Data([0x50, 0x4B, 0x05, 0x06]))).lowerBound
+
+        var encrypted = good
+        encrypted[central + 8] |= 1
+        #expect(failure(encrypted)?.contains("Encrypted") == true)
+        var zip64 = good
+        zip64.replaceSubrange((end + 10)..<(end + 12), with: [0xFF, 0xFF])
+        #expect(failure(zip64)?.contains("ZIP64") == true)
+        var method = good
+        method[central + 10] = 9
+        #expect(failure(method)?.contains("compression method") == true)
+        var corrupt = good
+        corrupt[30 + "plugin.json".utf8.count] ^= 0xFF
+        #expect(failure(corrupt)?.contains("damaged") == true, "a checksum mismatch is refused")
+        var fifo = ZipBuilder()
+        fifo.file("pipe", "", mode: 0o010644)
+        #expect(failure(fifo.build())?.contains("special file") == true)
+    }
+
     // MARK: - Roots
 
     @Test func findsThePluginRoot() throws {
@@ -425,6 +459,13 @@ final class PluginInstallerTests {
         let data = PluginStore.dataDirectory(for: "demo", in: root)
         try FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
         try "state".write(to: data.appendingPathComponent("state"), atomically: true, encoding: .utf8)
+        // So are its settings and secrets, which are keyed by id away from its folder.
+        let fields = try JSONDecoder().decode([PluginSetting].self, from: Data(#"""
+            [{"id":"org","label":"Org","type":"text"},{"id":"token","label":"Token","type":"secret"}]
+            """#.utf8))
+        let secrets = MemorySecretStore()
+        let settings = PluginConfigurationStore(directory: root.appendingPathComponent("PluginSettings"), secrets: secrets)
+        try settings.save(["org": .string("acme"), "token": .string("hunter2")], for: "demo", settings: fields)
 
         // A failure just before the swap leaves version 1 and its record in place.
         installer.beforeReplace = { _ in throw CocoaError(.fileWriteUnknown) }
@@ -440,6 +481,7 @@ final class PluginInstallerTests {
         #expect(PluginStore.load(plugins.appendingPathComponent("demo")).manifest?.version == "2.0.0")
         #expect(installer.sources.load(for: "demo")?.version == "2.0.0")
         #expect(try String(contentsOf: data.appendingPathComponent("state"), encoding: .utf8) == "state")
+        #expect(try settings.load(for: "demo", settings: fields) == ["org": .string("acme"), "token": .string("hunter2")])
     }
 
     @Test func refusesToReplaceALinkedPlugin() async throws {

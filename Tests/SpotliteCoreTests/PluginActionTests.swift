@@ -67,6 +67,30 @@ struct PluginActionTests {
         }
     }
 
+    @Test func menuRowsCarryActionsAndConfirmations() throws {
+        let manifest = try decode(PluginManifest.self, #"""
+        {"id":"git","name":"Git","executable":"git.sh","commands":[
+          {"id":"branches","title":"Branches","action":{"type":"menu","items":[
+            {"title":"main","action":{"type":"run","args":["checkout","main"]},
+             "actions":[{"title":"Delete","shortcut":"ctrl",
+                         "action":{"type":"run","args":["delete","main"],"keepOpen":true,
+                                   "confirm":{"title":"Delete main?","destructive":true}}},
+                        {"title":"Broken","action":{"type":"copy","text":"x","confirm":""}}]},
+            {"title":"dropped","action":{"type":"run","confirm":7}},
+            {"title":"dev","action":{"type":"copy","text":"dev","confirm":"Copy dev?"}}]}}]}
+        """#)
+        guard case .menu(let items, _) = manifest.commands[0].action else { throw CocoaError(.coderInvalidValue) }
+        // A malformed confirm drops its row or action alone; the command stays usable.
+        #expect(items.map(\.title) == ["main", "dev"])
+        #expect(items[0].confirm == nil && items[1].confirm == PluginConfirmation(title: "Copy dev?"))
+        let set = PluginActionSet(items[0])
+        #expect(set.entries.map(\.title) == ["Run", "Delete"])
+        let delete = try #require(set.entry(for: .control))
+        #expect(delete.action == .run(args: ["delete", "main"], keepOpen: true))
+        #expect(delete.confirm == PluginConfirmation(title: "Delete main?", isDestructive: true))
+        #expect(PluginActionSet(items[1]).primary?.confirm?.title == "Copy dev?")
+    }
+
     @Test func confirmTakesAStringOrAnObject() throws {
         let plain = try decode(PluginConfirmation.self, #""Delete branch main?""#)
         #expect(plain == PluginConfirmation(title: "Delete branch main?", button: "Confirm"))
