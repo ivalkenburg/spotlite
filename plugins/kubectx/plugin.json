@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/docs/plugin.schema.json",
+  "$schema": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/plugins/plugin.schema.json",
   "id": "kubectx",
   "name": "Kube Context",
   "version": "1.0.1",

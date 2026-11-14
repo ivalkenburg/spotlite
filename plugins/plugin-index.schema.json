@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/docs/plugin-index.schema.json",
+  "$id": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/plugins/plugin-index.schema.json",
   "title": "Spotlite plugin gallery index",
   "description": "The list Settings → Plugins → Browse Gallery… reads. Spotlite skips an entry that breaks these rules and shows the rest.",
   "type": "object",

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import SpotliteCore
 
-/// Keeps `docs/plugin.schema.json` and `docs/plugin-response.schema.json` in step with
+/// Keeps `plugins/plugin.schema.json` and `plugins/plugin-response.schema.json` in step with
 /// the decoders, and the shipped manifests decodable. Full validation of the manifests
 /// against the schemas needs a JSON Schema validator, which the package does not carry.
 @Suite struct PluginSchemaTests {
@@ -10,7 +10,7 @@ import Testing
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
     static func schema(_ name: String) throws -> [String: Any] {
-        let data = try Data(contentsOf: root.appendingPathComponent("docs").appendingPathComponent(name))
+        let data = try Data(contentsOf: root.appendingPathComponent("plugins").appendingPathComponent(name))
         return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
@@ -45,7 +45,7 @@ import Testing
 
     @Test func manifestToleratesSchemaKey() throws {
         let json = """
-        { "$schema": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/docs/plugin.schema.json",
+        { "$schema": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/plugins/plugin.schema.json",
           "id": "demo", "name": "Demo",
           "commands": [{ "id": "go", "title": "Go", "action": { "type": "copy", "text": "x" } }] }
         """
@@ -124,7 +124,7 @@ import Testing
     /// The response schema borrows the row and icon from the manifest schema.
     @Test func crossFileReferencesResolve() throws {
         let manifestDefs = try Self.defs(try Self.schema("plugin.schema.json"))
-        let text = try String(contentsOf: Self.root.appendingPathComponent("docs/plugin-response.schema.json"),
+        let text = try String(contentsOf: Self.root.appendingPathComponent("plugins/plugin-response.schema.json"),
                               encoding: .utf8)
         let regex = try NSRegularExpression(pattern: #""plugin\.schema\.json#/\$defs/([A-Za-z]+)""#)
         let names = regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap {

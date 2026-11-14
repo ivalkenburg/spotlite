@@ -1,5 +1,5 @@
 {
-  "$schema": "../docs/plugin-index.schema.json",
+  "$schema": "plugin-index.schema.json",
   "version": 1,
   "plugins": [
     {

@@ -7,8 +7,8 @@ macOS 26 app launcher (Swift package, AppKit, no Xcode project). Goal #1: fast a
 - `Sources/SpotliteCore`: pure Swift, no AppKit. Matcher, calculator, result assembly, index, preferences. Tested headless in `Tests/SpotliteCoreTests`.
 - `Sources/Spotlite`: AppKit layer (panel, settings, hotkey, launching).
 - Keep logic in Core where possible so it stays testable.
-- Plugins: manifest, store, installer (`PluginInstaller`, `PluginArchive`, `PluginSource`), gallery index (`PluginGallery`) and process runner in Core (`Plugin*.swift`); `PluginHost`, the Settings tab, the install sheet and the gallery sheet in the AppKit layer. API in `docs/plugins.md`, examples in `plugins`.
-- `plugins/index.json`: the plugin gallery index the app reads from `main` (schema in `docs/plugin-index.schema.json`). Keep its versions in step with the examples' manifests; a test checks.
+- Plugins: manifest, store, installer (`PluginInstaller`, `PluginArchive`, `PluginSource`), gallery index (`PluginGallery`) and process runner in Core (`Plugin*.swift`); `PluginHost`, the Settings tab, the install sheet and the gallery sheet in the AppKit layer. API in `plugins/README.md`, examples in `plugins`.
+- `plugins/index.json`: the plugin gallery index the app reads from `main` (schema in `plugins/plugin-index.schema.json`). Keep its versions in step with the examples' manifests; a test checks.
 
 ## Commands
 

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/docs/plugin-response.schema.json",
+  "$id": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/plugins/plugin-response.schema.json",
   "title": "Spotlite plugin response",
-  "description": "What a plugin's executable prints: one JSON object. Every key is optional and printing nothing is fine. A streamed action prints lines matching #/$defs/streamLine instead. See docs/plugins.md.",
+  "description": "What a plugin's executable prints: one JSON object. Every key is optional and printing nothing is fine. A streamed action prints lines matching #/$defs/streamLine instead. See plugins/README.md.",
   "$ref": "#/$defs/response",
 
   "$defs": {

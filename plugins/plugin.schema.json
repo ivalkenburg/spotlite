@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/docs/plugin.schema.json",
+  "$id": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/plugins/plugin.schema.json",
   "title": "Spotlite plugin manifest",
-  "description": "plugin.json at the top of a Spotlite plugin's folder. See docs/plugins.md.",
+  "description": "plugin.json at the top of a Spotlite plugin's folder. See plugins/README.md.",
   "type": "object",
   "required": ["id", "name", "commands"],
   "properties": {

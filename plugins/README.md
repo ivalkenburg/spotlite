@@ -9,7 +9,7 @@ plugin costs its manifest in memory: no process, timer or watcher.
 Install a plugin in Settings → Plugins from a folder or an address (see
 [Installing](#installing)), or put (or symlink) it in
 `~/Library/Application Support/Spotlite/Plugins/` and choose ⋯ → Reload Plugins. Working examples are
-in [`plugins`](../plugins): Caffeinate, a kubectl context switcher, a
+in [`plugins`](.): Caffeinate, a kubectl context switcher, a
 GitHub repository search and Find Files, which streams.
 
 A plugin runs with your user's permissions. Install only ones you trust.
@@ -18,7 +18,7 @@ A plugin runs with your user's permissions. Install only ones you trust.
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/docs/plugin.schema.json",
+  "$schema": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/plugins/plugin.schema.json",
   "id": "kubectx",
   "name": "Kube Context",
   "version": "1.0.0",
@@ -416,7 +416,7 @@ confirmation.
 ### Gallery
 
 + → Browse Gallery… reads the gallery index,
-[`plugins/index.json`](../plugins/index.json) on the repository's `main` branch, served
+[`index.json`](index.json) on the repository's `main` branch, served
 from `raw.githubusercontent.com`. It is fetched only when the sheet opens or Refresh is
 clicked: never at launch, in the background or on a timer. While Settings stays open the
 last index is kept in memory, and nothing is written to disk.
@@ -462,7 +462,7 @@ To propose a plugin, open a pull request that adds an entry to `plugins/index.js
 | `icon` | Optional SF Symbol name. Images are never downloaded. |
 | `tags` | Optional lowercase words for search; the first 8 are used. |
 
-[`docs/plugin-index.schema.json`](plugin-index.schema.json) is the JSON Schema for the
+[`plugin-index.schema.json`](plugin-index.schema.json) is the JSON Schema for the
 file. Spotlite reads at most 1 MB and 500 entries, and skips an entry that is invalid (a
 missing field, an address that is not https, a repeated id) while showing the rest, with
 a count of what it skipped.
