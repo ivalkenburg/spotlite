@@ -75,6 +75,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
         plugins.configure(pluginID: id)
     }
 
+    #if DEBUG
+    func devShowPlugins() -> PluginsSettingsViewController {
+        select(.plugins)
+        return plugins
+    }
+    #endif
+
     init(preferences: Preferences, library: AppLibrary) {
         model = SettingsModel(preferences: preferences, library: library)
         general = GeneralSettingsViewController(model: model)

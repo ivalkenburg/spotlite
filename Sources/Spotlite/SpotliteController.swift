@@ -2256,6 +2256,8 @@ extension SpotliteController {
         try check(items.map(\.title).suffix(5) == ["Until turned off", "15 minutes", "30 minutes", "1 hour", "2 hours"],
                   "Unexpected list: \(items.map(\.title))")
         dumpFrames("plugin-list")
+        try check(plugins.lastRun(for: "caffeinate").map { ($0.commandID, $0.action) } ?? ("", .run) == ("caffeinate", .list),
+                  "The list run did not name its command and action")
         try? await SettingsForm.captureWindow(panel, name: "plugin-list")
         setQuery("hour")
         updateMatches(for: "hour")
@@ -2268,6 +2270,9 @@ extension SpotliteController {
         launch(at: 0)
         try check(isDismissing, "A run action must close the panel")
         await settle(800)
+        // A row nested in the command's list still runs as that command.
+        try check(plugins.lastRun(for: "caffeinate").map { ($0.commandID, $0.action) } ?? ("", .list) == ("caffeinate", .run),
+                  "A nested run did not name its command and action")
         show()
         guard let active = pluginRow("caffeine") else { return try check(false, "Command vanished") }
         let look = items[active].hints(modifiers: [], running: false).first?.text ?? ""

@@ -1,0 +1,18 @@
+{
+  "id": "diagnostics",
+  "name": "Diagnostics Fixture",
+  "description": "Exercises run diagnostics and the debug runner.",
+  "executable": "run.sh",
+  "settings": [
+    { "id": "limit", "label": "Limit", "type": "number", "default": 3 },
+    { "id": "api-key", "label": "First key", "type": "text", "default": "a" },
+    { "id": "api_key", "label": "Second key", "type": "text", "default": "b" }
+  ],
+  "commands": [
+    { "id": "env", "title": "Diagnostics Env", "action": { "type": "run", "args": ["env"] } },
+    { "id": "fail", "title": "Diagnostics Fail", "action": { "type": "run", "args": ["fail"] } },
+    { "id": "invalid", "title": "Diagnostics Invalid", "action": { "type": "list", "args": ["invalid"] } },
+    { "id": "slow", "title": "Diagnostics Slow", "action": { "type": "search", "args": ["slow"], "minQuery": 0 } },
+    { "id": "link", "title": "Diagnostics Link", "action": { "type": "open", "url": "https://example.com" } }
+  ]
+}
