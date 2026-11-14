@@ -15,17 +15,18 @@ public struct PluginShortcut: OptionSet, Sendable, Hashable {
     public init?(_ string: String) {
         var shortcut: PluginShortcut = []
         for part in string.lowercased().split(separator: "+", omittingEmptySubsequences: false) {
-            switch part.trimmingCharacters(in: .whitespaces) {
-            case "cmd", "command": shortcut.insert(.command)
-            case "opt", "option", "alt": shortcut.insert(.option)
-            case "shift": shortcut.insert(.shift)
-            case "ctrl", "control": shortcut.insert(.control)
-            default: return nil
-            }
+            guard let modifier = PluginShortcut.names[part.trimmingCharacters(in: .whitespaces)] else { return nil }
+            shortcut.insert(modifier)
         }
         guard !shortcut.isEmpty else { return nil }
         self = shortcut
     }
+
+    /// Every name a part of a shortcut may have, aliases included.
+    public static let names: [String: PluginShortcut] = [
+        "cmd": .command, "command": .command, "opt": .option, "option": .option, "alt": .option,
+        "shift": .shift, "ctrl": .control, "control": .control,
+    ]
 
     /// The modifier glyphs in the order macOS menus draw them, then Return: `⌥⇧↩`.
     public var keyText: String {
