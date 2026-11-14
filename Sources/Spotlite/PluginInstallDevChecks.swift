@@ -70,7 +70,7 @@ enum PluginInstallDevChecks {
         try await Task.sleep(for: .milliseconds(300))
         settingsWindow = pane.view.window
         guard let window = settingsWindow else { return try check(false, "Settings has no window") }
-        let views = descendants(pane.view)
+        let views = DevViews.descendants(pane.view)
         let install = views.compactMap { $0 as? NSButton }.first { $0.accessibilityLabel() == "Add Plugin" }?.menu
         let more = views.compactMap { $0 as? NSButton }.first { $0.accessibilityLabel() == "More" }
         /// Enabled as the menu opens, by the pane's validation.
@@ -82,7 +82,7 @@ enum PluginInstallDevChecks {
         try check(install?.items.map(\.title) == ["Install from Folder…", "Install from URL…", "", "Browse Gallery…"],
                   "Install menu: \(install?.items.map(\.title) ?? [])")
         try check(updatesEnabled() == false, "Check for Updates enabled without a source")
-        dumpFrames(pane.view, tag: "plugins-pane-install")
+        DevViews.dumpFrames(pane.view, tag: "plugins-pane-install")
 
         func sheet() async throws -> NSWindow {
             for _ in 0..<100 {
@@ -91,7 +91,7 @@ enum PluginInstallDevChecks {
             }
             throw NSError(domain: "SpotliteInstallChecks", code: 1, userInfo: [NSLocalizedDescriptionKey: "No sheet"])
         }
-        func controls(_ sheet: NSWindow) -> [NSView] { descendants(sheet.contentView!) }
+        func controls(_ sheet: NSWindow) -> [NSView] { DevViews.descendants(sheet.contentView!) }
         func button(_ title: String, in sheet: NSWindow) -> NSButton? {
             controls(sheet).compactMap { $0 as? NSButton }.first { $0.title == title }
         }
@@ -119,7 +119,7 @@ enum PluginInstallDevChecks {
         // An address that is not https never leaves the sheet.
         var current = try await enter("http://example.invalid/v1.zip")
         try check(texts(current).contains("Only https addresses are supported."), "http accepted: \(texts(current))")
-        dumpFrames(current.contentView!, tag: "install-address-error")
+        DevViews.dumpFrames(current.contentView!, tag: "install-address-error")
         try await SettingsForm.captureWindow(current, name: "install-address-error")
 
         // An archive that escapes its folder is refused, and nothing is left behind.
@@ -144,7 +144,7 @@ enum PluginInstallDevChecks {
         where !details.contains(expected) {
             try check(false, "Confirmation lacks \(expected): \(details)")
         }
-        dumpFrames(current.contentView!, tag: "install-confirm")
+        DevViews.dumpFrames(current.contentView!, tag: "install-confirm")
         try await SettingsForm.captureWindow(current, name: "install-confirm")
         confirm.performClick(nil)
         for _ in 0..<100 where window.attachedSheet != nil { try await Task.sleep(for: .milliseconds(20)) }
@@ -167,7 +167,7 @@ enum PluginInstallDevChecks {
         try check(texts(current).contains("1.0.0 → 1.1.0") && texts(current).contains("1 update available."),
                   "Update list: \(texts(current))")
         try check(source?.stringValue.contains("Update available: 1.1.0") == true, "Source line: \(source?.stringValue ?? "")")
-        dumpFrames(current.contentView!, tag: "install-updates")
+        DevViews.dumpFrames(current.contentView!, tag: "install-updates")
         try await SettingsForm.captureWindow(current, name: "install-updates")
         update.performClick(nil)
         let apply = try await page("Update", in: current)
@@ -194,7 +194,7 @@ enum PluginInstallDevChecks {
         current = try await enter("https://example.invalid/linked.zip")
         let refused = try await page("Update", in: current)
         try check(!refused.isEnabled && texts(current).contains("Spotlite won’t replace it"), "Linked: \(texts(current))")
-        dumpFrames(current.contentView!, tag: "install-linked")
+        DevViews.dumpFrames(current.contentView!, tag: "install-linked")
         button("Cancel", in: current)!.performClick(nil)
         try await Task.sleep(for: .milliseconds(200))
         try check(PluginStore.load(checkout).manifest?.version == "1.0.0", "The checkout changed")
@@ -248,24 +248,6 @@ enum PluginInstallDevChecks {
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         try data.write(to: url)
         return url
-    }
-
-    static func descendants(_ view: NSView) -> [NSView] {
-        view.subviews.flatMap { [$0] + descendants($0) }
-    }
-
-    /// Frames in the root's coordinates, and any view that pokes outside the root.
-    static func dumpFrames(_ root: NSView, tag: String) {
-        root.layoutSubtreeIfNeeded()
-        print("DEV frames \(tag): root \(root.bounds.size)")
-        for view in descendants(root) where view is NSControl || view is NSScrollView {
-            guard !view.isHidden, view.enclosingScrollView == nil || view is NSScrollView else { continue }
-            let frame = view.convert(view.bounds, to: root)
-            let label = (view as? NSButton)?.title ?? (view as? NSTextField)?.stringValue.prefix(30).description
-                ?? String(describing: type(of: view))
-            let outside = root.bounds.insetBy(dx: -0.5, dy: -0.5).contains(frame) ? "" : "  OUTSIDE"
-            print("  \(label): \(frame.integral)\(outside)")
-        }
     }
 }
 #endif

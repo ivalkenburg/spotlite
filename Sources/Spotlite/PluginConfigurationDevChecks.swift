@@ -41,7 +41,7 @@ enum PluginConfigurationDevChecks {
         try check(requested == plugin.id, "Command did not route to configuration")
         let sheet = try requireSheet()
         try check(sheet.sheetParent != nil, "Configure did not open a sheet")
-        let inputs = descendants(sheet.contentView!).compactMap { $0 as? NSControl }
+        let inputs = DevViews.descendants(sheet.contentView!).compactMap { $0 as? NSControl }
         let name = inputs.first { $0.identifier?.rawValue == "copy" } as! NSTextField
         let limit = inputs.first { $0.identifier?.rawValue == "limit" } as! NSTextField
         let toggle = inputs.first { $0.identifier?.rawValue == "enabled" } as! NSButton
@@ -69,7 +69,7 @@ enum PluginConfigurationDevChecks {
         settings.configurePlugin(id: plugin.id)
         try await Task.sleep(for: .milliseconds(200))
         let second = try requireSheet()
-        let secondInputs = descendants(second.contentView!).compactMap { $0 as? NSControl }
+        let secondInputs = DevViews.descendants(second.contentView!).compactMap { $0 as? NSControl }
         let secondName = secondInputs.first { $0.identifier?.rawValue == "copy" } as! NSTextField
         try check(secondName.stringValue.isEmpty, "Cancelled values returned on reopening")
         edit(secondName, text: "Alpha")
@@ -116,20 +116,20 @@ enum PluginConfigurationDevChecks {
         settings.configurePlugin(id: plugin.id)
         try await Task.sleep(for: .milliseconds(200))
         let resetSheet = try requireSheet()
-        let migrated = descendants(resetSheet.contentView!).compactMap { $0 as? NSControl }
+        let migrated = DevViews.descendants(resetSheet.contentView!).compactMap { $0 as? NSControl }
         try check((migrated.first { $0.identifier?.rawValue == "format" } as? NSPopUpButton)?.titleOfSelectedItem
                     == "Unavailable: removed choice", "Unavailable saved choice was hidden")
         try check((migrated.first { $0.identifier?.rawValue == "enabled" } as? NSButton)?.state == .mixed,
                   "Incompatible saved boolean appeared valid")
         try await capture(resetSheet, name: "plugin-configuration-migration")
-        descendants(resetSheet.contentView!).compactMap { $0 as? NSButton }.first { $0.title == "Reset Settings…" }!.performClick(nil)
+        DevViews.descendants(resetSheet.contentView!).compactMap { $0 as? NSButton }.first { $0.title == "Reset Settings…" }!.performClick(nil)
         try await Task.sleep(for: .milliseconds(200))
         try check(resetSheet.attachedSheet != nil, "Reset did not ask before removing saved values")
         let resetAlert = resetSheet.attachedSheet!
-        descendants(resetAlert.contentView!).compactMap { $0 as? NSButton }.first { $0.title == "Reset Settings" }!.performClick(nil)
+        DevViews.descendants(resetAlert.contentView!).compactMap { $0 as? NSButton }.first { $0.title == "Reset Settings" }!.performClick(nil)
         try await Task.sleep(for: .milliseconds(250))
         try check(host.needsSetup(plugin.id), "Reset did not clear required settings")
-        descendants(resetSheet.contentView!).compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }!.performClick(nil)
+        DevViews.descendants(resetSheet.contentView!).compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }!.performClick(nil)
         try await Task.sleep(for: .milliseconds(250))
         try Data("{".utf8).write(to: stored)
         host.reload()
@@ -139,7 +139,7 @@ enum PluginConfigurationDevChecks {
         try await Task.sleep(for: .milliseconds(200))
         let recovery = try requireSheet()
         try await capture(recovery, name: "plugin-configuration-recovery")
-        descendants(recovery.contentView!).compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }!.performClick(nil)
+        DevViews.descendants(recovery.contentView!).compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }!.performClick(nil)
         try await Task.sleep(for: .milliseconds(250))
         if let parent {
             try await checkLongForm(on: parent)
@@ -246,7 +246,7 @@ enum PluginConfigurationDevChecks {
             let window = editor!.window!
             parent.beginSheet(window, completionHandler: { _ in })
             try await Task.sleep(for: .milliseconds(250))
-            let views = descendants(window.contentView!)
+            let views = DevViews.descendants(window.contentView!)
             let field = views.compactMap { $0 as? NSSecureTextField }.first { $0.identifier?.rawValue == "copy" }!
             let clear = views.compactMap { $0 as? NSButton }.first { $0.title == "Clear" && $0.identifier?.rawValue == "copy" }!
             let save = views.compactMap { $0 as? NSButton }.first { $0.title == "Save" }!
@@ -317,7 +317,7 @@ enum PluginConfigurationDevChecks {
         var window = editor!.window!
         parent.beginSheet(window, completionHandler: { _ in })
         try await Task.sleep(for: .milliseconds(250))
-        var views = descendants(window.contentView!)
+        var views = DevViews.descendants(window.contentView!)
         let notes = views.compactMap { $0 as? NSTextView }.first { $0.identifier?.rawValue == "notes" }!
         let hosts = views.compactMap { $0 as? NSTextView }.first { $0.identifier?.rawValue == "hosts" }!
         let config = views.compactMap { $0 as? NSTextField }.first { $0.identifier?.rawValue == "config" }!
@@ -395,7 +395,7 @@ enum PluginConfigurationDevChecks {
         window = editor!.window!
         parent.beginSheet(window, completionHandler: { _ in })
         try await Task.sleep(for: .milliseconds(250))
-        views = descendants(window.contentView!)
+        views = DevViews.descendants(window.contentView!)
         let reopened = views.compactMap { $0 as? NSTextView }.first { $0.identifier?.rawValue == "hosts" }!
         try expect(reopened.string == "alpha\nbeta", "A saved list did not reopen one item per line")
         parent.endSheet(window)
@@ -438,7 +438,7 @@ enum PluginConfigurationDevChecks {
         let window = editor.window!
         parent.beginSheet(window, completionHandler: { _ in })
         try await Task.sleep(for: .milliseconds(250))
-        let pickers = descendants(window.contentView!).compactMap { $0 as? NSPopUpButton }
+        let pickers = DevViews.descendants(window.contentView!).compactMap { $0 as? NSPopUpButton }
         let duplicate = pickers.first { $0.identifier?.rawValue == "duplicate" }!
         let optional = pickers.first { $0.identifier?.rawValue == "optional" }!
         let required = pickers.first { $0.identifier?.rawValue == "required" }!
@@ -449,7 +449,7 @@ enum PluginConfigurationDevChecks {
             picker.selectItem(at: index)
             picker.sendAction(picker.action, to: picker.target)
         }
-        let save = descendants(window.contentView!).compactMap { $0 as? NSButton }.first { $0.title == "Save" }!
+        let save = DevViews.descendants(window.contentView!).compactMap { $0 as? NSButton }.first { $0.title == "Save" }!
         try expect(save.isEnabled, "Valid options with duplicate labels could not be saved")
         save.performClick(nil)
         try await Task.sleep(for: .milliseconds(250))
@@ -464,14 +464,14 @@ enum PluginConfigurationDevChecks {
         let migrationWindow = migration.window!
         parent.beginSheet(migrationWindow, completionHandler: { _ in })
         try await Task.sleep(for: .milliseconds(250))
-        let migrated = descendants(migrationWindow.contentView!).compactMap { $0 as? NSPopUpButton }
+        let migrated = DevViews.descendants(migrationWindow.contentView!).compactMap { $0 as? NSPopUpButton }
             .first { $0.identifier?.rawValue == "duplicate" }!
         try expect(migrated.numberOfItems == 4 && migrated.item(at: 0)?.isEnabled == false
                    && migrated.item(at: 3)?.representedObject as? String == "c",
                    "Unavailable value replaced a real option with the same label")
         migrated.selectItem(at: 3)
         migrated.sendAction(migrated.action, to: migrated.target)
-        descendants(migrationWindow.contentView!).compactMap { $0 as? NSButton }.first { $0.title == "Save" }!.performClick(nil)
+        DevViews.descendants(migrationWindow.contentView!).compactMap { $0 as? NSButton }.first { $0.title == "Save" }!.performClick(nil)
         try await Task.sleep(for: .milliseconds(250))
         try expect(host.configuration(for: plugin).values["duplicate"] == .string("c"), "Unavailable-label recovery saved the wrong value")
         print("DEV configuration: duplicate labels and placeholder-label collisions preserve selectable values")
@@ -496,11 +496,11 @@ enum PluginConfigurationDevChecks {
         parent.beginSheet(window, completionHandler: { _ in })
         try await Task.sleep(for: .milliseconds(250))
         try await capture(window, name: "plugin-configuration-long-top")
-        let last = descendants(window.contentView!).compactMap { $0 as? NSTextField }
+        let last = DevViews.descendants(window.contentView!).compactMap { $0 as? NSTextField }
             .first { $0.identifier?.rawValue == "field29" }!
         window.makeFirstResponder(last)
         try await Task.sleep(for: .milliseconds(150))
-        let scroll = descendants(window.contentView!).compactMap { $0 as? NSScrollView }.first!
+        let scroll = DevViews.descendants(window.contentView!).compactMap { $0 as? NSScrollView }.first!
         let rect = last.convert(last.bounds, to: scroll.documentView)
         print("DEV configuration long form: document=\(scroll.documentView!.frame), visible=\(scroll.documentVisibleRect), last=\(rect), responder=\(String(describing: window.firstResponder))")
         guard scroll.documentVisibleRect.contains(rect) else {
@@ -530,10 +530,6 @@ enum PluginConfigurationDevChecks {
         try await withCheckedThrowingContinuation { continuation in
             host.run(plugin, arguments: arguments, query: "") { continuation.resume(with: $0.mapError { $0 as any Error }) }
         }
-    }
-
-    private static func descendants(_ view: NSView) -> [NSView] {
-        view.subviews.flatMap { [$0] + descendants($0) }
     }
 
     private static func capture(_ window: NSWindow, name: String) async throws {
