@@ -2644,6 +2644,17 @@ extension SpotliteController {
             NSApp.postEvent(event, atStart: false)
             await settle(60)
         }
+        /// Posted keys and plugin runs land on a later turn of the run loop, and a fixed
+        /// pause is sometimes too short. Waits for the outcome instead, up to two seconds.
+        func eventually(_ condition: () -> Bool) async -> Bool {
+            for _ in 0..<100 {
+                if condition() { return true }
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            return condition()
+        }
+        /// A closing panel may already have finished hiding by the time it is checked.
+        var closed: Bool { isDismissing || !panel.isVisible }
         // kVK_Return, kVK_Escape and kVK_ANSI_K.
         let returnKey = (36, "\r"), escape = (53, "\u{1b}"), commandK = (40, "k")
         func open(_ title: String) throws -> Int {
@@ -2670,6 +2681,7 @@ extension SpotliteController {
 
         // ⌘K lists Return's action first, the plugin's next, the built-in copy last.
         try await press(commandK.0, commandK.1, .command)
+        _ = await eventually { pluginOverlay != nil }
         try check(pluginOverlay != nil && items.map(\.title) == ["Open", "Copy Name", "Run Confirmed", "Show Rows", "Copy Link"],
                   "Action list: \(items.map(\.title))")
         try check(items.map { $0.restingHints.last?.key } == ["↩", "⌘↩", "⇧↩", nil, "⌥↩"], "Action keys")
@@ -2697,7 +2709,8 @@ extension SpotliteController {
 
         // ⌘↩ runs its binding through the field's key equivalent.
         try await press(returnKey.0, returnKey.1, .command)
-        try check(pasteboard.string(forType: .string) == "actions-name" && isDismissing, "⌘↩ did not copy the name")
+        _ = await eventually { pasteboard.string(forType: .string) == "actions-name" }
+        try check(pasteboard.string(forType: .string) == "actions-name" && closed, "⌘↩ did not copy the name")
         await settle(300)
 
         // ⇧↩ asks first. Escape and Cancel answer no; a held Return does not answer.
@@ -2721,7 +2734,8 @@ extension SpotliteController {
         try check(pluginOverlay == nil && panel.isVisible && pasteboard.string(forType: .string) == nil, "Cancel ran the action")
         try await press(returnKey.0, returnKey.1, .shift)
         try await press(returnKey.0, returnKey.1)
-        try check(isDismissing, "Confirming did not run the action: overlay=\(pluginOverlay != nil) query=\(field.stringValue) items=\(items.map(\.title)) cursor=\(cursor)")
+        let confirmed = await eventually { pasteboard.string(forType: .string) == "confirmed-run" }
+        try check(confirmed && closed, "Confirming did not run the action: overlay=\(pluginOverlay != nil) query=\(field.stringValue) items=\(items.map(\.title)) cursor=\(cursor)")
         await settle(400)
         try check(pasteboard.string(forType: .string) == "confirmed-run", "The confirmed run did not apply its copy")
         print("DEV actions: modifier hints, ⌘K list and its four ways back, ⌘↩, confirmation and repeat guard passed")
