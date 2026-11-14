@@ -5,7 +5,10 @@ import Carbon.HIToolbox
 /// here because a focused NSTextField swallows them before the panel sees them.
 final class SearchField: NSTextField {
     var onCommandDigit: ((Int) -> Void)?
-    var onCommandReturn: (() -> Void)?
+    /// Return with Command and any other modifiers; false lets the event go on.
+    var onCommandReturn: ((NSEvent.ModifierFlags) -> Bool)?
+    /// Command-K; false lets the event go on.
+    var onCommandK: (() -> Bool)?
     var onCommandQ: (() -> Void)?
     var onUndoHide: (() -> Bool)?
 
@@ -35,13 +38,13 @@ final class SearchField: NSTextField {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         // Only the user-facing modifiers: keypad Enter also carries .numericPad.
-        guard event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command
-        else { return super.performKeyEquivalent(with: event) }
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        let isReturn = event.keyCode == UInt16(kVK_Return) || event.keyCode == UInt16(kVK_ANSI_KeypadEnter)
+        // A plugin can bind Command with other modifiers to Return.
+        if isReturn, modifiers.contains(.command), onCommandReturn?(modifiers) == true { return true }
+        guard modifiers == .command else { return super.performKeyEquivalent(with: event) }
 
-        if event.keyCode == UInt16(kVK_Return) || event.keyCode == UInt16(kVK_ANSI_KeypadEnter) {
-            onCommandReturn?()
-            return true
-        }
+        if isReturn { return true }
         guard let chars = event.charactersIgnoringModifiers else {
             return super.performKeyEquivalent(with: event)
         }
@@ -52,6 +55,7 @@ final class SearchField: NSTextField {
             return true
         }
         if chars == "z", onUndoHide?() == true { return true }
+        if chars == "k", onCommandK?() == true { return true }
         if let action = SearchField.editingActions[chars], currentEditor() != nil {
             return NSApp.sendAction(action, to: nil, from: self)
         }

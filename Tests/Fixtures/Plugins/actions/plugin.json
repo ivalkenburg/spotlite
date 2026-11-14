@@ -1,0 +1,25 @@
+{
+  "id": "actions",
+  "name": "Actions Fixture",
+  "executable": "run.sh",
+  "commands": [
+    {
+      "id": "link", "title": "Actions Fixture Link",
+      "action": { "type": "open", "url": "https://example.com/actions" },
+      "actions": [
+        { "title": "Copy Name", "shortcut": "cmd", "icon": "textformat",
+          "action": { "type": "copy", "text": "actions-name" } },
+        { "title": "Run Confirmed", "shortcut": "shift",
+          "action": { "type": "run", "args": ["confirmed"],
+                      "confirm": { "title": "Run the fixture?", "message": "It copies a fixed text.",
+                                   "button": "Run", "destructive": true } } },
+        { "title": "Show Rows", "action": { "type": "list", "args": ["rows"] } },
+        { "title": "Unknown chord", "shortcut": "hyper", "action": { "type": "copy", "text": "dropped" } }
+      ]
+    },
+    {
+      "id": "ask", "title": "Actions Fixture Ask",
+      "action": { "type": "run", "args": ["confirmed"], "confirm": "Run the fixture?" }
+    }
+  ]
+}
