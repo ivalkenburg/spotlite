@@ -205,6 +205,19 @@ enum PluginGalleryDevChecks {
         button("Done", in: reopened)!.performClick(nil)
         try await closed(window)
         print("DEV gallery: kept index on reopen, Refresh and Retry passed")
+
+        // The Settings controller is reused after closing its window. Its index
+        // must be released, so the next gallery opening fetches again.
+        window.close()
+        try Data(#"{"version":99,"plugins":[]}"#.utf8).write(to: index)
+        settings.show(apps: library.entries)
+        install!.performActionForItem(at: install!.indexOfItem(withTitle: "Browse Gallery…"))
+        let newSession = try await sheet(on: window)
+        _ = try await page("Retry", in: newSession)
+        try check(texts(newSession).contains("format version 99"), "Settings retained its old gallery index")
+        button("Close", in: newSession)!.performClick(nil)
+        try await closed(window)
+        print("DEV gallery: closing Settings releases the cached index passed")
     }
 }
 #endif

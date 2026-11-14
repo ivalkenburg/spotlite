@@ -44,6 +44,7 @@ public struct InstalledPlugin: Sendable, Equatable {
 public enum PluginStore {
 
     public static let manifestName = "plugin.json"
+    public static let maxManifestBytes = 256 * 1024
 
     public static var directory: URL {
         Storage.supportDirectory.appendingPathComponent("Plugins", isDirectory: true)
@@ -83,8 +84,15 @@ public enum PluginStore {
         func broken(_ problem: String, _ manifest: PluginManifest? = nil) -> InstalledPlugin {
             InstalledPlugin(directory: directory, manifest: manifest, problem: problem)
         }
-        guard let data = try? Data(contentsOf: directory.appendingPathComponent(manifestName)) else {
+        guard let file = try? FileHandle(forReadingFrom: directory.appendingPathComponent(manifestName)) else {
             return broken("No \(manifestName) in this folder.")
+        }
+        defer { try? file.close() }
+        guard let data = try? file.read(upToCount: maxManifestBytes + 1) else {
+            return broken("Couldn’t read \(manifestName).")
+        }
+        guard data.count <= maxManifestBytes else {
+            return broken("\(manifestName) must fit within 256 KB.")
         }
         let manifest: PluginManifest
         do {
@@ -136,9 +144,12 @@ public enum PluginStore {
 
     /// Copies a plugin folder into the store, replacing its installed copy. The copy is
     /// checked before it is used, and the old one survives a failed replacement.
+    /// `finalize` persists associated state after the swap; if it fails, the swap is
+    /// undone. The backup stays on disk until finalization succeeds.
     @discardableResult
     public static func install(from source: URL, into directory: URL = directory,
-                               beforeReplace: ((URL) throws -> Void)? = nil) throws(InstallError) -> InstalledPlugin {
+                               beforeReplace: ((URL) throws -> Void)? = nil,
+                               finalize: ((InstalledPlugin) throws -> Void)? = nil) throws(InstallError) -> InstalledPlugin {
         // Copy the folder itself, even when the selected path is a symbolic link.
         // Copying a relative link would make it point somewhere else after installing.
         let source = source.standardizedFileURL.resolvingSymlinksInPath()
@@ -159,9 +170,15 @@ public enum PluginStore {
             throw .invalid("The folder \(destination.lastPathComponent) is already occupied. Rename that folder or choose a different plugin id.")
         }
         guard source != destination.standardizedFileURL.resolvingSymlinksInPath() else {
+            do { try finalize?(candidate) }
+            catch let error as InstallError { throw error }
+            catch { throw .failed(error.localizedDescription) }
             return candidate
         }
         let staging = directory.appendingPathComponent(".installing-" + UUID().uuidString, isDirectory: true)
+        let backup = directory.appendingPathComponent(".replaced-" + UUID().uuidString, isDirectory: true)
+        var replaced = false
+        var backedUp = false
         do {
             try files.createDirectory(at: directory, withIntermediateDirectories: true)
             try files.copyItem(at: source, to: staging)
@@ -171,18 +188,55 @@ public enum PluginStore {
             }
             try beforeReplace?(staging)
             if !isLink(destination), files.fileExists(atPath: destination.path) {
-                _ = try files.replaceItemAt(destination, withItemAt: staging)
+                _ = try files.replaceItemAt(destination, withItemAt: staging,
+                                            backupItemName: finalize == nil ? nil : backup.lastPathComponent,
+                                            options: finalize == nil ? [] : [.withoutDeletingBackupItem])
+                backedUp = finalize != nil
             } else {
                 // A link gives way to the copy, dangling or not; what it points at stays.
-                try? files.removeItem(atPath: destination.path)
+                if finalize != nil, isLink(destination) {
+                    try files.moveItem(at: destination, to: backup)
+                    backedUp = true
+                } else {
+                    try? files.removeItem(atPath: destination.path)
+                }
                 try files.moveItem(at: staging, to: destination)
             }
+            replaced = true
+            let installed = load(destination)
+            try finalize?(installed)
+            if backedUp { try? files.removeItem(at: backup) }
+            return installed
         } catch {
             try? files.removeItem(at: staging)
+            if replaced || backedUp {
+                do {
+                    if backedUp {
+                        // Rename restores the original directory or link without
+                        // copying its contents a second time.
+                        if isLink(backup) {
+                            // replaceItemAt can follow the replacement link. Move
+                            // the link itself so its target remains untouched.
+                            if files.fileExists(atPath: destination.path) || isLink(destination) {
+                                try files.removeItem(at: destination)
+                            }
+                            try files.moveItem(at: backup, to: destination)
+                        } else if files.fileExists(atPath: destination.path) || isLink(destination) {
+                            _ = try files.replaceItemAt(destination, withItemAt: backup)
+                        } else {
+                            try files.moveItem(at: backup, to: destination)
+                        }
+                    } else {
+                        try files.removeItem(at: destination)
+                    }
+                } catch {
+                    let recovery = backedUp ? "Its backup is at \(backup.path)." : "The new copy is at \(destination.path)."
+                    throw .failed("Couldn’t undo the installation: \(error.localizedDescription) \(recovery)")
+                }
+            }
             if let error = error as? InstallError { throw error }
             throw .failed(error.localizedDescription)
         }
-        return load(destination)
     }
 
     /// Moves the plugin to the Trash, so a removal can be undone from Finder. A linked

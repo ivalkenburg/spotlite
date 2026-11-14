@@ -63,6 +63,7 @@ final class PluginDebugRunnerWindowController: NSWindowController {
         queryField.setAccessibilityLabel("Query")
         queryField.target = self
         queryField.action = #selector(runClicked)
+        queryField.cell?.sendsActionOnEndEditing = false
         let grid = NSGridView(views: [
             [NSTextField(labelWithString: "Command:"), commandPicker],
             [NSTextField(labelWithString: "Query:"), queryField],

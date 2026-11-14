@@ -174,6 +174,20 @@ final class PluginInstallerTests {
                 == .git(URL(string: "https://git.example.com/me/plugin.git")!, ref: "v1.2"))
         #expect(PluginInstallSource.git(URL(string: "https://git.example.com/me/plugin.git")!, ref: "v1.2").address
                 == "https://git.example.com/me/plugin.git#v1.2")
+        let release = "https://github.com/o/r/releases/download/v1/plugin.zip"
+        #expect(try PluginInstallSource.parse(release) == .archive(URL(string: release)!))
+    }
+
+    @Test(arguments: ["release%23one/plugin", "main/plug%23in", "main/plug%3Fin", "main/plug%25in"])
+    func githubSourcesPreserveEscapedPaths(path: String) throws {
+        let source = try PluginInstallSource.parse("https://github.com/o/r/tree/" + path)
+        #expect(try PluginInstallSource.parse(source.address) == source)
+        let record = PluginSourceRecord(address: source.address, ref: source.ref, commit: nil,
+                                        version: "1", installedAt: Date())
+        let store = PluginSourceStore(directory: root.appendingPathComponent("sources"))
+        try store.save(record, for: "demo")
+        #expect(store.load(for: "demo")?.source == source)
+        #expect(store.load(for: "demo")?.source?.manifestURL == source.manifestURL)
     }
 
     @Test func rejectsUnsafeAddresses() {
@@ -201,6 +215,10 @@ final class PluginInstallerTests {
         #expect(V.compare(installed: "1.0.0", remote: "1.0.0-rc.1") == .older)
         #expect(V.compare(installed: "1.0.0-alpha.2", remote: "1.0.0-alpha.10") == .newer)
         #expect(V.compare(installed: "1.0.0-alpha", remote: "1.0.0-alpha.1") == .newer)
+        let large = String(repeating: "9", count: 40)
+        #expect(V.compare(installed: "1.0.0-beta", remote: "1.0.0-" + large) == .older)
+        #expect(V.compare(installed: "1.0.0-" + large, remote: "1.0.0-" + large + "0") == .newer)
+        #expect(V.compare(installed: "1.0.0-1", remote: "1.0.0--1") == .newer)
         #expect(V.compare(installed: "2024-05", remote: "2024-05") == .same)
         #expect(V.compare(installed: "nightly", remote: "nightly-2") == .different)
         #expect(V.compare(installed: nil, remote: "1.0.0") == .different)
@@ -233,6 +251,18 @@ final class PluginInstallerTests {
         #expect(FileManager.default.isExecutableFile(atPath: script.path))
         #expect(!FileManager.default.isExecutableFile(atPath: out.appendingPathComponent("repo-abc/plugin.json").path))
         #expect(try String(contentsOf: script, encoding: .utf8) == "#!/bin/sh\necho '{}'\n")
+    }
+
+    @Test func zipCommentMayContainAnEndRecordSignature() throws {
+        var zip = ZipBuilder()
+        zip.file("plugin.json", "{}")
+        let comment = "comment PK\u{5}\u{6}" + String(repeating: "x", count: 22)
+        let archive = root.appendingPathComponent("comment.zip")
+        try zip.build(comment: comment).write(to: archive)
+        let destination = root.appendingPathComponent("comment")
+        try PluginArchive.extract(archive, to: destination)
+        #expect(PluginArchive.comment(of: archive) == comment)
+        #expect(try String(contentsOf: destination.appendingPathComponent("plugin.json"), encoding: .utf8) == "{}")
     }
 
     @Test func rejectsPathTraversal() throws {
@@ -418,6 +448,42 @@ final class PluginInstallerTests {
             files: ["https://codeload.github.com/o/r/zip/feat/plugins": zip])
         let staged = try await installer(loader).prepare(from: "https://github.com/o/r/tree/feat/plugins/examples/demo")
         #expect(staged.source == .github(owner: "o", repository: "r", ref: "feat/plugins", subpath: "examples/demo"))
+        let installer = try installer(loader)
+        try installer.install(staged)
+        #expect(installer.sources.load(for: "demo")?.source == staged.source)
+    }
+
+    @Test func preparesAndInstallsFromGitWithoutKeepingRepositoryMetadata() async throws {
+        let fixture = root.appendingPathComponent("git-fixture")
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: true)
+        try Self.manifest().write(to: fixture.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
+        let executable = fixture.appendingPathComponent("run.sh")
+        try "#!/bin/sh\n".write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let git = root.appendingPathComponent("git")
+        let commit = String(repeating: "a", count: 40)
+        try """
+            #!/bin/sh
+            if [ "$1" = "-C" ]; then
+                printf '%s\\n' '\(commit)'
+            else
+                for destination do :; done
+                cp -R "$(dirname "$0")/git-fixture" "$destination"
+                mkdir "$destination/.git"
+            fi
+            """.write(to: git, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: git.path)
+        let installer = PluginInstaller(pluginsDirectory: plugins,
+                                        sources: PluginSourceStore(directory: root.appendingPathComponent("PluginSources")),
+                                        loader: FixtureLoader(), temporaryDirectory: temporary, git: git)
+        let address = "https://example.invalid/plugin.git#release"
+        let staged = try await installer.prepare(from: address)
+        #expect(staged.manifest.id == "demo" && staged.commit == commit)
+        #expect(!FileManager.default.fileExists(atPath: staged.plugin.directory.appendingPathComponent(".git").path))
+        let installed = try installer.install(staged)
+        #expect(installed.isUsable)
+        #expect(installer.sources.load(for: installed.id)?.address == address)
+        #expect(leftovers().isEmpty)
     }
 
     @Test func failuresLeaveNothingBehind() async throws {
@@ -482,6 +548,27 @@ final class PluginInstallerTests {
         #expect(installer.sources.load(for: "demo")?.version == "2.0.0")
         #expect(try String(contentsOf: data.appendingPathComponent("state"), encoding: .utf8) == "state")
         #expect(try settings.load(for: "demo", settings: fields) == ["org": .string("acme"), "token": .string("hunter2")])
+    }
+
+    @Test(arguments: [false, true])
+    func sourceWriteFailureLeavesTheInstalledCopyUntouched(updating: Bool) async throws {
+        let loader = FixtureLoader(files: ["https://example.com/v1.zip": try archive(version: "1.0.0"),
+                                          "https://example.com/v2.zip": try archive(version: "2.0.0")])
+        let original = try installer(loader)
+        if updating {
+            try original.install(try await original.prepare(from: "https://example.com/v1.zip"))
+        }
+        let previousRecord = original.sources.load(for: "demo")
+        let blocked = root.appendingPathComponent("not-a-directory")
+        try Data().write(to: blocked)
+        let failing = PluginInstaller(pluginsDirectory: plugins, sources: PluginSourceStore(directory: blocked),
+                                       loader: loader, temporaryDirectory: temporary, git: nil)
+        let staged = try await failing.prepare(from: "https://example.com/v2.zip")
+        #expect(throws: PluginInstallError.self) { try failing.install(staged) }
+        #expect(original.installed(id: "demo")?.manifest?.version == (updating ? "1.0.0" : nil))
+        #expect(original.sources.load(for: "demo") == previousRecord)
+        #expect(leftovers().isEmpty)
+        #expect((try? FileManager.default.contentsOfDirectory(atPath: plugins.path)) == (updating ? ["demo"] : []))
     }
 
     @Test func refusesToReplaceALinkedPlugin() async throws {

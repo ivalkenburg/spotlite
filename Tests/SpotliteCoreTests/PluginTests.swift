@@ -304,6 +304,17 @@ struct PluginStoreTests {
         #expect(throws: PluginStore.InstallError.self) { try PluginStore.install(from: source, into: fixture.plugins) }
     }
 
+    @Test func oversizedManifestsAreRejectedBeforeDecoding() throws {
+        let fixture = try PluginFixture()
+        let manifest = String(repeating: " ", count: PluginStore.maxManifestBytes) + PluginFixture.manifest()
+        let source = try fixture.plugin("large", manifest: manifest, script: "echo '{}'")
+        let plugin = PluginStore.load(source)
+        #expect(!plugin.isUsable && plugin.manifest == nil)
+        #expect(plugin.problem?.contains("256 KB") == true)
+        #expect(throws: PluginStore.InstallError.self) { try PluginStore.install(from: source, into: fixture.plugins) }
+        #expect(PluginInstallLimits().manifest == PluginStore.maxManifestBytes)
+    }
+
     @Test(arguments: [false, true])
     func installationNeverOverwritesAnUnrelatedPlugin(linked: Bool) throws {
         let fixture = try PluginFixture()
@@ -440,6 +451,28 @@ struct PluginStoreTests {
         }
         #expect(PluginStore.load(installed.directory).isUsable)
         #expect(try String(contentsOf: installed.executableURL!, encoding: .utf8).contains("original"))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.plugins.path) == ["demo"])
+    }
+
+    @Test(arguments: [false, true])
+    func failedFinalizationRestoresTheOriginalFolderOrLink(linked: Bool) throws {
+        let fixture = try PluginFixture()
+        let original = try fixture.plugin("demo", manifest: PluginFixture.manifest(), script: "echo original",
+                                          in: linked ? "Work" : "Plugins")
+        let destination = fixture.plugins.appendingPathComponent("demo")
+        if linked {
+            try FileManager.default.createDirectory(at: fixture.plugins, withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(at: destination, withDestinationURL: original)
+        }
+        let source = try fixture.plugin("new", manifest: PluginFixture.manifest(), script: "echo replacement", in: "Downloads")
+        #expect(throws: PluginStore.InstallError.self) {
+            try PluginStore.install(from: source, into: fixture.plugins, finalize: { _ in throw CocoaError(.fileWriteUnknown) })
+        }
+        #expect(try String(contentsOf: destination.appendingPathComponent("run.sh"), encoding: .utf8).contains("original"))
+        if linked {
+            #expect(try FileManager.default.destinationOfSymbolicLink(atPath: destination.path) == original.path)
+            #expect(try String(contentsOf: original.appendingPathComponent("run.sh"), encoding: .utf8).contains("original"))
+        }
         #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.plugins.path) == ["demo"])
     }
 
@@ -669,10 +702,13 @@ struct PluginStreamRunTests {
         let deliveries = Deliveries()
         let script = #"""
         echo $$ > stream.pid
-        i=0; while [ $i -lt 50 ]; do echo "{\"title\":\"row $i\"}"; i=$((i+1)); sleep 0.1; done
+        echo '{"title":"first"}'
+        sleep 30
+        echo '{"title":"late"}'
         """#
         let (run, directory) = try start(script, deliveries: deliveries, fixture: fixture)
-        try await Task.sleep(for: .milliseconds(350))
+        defer { run.cancel() }
+        for _ in 0..<300 where deliveries.all.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         let delivered = deliveries.all.count
         #expect(delivered > 0)
         run.cancel()
@@ -682,7 +718,7 @@ struct PluginStreamRunTests {
         #expect(kill(pid, 0) == -1)
         #expect(deliveries.finished == nil)
         #expect(deliveries.all.count <= delivered + 1)
-        #expect((deliveries.all.last?.count ?? 0) < 10)
+        #expect(deliveries.all.last?.map(\.title) == ["first"])
     }
 
     @Test func aFailureKeepsTheRowsInTheReport() async throws {

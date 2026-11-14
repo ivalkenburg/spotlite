@@ -99,6 +99,14 @@ enum PluginDiagnosticsDevChecks {
         let status = identified("status") as! NSTextField
         try check(picker.itemTitles == ["Diagnostics Env (run)", "Diagnostics Fail (run)", "Diagnostics Invalid (list)",
                                         "Diagnostics Slow (search)"], "Runner offers \(picker.itemTitles)")
+        sheet.makeFirstResponder(query)
+        if let editor = query.currentEditor() as? NSTextView {
+            editor.insertText("unsent query", replacementRange: editor.selectedRange())
+        }
+        sheet.makeFirstResponder(picker)
+        try await Task.sleep(for: .milliseconds(100))
+        try check(status.stringValue.isEmpty && runButton.title == "Run" && texts[0].string.isEmpty,
+                  "Leaving the query field started a command")
         query.stringValue = "typed"
         runButton.performClick(nil)
         try await Task.sleep(for: .milliseconds(500))

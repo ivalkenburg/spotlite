@@ -80,7 +80,7 @@ public struct PluginSetting: Decodable, Sendable, Equatable {
         type = try c.decode(Kind.self, forKey: .type)
         description = try c.decodeIfPresent(String.self, forKey: .description)
         required = try c.decodeIfPresent(Bool.self, forKey: .required) ?? false
-        defaultValue = try c.decodeIfPresent(PluginSettingValue.self, forKey: .defaultValue)
+        defaultValue = c.contains(.defaultValue) ? try c.decode(PluginSettingValue.self, forKey: .defaultValue) : nil
         min = try c.decodeIfPresent(Double.self, forKey: .min)
         max = try c.decodeIfPresent(Double.self, forKey: .max)
         options = try c.decodeIfPresent([Option].self, forKey: .options) ?? []
@@ -98,7 +98,7 @@ public struct PluginSetting: Decodable, Sendable, Equatable {
         }
         guard min?.isFinite != false, max?.isFinite != false,
               min == nil || max == nil || min! <= max!,
-              type == .number || (min == nil && max == nil) else {
+              type == .number || (!c.contains(.min) && !c.contains(.max)) else {
             throw invalid("Invalid number bounds for setting \(id).")
         }
         if type == .choice {
@@ -106,11 +106,12 @@ public struct PluginSetting: Decodable, Sendable, Equatable {
                   options.allSatisfy({ !$0.value.isEmpty && !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
                 throw invalid("Choice setting \(id) needs unique, nonempty options.")
             }
-        } else if !options.isEmpty {
+        } else if c.contains(.options) {
             throw invalid("Only choice settings can have options: \(id).")
         }
-        guard !multiline || type == .text, !mustExist || type == .file || type == .folder,
-              extensions.isEmpty || type == .file else {
+        guard !c.contains(.multiline) || type == .text,
+              !c.contains(.mustExist) || type == .file || type == .folder,
+              !c.contains(.extensions) || type == .file else {
             throw invalid("multiline, mustExist or extensions do not apply to setting \(id).")
         }
         guard extensions.allSatisfy({ !$0.isEmpty && !$0.contains("/") }) else {
@@ -233,10 +234,13 @@ public struct PluginConfigurationStore: Sendable {
 
     public enum Failure: Error, LocalizedError {
         case invalidID, tooLarge
+        case rollbackFailed(save: String, restore: String)
         public var errorDescription: String? {
             switch self {
             case .invalidID: "The plugin id is invalid."
             case .tooLarge: "Plugin settings must fit within 64 KB. Shorten the text values."
+            case .rollbackFailed(let save, let restore):
+                "Couldn’t save plugin settings: \(save) Some previous secrets couldn’t be restored: \(restore) Reload the settings before trying again."
             }
         }
     }
@@ -288,16 +292,40 @@ public struct PluginConfigurationStore: Sendable {
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(stored)
         guard data.count <= Self.maxBytes else { throw Failure.tooLarge }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // Read every value needed for recovery before changing any secret. A form's
+        // snapshot avoids another Keychain read, including for unchanged secrets.
+        var changes: [(field: String, value: String?, previous: String?)] = []
         for field in secretFields {
             if let previous, Self.secret(values[field]) == Self.secret(previous[field]) { continue }
-            if case .string(let secret)? = values[field], !secret.isEmpty {
-                try secrets.write(secret, plugin: id, field: field)
-            } else {
-                try secrets.delete(plugin: id, field: field)
-            }
+            let old: String?
+            if let previous { old = Self.secret(previous[field]) }
+            else { old = try secrets.read(plugin: id, field: field) }
+            changes.append((field, Self.secret(values[field]), old))
         }
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try data.write(to: url, options: .atomic)
+        var applied = 0
+        do {
+            for change in changes {
+                try saveSecret(change.value, plugin: id, field: change.field)
+                applied += 1
+            }
+            try data.write(to: url, options: .atomic)
+        } catch {
+            var restoreError: (any Error)?
+            for change in changes.prefix(applied).reversed() {
+                do { try saveSecret(change.previous, plugin: id, field: change.field) }
+                catch { restoreError = restoreError ?? error }
+            }
+            if let restoreError {
+                throw Failure.rollbackFailed(save: error.localizedDescription, restore: restoreError.localizedDescription)
+            }
+            throw error
+        }
+    }
+
+    private func saveSecret(_ value: String?, plugin: String, field: String) throws {
+        if let value { try secrets.write(value, plugin: plugin, field: field) }
+        else { try secrets.delete(plugin: plugin, field: field) }
     }
 
     /// A secret's stored form: an empty one is none.

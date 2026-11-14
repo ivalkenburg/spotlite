@@ -3,7 +3,8 @@ import SpotliteCore
 
 /// One sheet for installing from an address and for update checks: enter an address
 /// or check sources, follow the download, then confirm what was found. Network and
-/// disk work happen only between the user's clicks, and stop with Cancel or the sheet.
+/// disk work happen only between the user's clicks. Closing cancels preparation;
+/// a confirmed installation finishes its atomic replacement and refreshes the host.
 @MainActor
 final class PluginInstallWindowController: NSWindowController {
     enum Start {
@@ -15,6 +16,7 @@ final class PluginInstallWindowController: NSWindowController {
 
     private let installer: PluginInstaller
     private var task: Task<Void, Never>?
+    private var installing = false
     private var staged: StagedPlugin?
     private var checks: [PluginUpdateCheck] = []
     private var checkedPlugins: [InstalledPlugin] = []
@@ -66,7 +68,7 @@ final class PluginInstallWindowController: NSWindowController {
         show(views, focus: addressField)
     }
 
-    private func showWorking(_ text: String) {
+    private func showWorking(_ text: String, allowsCancel: Bool = true) {
         progress.isIndeterminate = true
         progress.style = .bar
         progress.minValue = 0
@@ -74,8 +76,9 @@ final class PluginInstallWindowController: NSWindowController {
         progress.startAnimation(nil)
         let status = hint(text)
         status.identifier = NSUserInterfaceItemIdentifier("installStatus")
-        show([title(window?.title ?? "Install"), progress, status,
-              buttons([("Cancel", #selector(cancelClicked), "\u{1b}")])], focus: nil)
+        var views: [NSView] = [title(window?.title ?? "Install"), progress, status]
+        if allowsCancel { views.append(buttons([("Cancel", #selector(cancelClicked), "\u{1b}")])) }
+        show(views, focus: nil)
     }
 
     private func showConfirmation(_ staged: StagedPlugin) {
@@ -211,15 +214,18 @@ final class PluginInstallWindowController: NSWindowController {
     @objc private func installClicked() {
         guard task == nil, let staged else { return }
         self.staged = nil
-        showWorking("Installing…")
+        installing = true
+        showWorking("Installing…", allowsCancel: false)
         let installer = installer
-        task = Task { [weak self] in
+        // Once confirmed, finish the atomic replacement and refresh the host even
+        // if Settings closes while the background copy is in progress.
+        task = Task { [self] in
             // A copy of up to the size limit: off the main thread.
             let result = await Task.detached { () -> Result<InstalledPlugin, PluginInstallError> in
                 do throws(PluginInstallError) { return .success(try installer.install(staged)) } catch { return .failure(error) }
             }.value
-            guard let self else { return }
             self.task = nil
+            self.installing = false
             switch result {
             case .success(let plugin):
                 self.onInstalled?(plugin)
@@ -261,6 +267,7 @@ final class PluginInstallWindowController: NSWindowController {
     }
 
     @objc private func cancelClicked() {
+        guard !installing else { return }
         task?.cancel()
         task = nil
         staged?.discard()

@@ -68,7 +68,7 @@ public struct PluginStreamDecoder {
         if bytes.last == 0x0D { bytes.removeLast() }
         guard !bytes.allSatisfy({ $0 == 0x20 || $0 == 0x09 || $0 == 0x0D }) else { return }
         // Past the cap rows are still told apart from response lines, but not built.
-        decoder.userInfo[StreamLine.skipsRows] = isFull
+        decoder.userInfo[StreamLine.remainingRows] = PluginItem.maxItems - items.count
         do {
             switch try decoder.decode(StreamLine.self, from: bytes) {
             case .item(let item): if let item, !isFull { items.append(item) }
@@ -114,17 +114,18 @@ private enum StreamLine: Decodable {
     case item(PluginItem?)
     case response(PluginResponse)
 
-    static let skipsRows = CodingUserInfoKey(rawValue: "skipsRows")!
+    static let remainingRows = CodingUserInfoKey(rawValue: "remainingRows")!
 
     private enum CodingKeys: String, CodingKey { case title }
 
     init(from decoder: Decoder) throws {
         // Throws for anything but an object, as a line must be one.
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let remaining = decoder.userInfo[Self.remainingRows] as? Int ?? PluginItem.maxItems
         if c.contains(.title) {
-            self = .item(decoder.userInfo[Self.skipsRows] as? Bool == true ? nil : try PluginItem(from: decoder))
+            self = .item(remaining == 0 ? nil : try PluginItem(from: decoder))
         } else {
-            self = .response(try PluginResponse(from: decoder))
+            self = .response(try PluginResponse(from: decoder, itemLimit: remaining))
         }
     }
 }

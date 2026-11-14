@@ -240,5 +240,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
 
     func windowWillClose(_ notification: Notification) {
         general.cancelRecording()
+        plugins.settingsClosed()
     }
 }

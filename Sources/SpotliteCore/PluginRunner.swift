@@ -151,8 +151,9 @@ public final class PluginRun: @unchecked Sendable {
         outputChannel = read(outputPipe) { [self] chunk, ended in
             // A stopped run reports no output, so what still arrives is not kept.
             if stopReason == nil {
-                output.append(chunk)
-                if output.count > PluginRun.maxOutput { stop(.outputTooLarge) }
+                let remaining = PluginRun.maxOutput - output.count
+                output.append(chunk.prefix(remaining))
+                if chunk.count > remaining { stop(.outputTooLarge) }
                 else if stream?.feed(chunk) == true, let items = stream?.items { rows?.post(items) }
             }
             if ended {

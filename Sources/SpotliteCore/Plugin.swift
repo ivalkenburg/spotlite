@@ -171,13 +171,16 @@ public struct PluginItem: Sendable, Equatable, Decodable {
     }
 
     /// Per element, so one malformed row does not empty the list.
-    static func decodeList<K: CodingKey>(from container: KeyedDecodingContainer<K>, forKey key: K) -> [PluginItem] {
+    static func decodeList<K: CodingKey>(from container: KeyedDecodingContainer<K>, forKey key: K,
+                                       limit: Int = maxItems) -> [PluginItem] {
+        let limit = min(max(0, limit), maxItems)
+        guard limit > 0 else { return [] }
         guard var list = try? container.nestedUnkeyedContainer(forKey: key) else { return [] }
         var items: [PluginItem] = []
-        items.reserveCapacity(min(list.count ?? maxItems, maxItems))
+        items.reserveCapacity(min(list.count ?? limit, limit))
         // Stop constructing rows once the visible limit is reached. A large response
         // need not allocate and decode thousands of actions that will be discarded.
-        while !list.isAtEnd, items.count < maxItems {
+        while !list.isAtEnd, items.count < limit {
             guard let decoded = try? list.decode(Lossy<PluginItem>.self) else { break }
             if let item = decoded.value { items.append(item) }
         }
@@ -324,8 +327,12 @@ public struct PluginResponse: Sendable, Equatable, Decodable {
     public init() { update = [] }
 
     public init(from decoder: Decoder) throws {
+        try self.init(from: decoder, itemLimit: PluginItem.maxItems)
+    }
+
+    init(from decoder: Decoder, itemLimit: Int) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        items = c.contains(.items) ? PluginItem.decodeList(from: c, forKey: .items) : nil
+        items = c.contains(.items) ? PluginItem.decodeList(from: c, forKey: .items, limit: itemLimit) : nil
         toast = try? c.decodeIfPresent(PluginToast.self, forKey: .toast)
         copy = try? c.decodeIfPresent(String.self, forKey: .copy)
         open = try? c.decodeIfPresent(String.self, forKey: .open)
@@ -440,10 +447,10 @@ public struct PluginList: Sendable {
         guard filterLocally else { corpus = nil; keywordCorpus = nil; return }
         // The position stands in for an id: a plugin's own ids need not be unique.
         let titles = items[start...].enumerated().map { offset, item in
-            AppEntry(url: PluginList.entryURL, name: item.title, bundleID: String(start + offset), kind: .command)
+            AppEntry(url: PluginList.entryURL, name: item.title, bundleID: String(start + offset), kind: .plugin)
         }
         let keywords = items[start...].enumerated().flatMap { offset, item in
-            item.keywords.map { AppEntry(url: PluginList.entryURL, name: $0, bundleID: String(start + offset), kind: .command) }
+            item.keywords.map { AppEntry(url: PluginList.entryURL, name: $0, bundleID: String(start + offset), kind: .plugin) }
         }
         let earlierTitles = Array((previous?.corpus?.entries ?? []).prefix(start))
         // Keywords are in row order, so the earlier rows' are those naming a row before `start`.

@@ -68,6 +68,16 @@ struct PluginStreamTests {
         #expect(decoder.errors.count == PluginStreamDecoder.maxErrors)
     }
 
+    @Test func nullConfirmationDropsOnlyItsStreamedRow() {
+        let decoder = decode([
+            #"{"title":"Unsafe","action":{"type":"run","confirm":null}}"# + "\n",
+            #"{"title":"Safe","action":{"type":"run","confirm":"Run?"}}"# + "\n",
+        ])
+        #expect(decoder.items.map(\.title) == ["Safe"])
+        #expect(decoder.items.first?.confirm?.title == "Run?")
+        #expect(decoder.skipped == 1)
+    }
+
     @Test func responseLinesApplyAtTheEnd() {
         let decoder = decode([
             #"{"toast":"first","update":[{"command":"a","subtitle":"one"}]}"# + "\n",
@@ -87,20 +97,25 @@ struct PluginStreamTests {
     @Test func rowsStopAtTheCapWhileResponseLinesStillApply() {
         var lines = (0..<600).map { #"{"title":"row \#($0)"}"# + "\n" }
         lines.insert(#"{"items":[{"title":"late"}]}"# + "\n", at: 550)
-        lines.append(#"{"toast":"after the cap"}"#)
+        lines.append(#"{"items":[{"title":"ignored","action":{"type":"run","confirm":null}}],"toast":"after the cap","copy":"copied","open":"https://example.com","update":[{"command":"refresh"}]}"#)
         let decoder = decode([lines.joined()])
         #expect(decoder.items.count == PluginItem.maxItems)
         #expect(decoder.items.last?.title == "row 499")
         #expect(decoder.response.toast?.text == "after the cap")
+        #expect(decoder.response.copy == "copied")
+        #expect(decoder.response.open == "https://example.com")
+        #expect(decoder.response.update.map(\.command) == ["refresh"])
         #expect(decoder.skipped == 0)
     }
 
     @Test func aBatchStopsAtTheCap() {
         var lines = (0..<499).map { #"{"title":"row \#($0)"}"# + "\n" }
-        lines.append(#"{"items":[{"title":"fits"},{"title":"cut"}]}"#)
+        lines.append(#"{"items":[{"title":"fits","action":{"type":"menu","items":[{"title":"one"},{"title":"two"}]}},{"title":"cut"}]}"#)
         let decoder = decode([lines.joined()])
         #expect(decoder.items.count == PluginItem.maxItems)
         #expect(decoder.items.last?.title == "fits")
+        guard case .menu(let nested, _) = decoder.items.last?.action else { Issue.record("missing menu"); return }
+        #expect(nested.map(\.title) == ["one", "two"], "the row budget must not truncate a kept row’s nested menu")
     }
 
     @Test func actionsDecodeTheStreamFlag() throws {

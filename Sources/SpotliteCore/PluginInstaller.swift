@@ -198,14 +198,18 @@ public struct PluginInstaller: Sendable {
         }
         let plugin: InstalledPlugin
         do {
-            plugin = try PluginStore.install(from: staged.plugin.directory, into: pluginsDirectory, beforeReplace: beforeReplace)
+            plugin = try PluginStore.install(from: staged.plugin.directory, into: pluginsDirectory,
+                                               beforeReplace: beforeReplace) { installed in
+                let record = PluginSourceRecord(address: staged.source.address, ref: staged.source.ref, commit: staged.commit,
+                                                version: installed.manifest?.version, installedAt: now)
+                do { try sources.save(record, for: installed.id) }
+                catch {
+                    throw PluginStore.InstallError.failed("Couldn’t record the plugin’s source: \(error.localizedDescription)")
+                }
+            }
         } catch {
             throw .install(error.message)
         }
-        let record = PluginSourceRecord(address: staged.source.address, ref: staged.source.ref, commit: staged.commit,
-                                        version: plugin.manifest?.version, installedAt: now)
-        do { try sources.save(record, for: plugin.id) }
-        catch { throw .install("The plugin is installed, but its source couldn’t be recorded, so updates can’t be checked: \(error.localizedDescription)") }
         return plugin
     }
 
@@ -274,51 +278,13 @@ public struct PluginInstaller: Sendable {
                          "clone", "--quiet", "--depth", "1", "--single-branch", "--no-tags"]
         if let ref { arguments += ["--branch", ref] }
         arguments += ["--", url.absoluteString, tree.path]
-        let status = try await run(git, arguments, timeout: 180)
+        let status = try await PluginGitRun.run(git, arguments: arguments, timeout: 180)
         guard status.code == 0 else {
             throw .download("git couldn’t clone the repository" + (status.error.isEmpty ? "." : ": " + status.error))
         }
-        let commit = try? await run(git, ["-C", tree.path, "rev-parse", "HEAD"], timeout: 10).output
+        let commit = try? await PluginGitRun.run(git, arguments: ["-C", tree.path, "rev-parse", "HEAD"], timeout: 10).output
         try? FileManager.default.removeItem(at: tree.appendingPathComponent(".git"))
         return commit.flatMap { $0.count == 40 ? $0 : nil }
-    }
-
-    private func run(_ executable: URL, _ arguments: [String], timeout: TimeInterval)
-        async throws(PluginInstallError) -> (code: Int32, output: String, error: String) {
-        let process = Process()
-        process.executableURL = executable
-        process.arguments = arguments
-        var environment = ["PATH": "/usr/bin:/bin", "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "/usr/bin/false",
-                           "SSH_ASKPASS": "/usr/bin/false", "GCM_INTERACTIVE": "never", "LC_ALL": "C"]
-        environment["HOME"] = ProcessInfo.processInfo.environment["HOME"]
-        process.environment = environment
-        let output = Pipe(), errors = Pipe()
-        process.standardOutput = output
-        process.standardError = errors
-        process.standardInput = FileHandle.nullDevice
-        let finished: (Int32, Data, Data)? = await withTaskCancellationHandler {
-            await withCheckedContinuation { (continuation: CheckedContinuation<(Int32, Data, Data)?, Never>) in
-                process.terminationHandler = { process in
-                    let out = (try? output.fileHandleForReading.readToEnd()) ?? Data()
-                    let err = (try? errors.fileHandleForReading.readToEnd()) ?? Data()
-                    continuation.resume(returning: (process.terminationStatus, out, err))
-                }
-                do { try process.run() } catch {
-                    process.terminationHandler = nil
-                    continuation.resume(returning: nil)
-                    return
-                }
-                let deadline = DispatchWorkItem { [process] in if process.isRunning { process.terminate() } }
-                DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: deadline)
-            }
-        } onCancel: { [process] in
-            if process.isRunning { process.terminate() }
-        }
-        try Task.checkCancellation(or: .cancelled)
-        guard let (code, out, err) = finished else { throw .download("Couldn’t start git.") }
-        let text = { (data: Data) in String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) }
-        let lastError = text(err).split(separator: "\n").last.map(String.init) ?? ""
-        return (code, text(out), String(lastError.prefix(300)))
     }
 }
 

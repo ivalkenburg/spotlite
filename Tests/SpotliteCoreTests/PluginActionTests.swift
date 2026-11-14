@@ -100,7 +100,7 @@ struct PluginActionTests {
                                            isDestructive: true))
         #expect(try decode(PluginConfirmation.self, #"{"title":"Sure?","button":" ","message":""}"#)
                 == PluginConfirmation(title: "Sure?"))
-        for bad in [#""""#, #"" ""#, #"{"message":"m"}"#, "5", #"{"title":"t","destructive":"yes"}"#] {
+        for bad in [#""""#, #"" ""#, #"{"message":"m"}"#, "5", "null", #"{"title":"t","destructive":"yes"}"#] {
             #expect(throws: DecodingError.self, "\(bad)") { try decode(PluginConfirmation.self, bad) }
         }
     }
@@ -123,6 +123,20 @@ struct PluginActionTests {
         #expect(item.actions[0].confirm?.title == "Delete?")
         // An informational row has nothing to confirm.
         #expect(PluginItem(title: "Info", confirm: PluginConfirmation(title: "?")).confirm == nil)
+    }
+
+    @Test func nullConfirmationIsRefusedWhereverAnActionIsDecoded() throws {
+        #expect(throws: DecodingError.self) {
+            try decode(PluginManifest.self, #"{"id":"g","name":"G","commands":[{"id":"c","title":"C","action":{"type":"run","confirm":null}}]}"#)
+        }
+        let response = try PluginResponse.decode(Data(#"""
+        {"items":[{"title":"Unsafe","action":{"type":"run","confirm":null}},
+                  {"title":"Plain","action":{"type":"run"},"actions":[
+                    {"title":"Unsafe","action":{"type":"run","confirm":null}},
+                    {"title":"Safe","action":{"type":"copy","text":"x"}}]}]}
+        """#.utf8))
+        #expect(response.items?.map(\.title) == ["Plain"])
+        #expect(response.items?.first?.actions.map(\.title) == ["Safe"])
     }
 
     @Test func modifiersPickTheirAction() {

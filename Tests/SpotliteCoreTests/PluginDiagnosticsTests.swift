@@ -55,6 +55,12 @@ struct PluginDiagnosticsTests {
         #expect(report.duration > 0)
     }
 
+    @Test func runawayOutputNeverRetainsMoreThanTheLimit() async throws {
+        let report = try await report("head -c 6000000 /dev/zero")
+        #expect(report.result == .failure(.outputTooLarge))
+        #expect(report.output.count == PluginRun.maxOutput)
+    }
+
     @Test func explainsInvalidJSON() async throws {
         let report = try await report(#"echo 'hello {'"#)
         guard case .failure(.invalidOutput(let detail)) = report.result else {

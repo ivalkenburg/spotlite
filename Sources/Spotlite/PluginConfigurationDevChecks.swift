@@ -62,6 +62,13 @@ enum PluginConfigurationDevChecks {
         toggle.state = .off
         toggle.sendAction(toggle.action, to: toggle.target)
         try check(save.isEnabled, "Valid configuration did not enable Save")
+        sheet.makeFirstResponder(name)
+        if let editor = name.currentEditor() as? NSTextView {
+            editor.selectAll(nil)
+            editor.insertText("Alpha", replacementRange: editor.selectedRange())
+        }
+        sheet.makeFirstResponder(limit)
+        try check(host.needsSetup(plugin.id) && sheet.sheetParent != nil, "Moving between fields saved the draft")
         cancel.performClick(nil)
         try await Task.sleep(for: .milliseconds(250))
         try check(host.needsSetup(plugin.id), "Cancel persisted draft settings")

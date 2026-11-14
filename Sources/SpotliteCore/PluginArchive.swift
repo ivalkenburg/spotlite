@@ -9,7 +9,7 @@ public struct PluginInstallLimits: Sendable, Equatable {
     public var extracted: Int64 = 200 * 1024 * 1024
     public var entries = 10_000
     /// Bytes read for a manifest during an update check.
-    public var manifest: Int64 = 256 * 1024
+    public var manifest: Int64 = Int64(PluginStore.maxManifestBytes)
 
     public init() {}
 }
@@ -160,7 +160,8 @@ public enum PluginArchive {
         let lowest = max(0, data.count - 22 - 0xFFFF)
         var offset = data.count - 22
         while offset >= lowest {
-            if data.uint32(at: offset) == 0x0605_4B50 { return offset }
+            if data.uint32(at: offset) == 0x0605_4B50,
+               offset + 22 + Int(data.uint16(at: offset + 20)) == data.count { return offset }
             offset -= 1
         }
         return nil

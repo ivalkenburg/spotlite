@@ -26,12 +26,29 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
     private var installController: PluginInstallWindowController?
     private var galleryController: PluginGalleryWindowController?
     /// The last index read while Settings is open, so reopening the gallery doesn't
-    /// fetch again. Freed with Settings.
+    /// fetch again. Cleared when Settings closes.
     private var galleryIndex: PluginGalleryIndex?
     private var configurationController: PluginConfigurationWindowController?
     private var runnerController: PluginDebugRunnerWindowController?
 
     private static let height: CGFloat = 560
+
+    func settingsClosed() {
+        galleryIndex = nil
+        galleryController?.onFetched = nil
+        // Settings keeps its pane controllers for reuse. End their sheets explicitly
+        // so downloads and the debug runner do not survive closing the window.
+        let controllers: [NSWindowController?] = [installController, configurationController, runnerController, galleryController]
+        for controller in controllers {
+            guard let window = controller?.window else { continue }
+            window.sheetParent?.endSheet(window, returnCode: .cancel)
+            window.orderOut(nil)
+        }
+        installController = nil
+        configurationController = nil
+        runnerController = nil
+        galleryController = nil
+    }
 
     override func loadView() {
         table.headerView = nil

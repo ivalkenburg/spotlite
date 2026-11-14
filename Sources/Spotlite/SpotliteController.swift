@@ -1260,7 +1260,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             return
         }
         let work = DispatchWorkItem { [weak self] in
-            self?.fetchPluginItems(scope, arguments: args + [query], query: query)
+            guard let self else { return }
+            self.pluginDebounce = nil
+            self.fetchPluginItems(scope, arguments: args + [query], query: query)
         }
         pluginDebounce = work
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(debounce), execute: work)
@@ -2768,6 +2770,26 @@ extension SpotliteController {
         leaveScope()
         try check(pluginScope == nil && cursor == row, "Back from the level did not return to the command")
         print("DEV actions: command confirmation, a secondary's level, row actions and ⌃↩ passed")
+
+        // A completed debounced search has no pending work. Returning from its
+        // actions restores the saved rows without starting another process.
+        enterScope(.plugin(PluginScope(pluginID: fixture.id, title: "Search", icon: nil,
+                                       source: .search(args: ["rows"], debounce: 20, minimumQuery: 1), commandID: "link")))
+        setQuery("alpha")
+        controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        let searched = await eventually { pluginRun == nil && pluginLoaded && pluginList.items.count == 2 }
+        try check(searched, "The debounced search did not complete")
+        let searchGeneration = pluginGeneration
+        try await press(commandK.0, commandK.1, .command)
+        try check(pluginOverlay != nil, "The search row's action list did not open")
+        try await press(escape.0, escape.1)
+        // Entering the overlay cancels pending work once, incrementing the generation.
+        try check(pluginRun == nil && pluginDebounce == nil && pluginGeneration == searchGeneration + 1,
+                  "Returning from actions restarted a completed search")
+        try check(field.stringValue == "alpha" && items.map(\.title) == ["alpha", "beta"],
+                  "The completed search lost its rows or query")
+        leaveScope()
+        print("DEV actions: completed debounced searches restore without rerunning passed")
 
         // A closing run answers after a new session started: its copy applies, its rows do not.
         _ = try open("Actions Fixture Link")

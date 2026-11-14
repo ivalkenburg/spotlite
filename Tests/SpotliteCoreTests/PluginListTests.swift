@@ -76,6 +76,25 @@ struct PluginListTests {
         #expect(titles(list, " ") == ["Production", "Kubernetes Dashboard", "Staging", "Other"])
     }
 
+    @Test func oversizedPluginTextKeepsItsDataWithoutPreparingMatchingArrays() {
+        let oversized = String(repeating: "a", count: 4_000_000)
+        let grapheme = "a" + String(repeating: "\u{301}", count: 20_000)
+        for name in [oversized, grapheme] {
+            let entry = AppEntry(url: URL(string: "spotlite-plugin:test/main")!, name: name,
+                                 bundleID: "test/main", kind: .plugin)
+            #expect(entry.name == name)
+            #expect(entry.lowerChars.isEmpty && entry.bonus.isEmpty && entry.initials.isEmpty)
+        }
+        let rows = [PluginItem(title: oversized, keywords: ["normal"], action: .copy(oversized)),
+                    PluginItem(title: "Small", keywords: [oversized])]
+        let list = PluginList(items: rows)
+        #expect(list.items == rows)
+        #expect(list.matchingIndices("normal", matcher: Matcher()) == [0])
+        #expect(list.matchingIndices("sm", matcher: Matcher()) == [1])
+        #expect(list.matchingIndices("aaa", matcher: Matcher()).isEmpty)
+        #expect(list.matchingIndices("", matcher: Matcher()) == [0, 1])
+    }
+
     @Test func unsortedListsNarrowButKeepThePluginsOrder() {
         let items = [
             PluginItem(title: "Bar Code"),
@@ -89,8 +108,6 @@ struct PluginListTests {
         #expect(titles(PluginList(items: items, sorts: false), "") == items.map(\.title))
     }
 
-    /// Keystroke cost for a full list, sorted with keywords and not, against the plain
-    /// title-only list it extends. Printed, not asserted: timing varies by machine.
     @Test func appendingMatchesAFreshList() {
         let items = (0..<40).map { i in
             PluginItem(id: i % 7 == 0 ? "same" : "row \(i)", title: "row \(i) \(i % 3 == 0 ? "alpha" : "beta")",
@@ -111,6 +128,8 @@ struct PluginListTests {
         #expect(search.matchingIndices("alpha", matcher: matcher) == Array(items.indices))
     }
 
+    /// Keystroke cost for a full list, sorted with keywords and not, against the plain
+    /// title-only list it extends. Printed, not asserted: timing varies by machine.
     @Test func keystrokeCostForAFullList() {
         let words = ["alpha", "beta", "gamma", "delta", "kube", "prod", "stage", "swift", "react", "infra"]
         let items = (0..<PluginItem.maxItems).map { i in

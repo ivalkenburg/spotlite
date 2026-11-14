@@ -48,6 +48,8 @@ A plugin runs with your user's permissions. Install only ones you trust.
 | `settings` | Optional configuration fields, shared by all of the plugin's commands. See below. |
 | `$schema` | Optional, ignored by Spotlite. See below. |
 
+`plugin.json` must fit within 256 KB, including when installed from a folder.
+
 A command is a root search result. It ranks, hides, takes an alias and learns launch
 history like an app. `keyword` finds it by a name its title lacks, until the user sets an
 alias of their own in Settings → Items.
@@ -292,7 +294,8 @@ printing nothing is fine.
   the subtitle comes before it. It truncates before the title does. `keywords`, up to 8
   strings, also find the row when typing filters it; a title match ranks above a
   keyword-only one. The same keys work on `menu` items. A row whose keys have the wrong
-  type is skipped.
+  type is skipped. Titles and keywords longer than 4,096 characters or 16 KB remain
+  available as row data but are excluded from local matching to bound its memory use.
 - `actions` work on rows as on commands, and so does `confirm` in a row's `action`; see
   [Other actions](#other-actions) and [Confirmation](#confirmation).
 - `toast`: a string, or an object. `"style":"failure"` shows even when confirmation

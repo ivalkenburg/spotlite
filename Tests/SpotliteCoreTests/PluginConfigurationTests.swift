@@ -70,9 +70,15 @@ struct PluginConfigurationTests {
         #"[{"id":"../bad","label":"Bad","type":"text"}]"#,
         #"[{"id":"x","label":" ","type":"text"}]"#,
         #"[{"id":"x","label":"X","type":"secret","default":"hunter2"}]"#,
+        #"[{"id":"x","label":"X","type":"secret","default":null}]"#,
+        #"[{"id":"x","label":"X","type":"number","default":null}]"#,
         #"[{"id":"x","label":"X","type":"number","multiline":true}]"#,
+        #"[{"id":"x","label":"X","type":"number","multiline":false}]"#,
         #"[{"id":"x","label":"X","type":"text","mustExist":true}]"#,
+        #"[{"id":"x","label":"X","type":"text","mustExist":false}]"#,
         #"[{"id":"x","label":"X","type":"folder","extensions":["json"]}]"#,
+        #"[{"id":"x","label":"X","type":"folder","extensions":[]}]"#,
+        #"[{"id":"x","label":"X","type":"text","options":[]}]"#,
         #"[{"id":"x","label":"X","type":"file","extensions":[""]}]"#,
         #"[{"id":"x","label":"X","type":"file","default":3}]"#,
         #"[{"id":"x","label":"X","type":"list","default":"a"}]"#,
@@ -253,6 +259,54 @@ struct PluginConfigurationTests {
         let keychain = KeychainSecretStore(prefix: "com.igorv.spotlite.tests.")
         #expect(throws: PluginConfigurationStore.Failure.self) { try keychain.read(plugin: "../x", field: "token") }
         #expect(throws: PluginConfigurationStore.Failure.self) { try keychain.write("x", plugin: "test", field: "a b") }
+    }
+
+    @Test(arguments: [false, true])
+    func failedSecretSaveRestoresEarlierChanges(useSnapshot: Bool) throws {
+        struct RefusingStore: PluginSecretStore {
+            let inner: MemorySecretStore
+            func read(plugin: String, field: String) throws -> String? { try inner.read(plugin: plugin, field: field) }
+            func write(_ value: String, plugin: String, field: String) throws {
+                if value == "refused" { throw PluginSecretStoreError(status: -25308) }
+                try inner.write(value, plugin: plugin, field: field)
+            }
+            func delete(plugin: String, field: String) throws { try inner.delete(plugin: plugin, field: field) }
+            func deleteAll(plugin: String) throws { try inner.deleteAll(plugin: plugin) }
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let secrets = MemorySecretStore()
+        let store = PluginConfigurationStore(directory: directory, secrets: RefusingStore(inner: secrets))
+        let fields = try settings(secretSchema)
+        let original: [String: PluginSettingValue] = ["token": .string("original"), "organization": .string("old")]
+        try store.save(original, for: "test", settings: fields)
+        #expect(throws: PluginSecretStoreError.self) {
+            try store.save(["token": .string("changed"), "extra": .string("refused"), "organization": .string("new")],
+                           for: "test", settings: fields, previous: useSnapshot ? original : nil)
+        }
+        #expect(try store.load(for: "test", settings: fields) == original)
+    }
+
+    @Test func failedFileSaveRestoresChangedAddedAndDeletedSecrets() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let secrets = MemorySecretStore()
+        let store = PluginConfigurationStore(directory: directory, secrets: secrets)
+        let fields = try settings(secretSchema)
+        try store.save(["token": .string("original"), "extra": .string("keep")], for: "test", settings: fields)
+        let file = directory.appendingPathComponent("test.json")
+        try FileManager.default.removeItem(at: file)
+        // A directory at the settings file's path makes the final atomic write fail.
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: true)
+        #expect(throws: (any Error).self) {
+            try store.save(["token": .string("changed")], for: "test", settings: fields)
+        }
+        #expect(secrets.snapshot["test"] == ["token": "original", "extra": "keep"])
+        try secrets.delete(plugin: "test", field: "extra")
+        #expect(throws: (any Error).self) {
+            try store.save(["token": .string("changed"), "extra": .string("added")], for: "test", settings: fields)
+        }
+        #expect(secrets.snapshot["test"] == ["token": "original"])
     }
 
     // MARK: - Paths, multi-line text and lists

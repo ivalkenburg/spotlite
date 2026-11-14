@@ -91,6 +91,14 @@ public struct PluginConfirmation: Sendable, Equatable, Decodable {
 /// The `confirm` key read from the same object as an action's `type`.
 struct PluginConfirmKey: Decodable {
     let confirm: PluginConfirmation?
+
+    private enum CodingKeys: String, CodingKey { case confirm }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        confirm = try container.contains(.confirm)
+            ? container.decode(PluginConfirmation.self, forKey: .confirm) : nil
+    }
 }
 
 /// One of a row's or command's actions other than Return's: reached with its

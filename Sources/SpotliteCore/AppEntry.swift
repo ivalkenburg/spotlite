@@ -90,7 +90,16 @@ public struct AppEntry: Sendable, Hashable {
         }
         id = bundleID ?? instanceID
 
-        let chars = Array(name)
+        let chars: [Character]
+        if kind == .plugin {
+            // Plugin text comes from arbitrary output. Bound preparation before
+            // allocating scoring arrays, including a single enormous grapheme.
+            let prefix = name.utf8.count <= Matcher.maxSupportedText * 4
+                ? Array(name.prefix(Matcher.maxSupportedText + 1)) : []
+            chars = prefix.count <= Matcher.maxSupportedText ? prefix : []
+        } else {
+            chars = Array(name)
+        }
         var lower = [Character]()
         var bonuses = [Int]()
         var mask: UInt32 = 0

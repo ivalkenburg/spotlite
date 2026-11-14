@@ -79,6 +79,7 @@ final class PluginConfigurationWindowController: NSWindowController, NSTextField
             if let control = control as? NSControl {
                 control.target = self
                 control.action = control is NSTextField ? #selector(saveClicked) : #selector(fieldChanged)
+                (control as? NSTextField)?.cell?.sendsActionOnEndEditing = false
             }
             control.setAccessibilityLabel(setting.label + (setting.required ? ", required" : ""))
             control.setAccessibilityHelp(setting.description)

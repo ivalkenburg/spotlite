@@ -95,7 +95,8 @@ public enum PluginInstallSource: Sendable, Equatable {
                 throw .invalidAddress("The folder “\(subpath)” is not valid.")
             }
             return .github(owner: owner, repository: repository, ref: ref, subpath: subpath)
-        case "archive" where url.path.lowercased().hasSuffix(".zip"):
+        case "archive" where url.path.lowercased().hasSuffix(".zip"),
+             "releases" where url.path.lowercased().hasSuffix(".zip"):
             return .archive(url)
         default:
             throw .invalidAddress("That GitHub address is not a repository or a folder in one.")
@@ -119,7 +120,7 @@ public enum PluginInstallSource: Sendable, Equatable {
         switch self {
         case .github(let owner, let repository, let ref, let subpath):
             var text = "https://github.com/\(owner)/\(repository)"
-            if let ref { text += "/tree/\(ref)" + (subpath.map { "/" + $0 } ?? "") }
+            if let ref { text += "/tree/" + Self.encode(ref) + (subpath.map { "/" + Self.encode($0) } ?? "") }
             return text
         case .archive(let url): return url.absoluteString
         case .git(let url, let ref): return url.absoluteString + (ref.map { "#" + $0 } ?? "")
@@ -244,11 +245,16 @@ public enum PluginVersion {
             case (false, false): break
             }
             for (a, b) in zip(prerelease, other.prerelease) where a != b {
-                switch (Int(a), Int(b)) {
-                case let (x?, y?): return x < y ? .orderedAscending : .orderedDescending
-                case (.some, nil): return .orderedAscending
-                case (nil, .some): return .orderedDescending
-                case (nil, nil): return a < b ? .orderedAscending : .orderedDescending
+                let numeric = { (text: String) in text.utf8.allSatisfy { (48...57).contains($0) } }
+                switch (numeric(a), numeric(b)) {
+                case (true, true):
+                    // Semver places no machine-integer bound on numeric identifiers.
+                    let x = a.drop { $0 == "0" }, y = b.drop { $0 == "0" }
+                    if x.count != y.count { return x.count < y.count ? .orderedAscending : .orderedDescending }
+                    if x != y { return x < y ? .orderedAscending : .orderedDescending }
+                case (true, false): return .orderedAscending
+                case (false, true): return .orderedDescending
+                case (false, false): return a < b ? .orderedAscending : .orderedDescending
                 }
             }
             return prerelease.count == other.prerelease.count ? .orderedSame
@@ -280,7 +286,12 @@ public struct PluginSourceRecord: Codable, Sendable, Equatable {
         self.installedAt = installedAt
     }
 
-    public var source: PluginInstallSource? { try? PluginInstallSource.parse(address) }
+    public var source: PluginInstallSource? {
+        guard let source = try? PluginInstallSource.parse(address) else { return nil }
+        // The saved ref disambiguates slashes that could also belong to the folder.
+        // Do not reinterpret a successfully resolved ref on the next update.
+        return ref.flatMap { ref in source.githubCandidates.first { $0.ref == ref } } ?? source
+    }
 }
 
 /// Source records, one small JSON file per plugin id in

@@ -2,7 +2,7 @@
 # Lists kubectl contexts, or switches to one.
 #   (no arguments)  list contexts, the current one marked
 #   use <context>   switch to it
-# A failure's first line on standard error is what Spotlite shows.
+# A failure's last nonempty line on standard error is what Spotlite shows.
 
 command -v kubectl >/dev/null || { echo "kubectl was not found" >&2; exit 1; }
 
