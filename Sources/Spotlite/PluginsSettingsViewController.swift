@@ -8,11 +8,17 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
     private let table = NSTableView()
     private let removeButton = NSButton(title: "Remove…", target: nil, action: nil)
     private let configureButton = NSButton(title: "Configure…", target: nil, action: nil)
+    private let runButton = NSButton(title: "Run…", target: nil, action: nil)
+    private let revealButton = NSButton(title: "Reveal in Finder", target: nil, action: nil)
+    private let dataButton = NSButton(title: "Open Data Folder", target: nil, action: nil)
     private let emptyLabel = SettingsForm.hint("No plugins installed.")
+    private let lastRunTitle = NSTextField(labelWithString: "Last run")
+    private let lastRun = NSTextView.scrollableTextView()
     private var plugins: [InstalledPlugin] = []
     private var configurationController: PluginConfigurationWindowController?
+    private var runnerController: PluginDebugRunnerWindowController?
 
-    private static let height: CGFloat = 420
+    private static let height: CGFloat = 560
 
     override func loadView() {
         table.headerView = nil
@@ -40,27 +46,56 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
         configureButton.target = self
         configureButton.action = #selector(configureClicked)
         configureButton.bezelStyle = .rounded
+        for (control, action) in [(runButton, #selector(runClicked)), (revealButton, #selector(revealClicked)),
+                                  (dataButton, #selector(openDataClicked))] {
+            control.target = self
+            control.action = action
+            control.bezelStyle = .rounded
+        }
+        runButton.toolTip = "Run a command and see its raw output, without applying it"
+        revealButton.toolTip = "Show the plugin’s folder in Finder"
+        dataButton.toolTip = "Open the folder where the plugin keeps its own data"
         let reloadButton = button("Reload", #selector(reloadClicked))
         reloadButton.toolTip = "Read every plugin again, after editing one"
         let folder = button("Open Folder", #selector(openFolderClicked))
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let buttons = NSStackView(views: [install, removeButton, spacer, configureButton])
+        let buttons = NSStackView(views: [install, removeButton, spacer, runButton, configureButton])
         buttons.orientation = .horizontal
         buttons.spacing = 8
-        let utilities = SettingsForm.row([reloadButton, folder])
+        let utilitySpacer = NSView()
+        utilitySpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let utilities = NSStackView(views: [reloadButton, folder, utilitySpacer, revealButton, dataButton])
+        utilities.orientation = .horizontal
+        utilities.spacing = 8
+
+        lastRunTitle.font = .systemFont(ofSize: 11, weight: .semibold)
+        lastRunTitle.textColor = .secondaryLabelColor
+        lastRunTitle.lineBreakMode = .byTruncatingTail
+        let lastRunText = lastRun.documentView as! NSTextView
+        lastRunText.isEditable = false
+        lastRunText.isSelectable = true
+        lastRunText.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        lastRunText.textContainerInset = NSSize(width: 3, height: 3)
+        lastRun.borderType = .bezelBorder
+        lastRun.setAccessibilityLabel("Last run")
+        lastRun.heightAnchor.constraint(equalToConstant: 110).isActive = true
+        // A run that finishes while Settings is open shows without polling.
+        PluginHost.shared.onRunRecorded = { [weak self] id in self?.runRecorded(id) }
 
         let caption = SettingsForm.hint(
             "Plugins add commands to search. A plugin is a program that runs with your permissions when you use it: install only ones you trust.")
         caption.preferredMaxLayoutWidth = SettingsForm.width - 40
 
-        let stack = NSStackView(views: [scroll, buttons, utilities, caption])
+        let stack = NSStackView(views: [scroll, buttons, utilities, lastRunTitle, lastRun, caption])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
         stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
+        stack.setCustomSpacing(14, after: utilities)
+        stack.setCustomSpacing(4, after: lastRunTitle)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        for fullWidth in [scroll, buttons, caption] as [NSView] {
+        for fullWidth in [scroll, buttons, utilities, lastRunTitle, lastRun, caption] as [NSView] {
             fullWidth.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
         }
         NSLayoutConstraint.activate([
@@ -88,14 +123,50 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
         updateRemoveButton()
     }
 
+    private var selectedPlugin: InstalledPlugin? {
+        plugins.indices.contains(table.selectedRow) ? plugins[table.selectedRow] : nil
+    }
+
     private func updateRemoveButton() {
-        removeButton.isEnabled = plugins.indices.contains(table.selectedRow)
-        configureButton.isEnabled = plugins.indices.contains(table.selectedRow)
-            && plugins[table.selectedRow].isUsable && plugins[table.selectedRow].manifest?.settings.isEmpty == false
+        let selected = selectedPlugin
+        removeButton.isEnabled = selected != nil
+        configureButton.isEnabled = selected?.isUsable == true && selected?.manifest?.settings.isEmpty == false
+        runButton.isEnabled = selected?.isUsable == true
+            && selected?.manifest?.commands.contains { PluginRunAction($0.action) != nil } == true
+        revealButton.isEnabled = selected != nil
+        dataButton.isEnabled = selected?.isUsable == true
+        showLastRun()
+    }
+
+    /// The selected plugin's last run since launch, from the host's memory.
+    private func showLastRun() {
+        let text = lastRun.documentView as! NSTextView
+        guard let plugin = selectedPlugin else {
+            lastRunTitle.stringValue = "Last run"
+            lastRunTitle.textColor = .secondaryLabelColor
+            text.string = "Select a plugin to see its last run."
+            return
+        }
+        guard let record = PluginHost.shared.lastRun(for: plugin.id) else {
+            lastRunTitle.stringValue = "Last run"
+            lastRunTitle.textColor = .secondaryLabelColor
+            text.string = "No runs since Spotlite started."
+            return
+        }
+        let time = record.date.formatted(date: .omitted, time: .standard)
+        lastRunTitle.stringValue = (record.failed ? "Last error" : "Last run") + " · " + time
+        lastRunTitle.textColor = record.failed ? .systemRed : .secondaryLabelColor
+        text.string = record.details
+        text.scrollToBeginningOfDocument(nil)
+    }
+
+    private func runRecorded(_ id: String) {
+        guard isViewLoaded, selectedPlugin?.id == id else { return }
+        showLastRun()
     }
 
     func configure(pluginID: String) {
-        guard let window = view.window, configurationController == nil,
+        guard let window = view.window, configurationController == nil, runnerController == nil,
               let row = plugins.firstIndex(where: { $0.id == pluginID && $0.isUsable }),
               plugins[row].manifest?.settings.isEmpty == false else { return }
         table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
@@ -108,6 +179,28 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
         configurationController = editor
         guard let sheet = editor.window else { configurationController = nil; return }
         window.beginSheet(sheet) { [weak self] _ in self?.configurationController = nil }
+    }
+
+    @objc private func runClicked() {
+        guard let window = view.window, runnerController == nil, configurationController == nil,
+              let plugin = selectedPlugin, plugin.isUsable else { return }
+        let runner = PluginDebugRunnerWindowController(plugin: plugin)
+        runnerController = runner
+        guard let sheet = runner.window else { runnerController = nil; return }
+        // Dropping the controller releases the run, its output and the sheet.
+        window.beginSheet(sheet) { [weak self] _ in self?.runnerController = nil }
+    }
+
+    @objc private func revealClicked() {
+        guard let plugin = selectedPlugin else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([plugin.directory])
+    }
+
+    @objc private func openDataClicked() {
+        guard let plugin = selectedPlugin, plugin.isUsable else { return }
+        let directory = PluginStore.dataDirectory(for: plugin.id)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(directory)
     }
 
     @objc private func configureClicked() {

@@ -823,12 +823,12 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
         case .plugin(let item, let context):
             performPlugin(item.action, plugin: context.plugin, title: item.title, icon: item.icon,
-                          historyID: nil)
+                          historyID: nil, commandID: pluginScope?.commandID ?? "")
 
         case .app(let match) where match.entry.kind == .plugin:
             guard let (plugin, command) = plugins.command(forEntryID: match.entry.id) else { return }
             performPlugin(command.action, plugin: plugin, title: command.title, icon: command.icon,
-                          historyID: match.entry.id)
+                          historyID: match.entry.id, commandID: command.id)
 
         case .app(let match) where match.entry.kind == .settingsPane:
             hide()
@@ -950,8 +950,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     // MARK: - Plugins
 
     /// `historyID` is a root command's entry id; rows inside a plugin learn no history.
+    /// `commandID` is the manifest command the user started from, at any depth.
     private func performPlugin(_ action: PluginAction?, plugin: InstalledPlugin, title: String,
-                               icon: String?, historyID: String?) {
+                               icon: String?, historyID: String?, commandID: String) {
         // A row without an action only informs.
         guard let action else { return }
         guard !plugins.needsSetup(plugin.id) else {
@@ -975,23 +976,24 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             toasts.copy(text, position: preferences.toastPosition, on: panel.screen)
             hide()
         case .run(let args, let keepOpen):
-            runPlugin(plugin, arguments: args, keepOpen: keepOpen)
+            runPlugin(plugin, arguments: args, keepOpen: keepOpen, commandID: commandID)
         case .list, .search, .menu:
             guard let source = PluginSource(action) else { return }
-            enterScope(.plugin(PluginScope(pluginID: plugin.id, title: title, icon: icon, source: source)))
+            enterScope(.plugin(PluginScope(pluginID: plugin.id, title: title, icon: icon, source: source,
+                                           commandID: commandID)))
         }
     }
 
     /// Runs a plugin's action and applies what it answers: a copy, an address to open,
     /// a toast, new looks for its commands, or rows for the level that stayed open.
-    private func runPlugin(_ plugin: InstalledPlugin, arguments: [String], keepOpen: Bool) {
+    private func runPlugin(_ plugin: InstalledPlugin, arguments: [String], keepOpen: Bool, commandID: String) {
         let query = field.stringValue
         let screen = panel.screen
         let scope = pluginScope
         if !keepOpen { hide() }
         pluginActionGeneration &+= 1
         let generation = pluginActionGeneration
-        plugins.run(plugin, arguments: arguments, query: query) { [weak self] result in
+        plugins.run(plugin, arguments: arguments, query: query, command: commandID) { [weak self] result in
             guard let self else { return }
             let position = self.preferences.toastPosition
             switch result {
@@ -1093,7 +1095,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         pluginGeneration &+= 1
         let generation = pluginGeneration
         pluginRun?.cancel()
-        pluginRun = plugins.run(plugin, arguments: arguments, query: query) { [weak self] result in
+        pluginRun = plugins.run(plugin, arguments: arguments, query: query, command: scope.commandID,
+                                action: scope.source.isSearch ? .search : .list) { [weak self] result in
             guard let self, self.pluginGeneration == generation else { return }
             self.pluginRun = nil
             switch result {
@@ -1474,11 +1477,11 @@ extension SpotliteController {
         enterScope(.plugin(actionScope))
         try await Task.sleep(for: .milliseconds(550))
         try check(items.first?.title == "Run action", "A late action overwrote a re-entered scope")
-        runPlugin(fixture, arguments: ["keep-open", "old"], keepOpen: true)
-        runPlugin(fixture, arguments: ["keep-open", "new"], keepOpen: true)
+        runPlugin(fixture, arguments: ["keep-open", "old"], keepOpen: true, commandID: "")
+        runPlugin(fixture, arguments: ["keep-open", "new"], keepOpen: true, commandID: "")
         try await Task.sleep(for: .milliseconds(550))
         try check(items.first?.title == "new", "An older action overwrote the latest action's results")
-        runPlugin(fixture, arguments: ["detached-copy"], keepOpen: false)
+        runPlugin(fixture, arguments: ["detached-copy"], keepOpen: false, commandID: "")
         try await Task.sleep(for: .milliseconds(250))
         try check(NSPasteboard.general.string(forType: .string) == "detached-action", "Closing cancelled an explicitly selected run action")
         print("DEV regressions: action results respect navigation and invocation order while detached actions finish")
@@ -2276,6 +2279,8 @@ extension SpotliteController {
         try check(items.map(\.title).suffix(5) == ["Until turned off", "15 minutes", "30 minutes", "1 hour", "2 hours"],
                   "Unexpected list: \(items.map(\.title))")
         dumpFrames("plugin-list")
+        try check(plugins.lastRun(for: "caffeinate").map { ($0.commandID, $0.action) } ?? ("", .run) == ("caffeinate", .list),
+                  "The list run did not name its command and action")
         try? await SettingsForm.captureWindow(panel, name: "plugin-list")
         // "sort": false keeps the durations in order; "half hour" is a keyword of 30 minutes.
         setQuery("hour")
@@ -2294,6 +2299,9 @@ extension SpotliteController {
         launch(at: 0)
         try check(isDismissing, "A run action must close the panel")
         await settle(800)
+        // A row nested in the command's list still runs as that command.
+        try check(plugins.lastRun(for: "caffeinate").map { ($0.commandID, $0.action) } ?? ("", .list) == ("caffeinate", .run),
+                  "A nested run did not name its command and action")
         show()
         guard let active = pluginRow("caffeine") else { return try check(false, "Command vanished") }
         let look = items[active].hints(modifiers: [], running: false).first?.text ?? ""

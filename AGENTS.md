@@ -55,6 +55,7 @@ make dmg      # build/Spotlite-<version>.dmg
 | `SPOTLITE_DEV_COMPLETION=1` | Exercise app completion modes, caret and Backspace; dump search and settings frames and exit |
 | `SPOTLITE_DEV_UTILITIES=1` | Exercise conversion cards, UUID actions, Utility settings and visibility; preserve clipboard, dump frames and exit |
 | `SPOTLITE_DEV_PLUGINS=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/examples/plugins`: exercise the Caffeinate and GitHub examples, row accessories, empty text and `sort: false`; dump row frames (starts and stops a real `caffeinate`, needs network); exit |
+| `SPOTLITE_DEV_DIAGNOSTICS=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/Tests/Fixtures/Plugins`: exercise run context env, last-run records, Settings → Plugins buttons and the debug runner; dump frames and exit |
 | `SPOTLITE_DEV_PLUGINS_DIR=<dir>` | Read plugins from this folder instead of Application Support |
 | `SPOTLITE_DEV_TOAST=1` | Exercise toasts, timed Caffeinate sessions and the Appearance page; exit |
 | `SPOTLITE_DEV_FOCUS=1` | Check focus returns to the previous app and window; needs another app in front; exit |

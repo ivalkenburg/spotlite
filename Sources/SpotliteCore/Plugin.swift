@@ -336,12 +336,15 @@ public struct PluginScope: Sendable, Equatable {
     public let title: String
     public let icon: String?
     public let source: PluginSource
+    /// The manifest command this level descends from, passed as `SPOTLITE_COMMAND`.
+    public let commandID: String
 
-    public init(pluginID: String, title: String, icon: String?, source: PluginSource) {
+    public init(pluginID: String, title: String, icon: String?, source: PluginSource, commandID: String = "") {
         self.pluginID = pluginID
         self.title = title
         self.icon = icon
         self.source = source
+        self.commandID = commandID
     }
 }
 
