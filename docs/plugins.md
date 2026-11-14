@@ -139,7 +139,7 @@ A command and every row carry one action, which is what Return does.
 | `{"type":"menu","items":[…]}` | Enters a fixed list | no |
 | `{"type":"list","args":[…]}` | Enters a list printed once; Spotlite filters it as you type | once |
 | `{"type":"search","args":[…],"debounce":200,"minQuery":1}` | Enters a list printed for each query | per query, after typing pauses |
-| `{"type":"run","args":[…],"keepOpen":false}` | Runs and applies the response; with `keepOpen` the panel stays and the list reloads | once |
+| `{"type":"run","args":[…],"keepOpen":false}` | Closes the panel at once and runs in the background, then applies the response; with `keepOpen` the panel stays and the list reloads | once |
 
 Tab also enters `menu`, `list` and `search`. Backspace on an empty query or Shift-Tab goes
 back. ⌥↩ on a row whose action is `open` copies its address, unless the row binds ⌥ itself
@@ -238,7 +238,9 @@ Output that is not a JSON object fails with “returned invalid JSON”. Setting
 with the start of the output (see [Debugging](#debugging)).
 
 Leaving a list or search cancels its pending retrieval. An explicit `run` action
-continues to completion or timeout, including its copy/open/toast response. A late
+continues to completion or timeout, including its copy/open/toast response, even after
+the panel has closed or opened again; a failure shows a failure toast. Without `keepOpen`
+its `items` are ignored, so a late answer never changes the rows of a later search. A late
 `keepOpen` response cannot replace rows after leaving its level or starting a newer action.
 
 ## Debugging
