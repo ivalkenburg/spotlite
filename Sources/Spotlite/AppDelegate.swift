@@ -109,6 +109,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return
         }
+        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_GALLERY"] == "1" {
+            Task { @MainActor in
+                do {
+                    try await PluginGalleryDevChecks.run(library: self.library, preferences: self.preferences)
+                    exit(0)
+                } catch {
+                    print("DEV gallery failed: \(error)")
+                    exit(1)
+                }
+            }
+            return
+        }
         if ProcessInfo.processInfo.environment["SPOTLITE_DEV_REGRESSIONS"] == "1" {
             Task { @MainActor in
                 do {

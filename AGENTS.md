@@ -7,7 +7,8 @@ macOS 26 app launcher (Swift package, AppKit, no Xcode project). Goal #1: fast a
 - `Sources/SpotliteCore`: pure Swift, no AppKit. Matcher, calculator, result assembly, index, preferences. Tested headless in `Tests/SpotliteCoreTests`.
 - `Sources/Spotlite`: AppKit layer (panel, settings, hotkey, launching).
 - Keep logic in Core where possible so it stays testable.
-- Plugins: manifest, store, installer (`PluginInstaller`, `PluginArchive`, `PluginSource`) and process runner in Core (`Plugin*.swift`); `PluginHost`, the Settings tab and the install sheet in the AppKit layer. API in `docs/plugins.md`, examples in `examples/plugins`.
+- Plugins: manifest, store, installer (`PluginInstaller`, `PluginArchive`, `PluginSource`), gallery index (`PluginGallery`) and process runner in Core (`Plugin*.swift`); `PluginHost`, the Settings tab, the install sheet and the gallery sheet in the AppKit layer. API in `docs/plugins.md`, examples in `examples/plugins`.
+- `plugins/index.json`: the plugin gallery index the app reads from `main` (schema in `docs/plugin-index.schema.json`). Keep its versions in step with the examples' manifests; a test checks.
 
 ## Commands
 
@@ -39,7 +40,7 @@ make dmg      # build/Spotlite-<version>.dmg
 
 - App index: depth-2 scan of `/Applications`, `/System/Applications`, `/System/Library/CoreServices/Applications`, `~/Applications`; background-only agents skipped; localized Finder names. Cached in `~/Library/Caches/Spotlite`, refreshed by FSEventStream (2 s latency) and an mtime check on panel open.
 - Prefs and launch history: `~/Library/Application Support/Spotlite`. Never mix with the cache (index is regenerable, prefs are not).
-- Plugins: `~/Library/Application Support/Spotlite/Plugins/<id>`, their state in `PluginData/<id>`, settings in `PluginSettings/<id>.json`, and for plugins installed from an address a source record in `PluginSources/<id>.json`. Read on first use and on Reload in Settings. The network is used only when the user installs from an address or clicks Check for Updates.
+- Plugins: `~/Library/Application Support/Spotlite/Plugins/<id>`, their state in `PluginData/<id>`, settings in `PluginSettings/<id>.json`, and for plugins installed from an address a source record in `PluginSources/<id>.json`. Read on first use and on Reload in Settings. The network is used only when the user installs from an address, clicks Check for Updates, or opens the gallery (its index is kept in memory while Settings is open, never on disk).
 - Not sandboxed: a sandboxed app can't launch arbitrary apps.
 
 ## Dev hooks
@@ -60,6 +61,8 @@ make dmg      # build/Spotlite-<version>.dmg
 | `SPOTLITE_DEV_STREAM=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/Tests/Fixtures/Plugins`: exercise streamed rows (before exit, selection while appending, Loading…, empty text, failure keeps rows, superseded and abandoned searches, debug runner); time keystrokes on 500 streamed rows; dump frames; exit |
 | `SPOTLITE_DEV_ACTIONS=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/Tests/Fixtures/Plugins` and `SPOTLITE_DEV_PIN=1`: exercise modifier titles, the ⌘K action list, confirmations and closing runs with posted key events; dump frames and exit |
 | `SPOTLITE_DEV_INSTALL=1` | With `SPOTLITE_DEV_PLUGINS_DIR` set to a scratch folder: exercise Install from URL offline (zips served from disk), the confirmation, update check and update, refusals of http, unsafe archives and linked plugins; dump frames and exit |
+| `SPOTLITE_DEV_GALLERY=1` | With `SPOTLITE_DEV_PLUGINS_DIR` set to a scratch folder and `SPOTLITE_DEV_GALLERY_URL=file://$PWD/Tests/Fixtures/Gallery/index.json`: exercise the gallery offline (zips served from disk): unknown-version error and Retry, statuses, skipped entry, search, install and update through the confirmation, refreshed status, the kept index and Refresh; dump frames and exit |
+| `SPOTLITE_DEV_GALLERY_URL=<url>` | Debug builds: read the gallery index from this https or `file:` URL instead of `main` |
 | `SPOTLITE_DEV_PLUGINS_DIR=<dir>` | Read plugins from this folder instead of Application Support; source records then go to `SPOTLITE_DEV_PLUGIN_SOURCES_DIR` or a temporary folder |
 | `SPOTLITE_DEV_TOAST=1` | Exercise toasts, timed Caffeinate sessions and the Appearance page; exit |
 | `SPOTLITE_DEV_FOCUS=1` | Check focus returns to the previous app and window; needs another app in front; exit |

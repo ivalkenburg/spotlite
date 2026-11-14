@@ -73,6 +73,34 @@ final class PluginHost {
         return PluginInstaller(pluginsDirectory: pluginsDirectory, sources: sources)
     }
 
+    #if DEBUG
+    /// Dev checks point the gallery at a local index.
+    var devGalleryURL: URL?
+    #endif
+
+    /// The gallery index: the published one, or in debug builds `SPOTLITE_DEV_GALLERY_URL`,
+    /// which may be a `file:` URL.
+    var galleryURL: URL {
+        #if DEBUG
+        return devGalleryURL ?? PluginGallery.indexURL(override: ProcessInfo.processInfo.environment["SPOTLITE_DEV_GALLERY_URL"])
+        #else
+        return PluginGallery.defaultURL
+        #endif
+    }
+
+    /// Reads the gallery index now. Called only when the user opens or refreshes it.
+    func galleryFetcher() -> @Sendable () async throws(PluginInstallError) -> PluginGalleryIndex {
+        let url = galleryURL, loader = installer().loader
+        #if DEBUG
+        let allowsFiles = true
+        #else
+        let allowsFiles = false
+        #endif
+        return { () async throws(PluginInstallError) -> PluginGalleryIndex in
+            try await PluginGallery.fetch(from: url, loader: loader, allowsFileURLs: allowsFiles)
+        }
+    }
+
     private static var defaultDirectory: URL {
         #if DEBUG
         if let override = ProcessInfo.processInfo.environment["SPOTLITE_DEV_PLUGINS_DIR"] {
