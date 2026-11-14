@@ -460,14 +460,14 @@ struct PluginRunTests {
         #expect(response.copy == "configured")
     }
 
-    @Test func reportsTheFirstErrorLine() async throws {
-        let result = try await run("echo 'kubectl was not found' >&2; echo more >&2; exit 3")
+    @Test func reportsTheLastErrorLine() async throws {
+        let result = try await run("echo 'context:' >&2; echo 'kubectl was not found' >&2; echo '  ' >&2; exit 3")
         #expect(result == .failure(.failed(status: 3, message: "kubectl was not found")))
         #expect(PluginRunError.failed(status: 3, message: "").message.contains("3"))
     }
 
     @Test func drainsStandardErrorWhenStandardOutputClosesFirst() async throws {
-        let result = try await run("exec 1>&-; echo 'the actual error' >&2; head -c 65536 /dev/zero >&2; exit 3")
+        let result = try await run("exec 1>&-; head -c 65536 /dev/zero >&2; echo >&2; echo 'the actual error' >&2; exit 3")
         #expect(result == .failure(.failed(status: 3, message: "the actual error")))
     }
 

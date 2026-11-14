@@ -4,9 +4,10 @@ public enum PluginRunError: Error, Equatable, Sendable {
     case launchFailed(String)
     case timedOut
     case cancelled
-    /// Non-zero exit, with the first line the program wrote to standard error.
+    /// Non-zero exit, with the last nonempty line the program wrote to standard error.
     case failed(status: Int32, message: String)
     case outputTooLarge
+    /// Why decoding failed and how the output began. The toast stays short.
     case invalidOutput(String)
     case configurationRequired
 
@@ -21,6 +22,14 @@ public enum PluginRunError: Error, Equatable, Sendable {
         case .configurationRequired: "Setup required. Configure the plugin in Settings → Plugins."
         }
     }
+
+    /// The message with whatever detail is too long for a toast.
+    public var detail: String {
+        switch self {
+        case .invalidOutput(let reason) where !reason.isEmpty: message + ". " + reason
+        default: message
+        }
+    }
 }
 
 /// One run of a plugin's executable. Nothing exists between runs: no helper process,
@@ -28,6 +37,7 @@ public enum PluginRunError: Error, Equatable, Sendable {
 /// dispatch I/O, so no thread blocks while it works.
 public final class PluginRun: @unchecked Sendable {
     public typealias Completion = @Sendable (Result<PluginResponse, PluginRunError>) -> Void
+    public typealias ReportCompletion = @Sendable (PluginRunReport) -> Void
 
     /// Enough for hundreds of rows; a runaway program is stopped rather than buffered.
     static let maxOutput = 4 * 1024 * 1024
@@ -37,9 +47,10 @@ public final class PluginRun: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.igorv.spotlite.plugin", qos: .userInitiated)
     private let process = Process()
     private var processGroup: pid_t?
-    private let completion: Completion
+    private let completion: ReportCompletion
     private var output = Data()
-    private var errorOutput = Data()
+    private var errorOutput = TailBuffer(limit: PluginRun.maxErrorOutput)
+    private var started = DispatchTime.now()
     private var outputChannel: DispatchIO?
     private var errorChannel: DispatchIO?
     private var timeout: DispatchSourceTimer?
@@ -55,7 +66,16 @@ public final class PluginRun: @unchecked Sendable {
     public static func start(executable: URL, arguments: [String], environment: [String: String],
                              directory: URL, timeout: TimeInterval,
                              completion: @escaping Completion) -> PluginRun {
-        let run = PluginRun(completion: completion)
+        startReporting(executable: executable, arguments: arguments, environment: environment,
+                       directory: directory, timeout: timeout) { completion($0.result) }
+    }
+
+    /// The same run, reporting what the program wrote besides the decoded result.
+    @discardableResult
+    public static func startReporting(executable: URL, arguments: [String], environment: [String: String],
+                                      directory: URL, timeout: TimeInterval,
+                                      report: @escaping ReportCompletion) -> PluginRun {
+        let run = PluginRun(completion: report)
         run.queue.async {
             run.launch(executable: executable, arguments: arguments, environment: environment,
                        directory: directory, timeout: timeout)
@@ -63,7 +83,7 @@ public final class PluginRun: @unchecked Sendable {
         return run
     }
 
-    private init(completion: @escaping Completion) {
+    private init(completion: @escaping ReportCompletion) {
         self.completion = completion
     }
 
@@ -103,9 +123,10 @@ public final class PluginRun: @unchecked Sendable {
             finished = true
             // The handler holds this run, and will never be called to let go of it.
             process.terminationHandler = nil
-            completion(.failure(.launchFailed(error.localizedDescription)))
+            completion(PluginRunReport(result: .failure(.launchFailed(error.localizedDescription))))
             return
         }
+        started = DispatchTime.now()
         // Foundation launches the child in an isolated group on macOS. Record only
         // a confirmed child-owned group so escalation can never target Spotlite's.
         let pid = process.processIdentifier
@@ -126,8 +147,7 @@ public final class PluginRun: @unchecked Sendable {
             }
         }
         errorChannel = read(errorPipe) { [self] chunk, ended in
-            let room = PluginRun.maxErrorOutput - errorOutput.count
-            if room > 0 { errorOutput.append(chunk.prefix(room)) }
+            errorOutput.append(chunk)
             if ended {
                 errorEnded = true
                 finishIfReady()
@@ -192,21 +212,26 @@ public final class PluginRun: @unchecked Sendable {
         errorChannel = nil
         process.terminationHandler = nil
 
+        let errors = errorOutput.bytes
+        func report(_ result: Result<PluginResponse, PluginRunError>) {
+            let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1e9
+            completion(PluginRunReport(result: result, status: exitStatus, output: output,
+                                       errorOutput: errors, duration: elapsed))
+        }
         if let stopReason {
-            if stopReason != .cancelled { completion(.failure(stopReason)) }
+            if stopReason != .cancelled { report(.failure(stopReason)) }
             return
         }
         let status = exitStatus ?? 0
         guard status == 0 else {
-            let text = String(decoding: errorOutput, as: UTF8.self)
-            let line = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
-            completion(.failure(.failed(status: status, message: line)))
+            let line = PluginDiagnostics.summaryLine(PluginDiagnostics.text(errors))
+            report(.failure(.failed(status: status, message: line)))
             return
         }
         do {
-            completion(.success(try PluginResponse.decode(output)))
+            report(.success(try PluginResponse.decode(output)))
         } catch {
-            completion(.failure(.invalidOutput(String(describing: error))))
+            report(.failure(.invalidOutput(PluginDiagnostics.invalidOutputDetail(error, output: output))))
         }
     }
 }
@@ -217,11 +242,17 @@ public enum PluginEnvironment {
     static let extraPaths = ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin"]
 
     /// The environment a plugin runs in: Spotlite's own, a usable PATH, and the
-    /// `SPOTLITE_*` variables that say where the plugin lives and what was typed.
+    /// `SPOTLITE_*` variables that say where the plugin lives, what was typed, and how
+    /// it was started.
     public static func make(for plugin: InstalledPlugin, query: String,
                             base: [String: String] = ProcessInfo.processInfo.environment,
-                            dataDirectory: URL? = nil, configurationJSON: String = "{}") -> [String: String] {
-        var environment = base
+                            dataDirectory: URL? = nil, configurationJSON: String = "{}",
+                            configurationVariables: [String: String] = [:],
+                            command: String? = nil, action: PluginRunAction? = nil,
+                            appearance: String? = nil, version: String? = nil) -> [String: String] {
+        // Per-field values come only from this plugin's settings, never from whatever
+        // Spotlite itself happened to inherit.
+        var environment = base.filter { !$0.key.hasPrefix(configurationPrefix) }
         let inherited = (base["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin").split(separator: ":").map(String.init)
         environment["PATH"] = (inherited + extraPaths.filter { !inherited.contains($0) }).joined(separator: ":")
         environment["SPOTLITE_PLUGIN_ID"] = plugin.id
@@ -229,6 +260,40 @@ public enum PluginEnvironment {
         environment["SPOTLITE_PLUGIN_DATA"] = (dataDirectory ?? PluginStore.dataDirectory(for: plugin.id)).path
         environment["SPOTLITE_QUERY"] = query
         environment["SPOTLITE_CONFIG"] = configurationJSON
+        environment.merge(configurationVariables) { _, field in field }
+        if let command { environment["SPOTLITE_COMMAND"] = command }
+        if let action { environment["SPOTLITE_ACTION"] = action.rawValue }
+        if let appearance { environment["SPOTLITE_APPEARANCE"] = appearance }
+        if let version { environment["SPOTLITE_VERSION"] = version }
         return environment
+    }
+
+    static let configurationPrefix = "SPOTLITE_CONFIG_"
+
+    /// `SPOTLITE_CONFIG_<ID>`: the id uppercased, anything outside A-Z and 0-9 as `_`.
+    public static func variableName(forSetting id: String) -> String {
+        configurationPrefix + String(String.UnicodeScalarView(id.uppercased().unicodeScalars.map {
+            ("A"..."Z").contains($0) || ("0"..."9").contains($0) ? $0 : "_"
+        }))
+    }
+
+    /// One variable per scalar value, for scripts that would rather not parse JSON.
+    /// `ids` are the declared fields: when two of them map to one name, neither is
+    /// exported, whatever their values, so a name never depends on declaration order.
+    /// `SPOTLITE_CONFIG` stays authoritative and always has both.
+    public static func configurationVariables(ids: [String], values: [String: PluginSettingValue]) -> [String: String] {
+        var claims: [String: Int] = [:]
+        for id in ids { claims[variableName(forSetting: id), default: 0] += 1 }
+        var variables: [String: String] = [:]
+        for id in ids {
+            let name = variableName(forSetting: id)
+            guard claims[name] == 1, let value = values[id] else { continue }
+            // Only plain values have one obvious text form; anything else is JSON only.
+            if case .string(let text) = value { variables[name] = text }
+            else if case .number = value { variables[name] = value.text }
+            else if case .boolean(let flag) = value { variables[name] = flag ? "true" : "false" }
+            else { continue }
+        }
+        return variables
     }
 }

@@ -134,15 +134,48 @@ last argument. The working directory is the plugin's folder. Environment:
 | `SPOTLITE_PLUGIN_DATA` | A folder for the plugin's own state; it exists, and survives reinstalling |
 | `SPOTLITE_PLUGIN_ID` | The manifest's id |
 | `SPOTLITE_CONFIG` | Effective configuration as a JSON object, with defaults applied; `{}` when no fields are declared |
+| `SPOTLITE_CONFIG_<ID>` | Each set string, number or boolean setting on its own, as described below |
+| `SPOTLITE_COMMAND` | Id of the manifest command the user started from, also for rows nested inside its list, search or menu |
+| `SPOTLITE_ACTION` | `run`, `list` or `search`: the kind of action that started this run |
+| `SPOTLITE_APPEARANCE` | `light` or `dark`, Spotlite's appearance when the run started |
+| `SPOTLITE_VERSION` | Spotlite's version, such as `1.1.3`; `0.0.0` when it runs outside its app bundle |
 | `PATH` | Spotlite's, plus `/opt/homebrew/bin`, `/opt/homebrew/sbin` and `/usr/local/bin` |
 
-A non-zero exit is a failure; the first line on standard error is shown. A run that
+`SPOTLITE_CONFIG_<ID>` takes the setting's id in upper case, with every character other
+than `A`–`Z` and `0`–`9` replaced by `_`: `resultLimit` is `SPOTLITE_CONFIG_RESULTLIMIT`.
+Strings are passed as they are, numbers as written in the form (`20`, `0.5`), booleans
+as `true` or `false`. A value that is unset is not exported, and other kinds of value
+only appear in `SPOTLITE_CONFIG`. When two ids map to the same name (`api-key` and
+`api_key`), neither is exported, so a name never depends on the order of the fields;
+read them from `SPOTLITE_CONFIG`, which is authoritative and always has every value.
+
+A non-zero exit is a failure; the toast shows the last nonempty line on standard error,
+where a traceback or a script under `set -e` leaves the error that stopped it. A run that
 exceeds the timeout, or a search superseded by newer typing, is terminated. Redirect the
 output of anything left running in the background (`cmd >/dev/null 2>&1 &`).
+
+Output that is not a JSON object fails with “returned invalid JSON”. Settings shows why,
+with the start of the output (see [Debugging](#debugging)).
 
 Leaving a list or search cancels its pending retrieval. An explicit `run` action
 continues to completion or timeout, including its copy/open/toast response. A late
 `keepOpen` response cannot replace rows after leaving its level or starting a newer action.
+
+## Debugging
+
+Select a plugin in Settings → Plugins to see its last run since Spotlite started: the
+command, action and arguments, the exit status or error, how long it took, the last
+16 KB of standard error and the start of standard output. It is kept in memory only.
+
+Run… starts one of the plugin's `run`, `list` or `search` commands the same way search
+does, with the same environment and configuration. The query field is `SPOTLITE_QUERY`
+and, for `search`, the last argument. The sheet shows standard output (indented when it
+is JSON) with what Spotlite understood from it, standard error, the exit status and the
+time taken. Nothing in the response is applied: no toast, copy, open or update. Stop
+ends the run; closing the sheet does too.
+
+Reveal in Finder opens the plugin's folder, and Open Data Folder its
+`SPOTLITE_PLUGIN_DATA` folder.
 
 ## Response
 

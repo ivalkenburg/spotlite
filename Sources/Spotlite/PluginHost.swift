@@ -20,6 +20,11 @@ final class PluginHost {
     private var configurations: [String: PluginConfiguration] = [:]
     private var configurationJSON: [String: String] = [:]
     private let configurationStore: PluginConfigurationStore
+    /// Each plugin's most recent run, for Settings. Memory only: diagnostics never
+    /// touch the disk, and a relaunch starts clean.
+    private var lastRuns: [String: PluginRunRecord] = [:]
+    /// Settings listens while it is open, so a run it shows never needs polling.
+    var onRunRecorded: ((String) -> Void)?
 
     static let fallbackSymbol = "puzzlepiece.extension"
 
@@ -84,6 +89,7 @@ final class PluginHost {
             }
         }
         updates = updates.filter { commands[$0.key] != nil }
+        lastRuns = lastRuns.filter { byID[$0.key] != nil }
     }
 
     /// Search entries of every enabled plugin.
@@ -182,29 +188,72 @@ final class PluginHost {
 
     // MARK: - Running
 
+    static let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        // Outside its app bundle, as under `swift run`, there is no version to report.
+        ?? "0.0.0"
+
     /// Runs the plugin's executable and reports on the main actor. Nil when the plugin
-    /// has nothing to run, after reporting that as a failure.
+    /// has nothing to run, after reporting that as a failure. `command` is the manifest
+    /// command the user started from, even for a row nested inside its list.
     @discardableResult
     func run(_ plugin: InstalledPlugin, arguments: [String], query: String,
+             command: String = "", action: PluginRunAction = .run,
              completion: @escaping @MainActor (Result<PluginResponse, PluginRunError>) -> Void) -> PluginRun? {
+        start(plugin, arguments: arguments, query: query, command: command, action: action) { completion($0.result) }
+    }
+
+    /// The same run with everything the program wrote, for the debug runner in Settings.
+    /// The caller decides what to show; nothing is applied.
+    @discardableResult
+    func debugRun(_ plugin: InstalledPlugin, command: PluginCommand, query: String,
+                  completion: @escaping @MainActor (PluginRunReport) -> Void) -> PluginRun? {
+        guard let action = PluginRunAction(command.action) else { return nil }
+        var arguments: [String]
+        switch command.action {
+        case .run(let args, _), .list(let args): arguments = args
+        case .search(let args, _, _): arguments = args + [query]
+        case .open, .copy, .menu: return nil
+        }
+        return start(plugin, arguments: arguments, query: query, command: command.id, action: action,
+                     completion: completion)
+    }
+
+    func lastRun(for id: String) -> PluginRunRecord? { lastRuns[id] }
+
+    private func start(_ plugin: InstalledPlugin, arguments: [String], query: String, command: String,
+                       action: PluginRunAction, completion: @escaping @MainActor (PluginRunReport) -> Void) -> PluginRun? {
         loadIfNeeded()
+        let finish: @MainActor (PluginRunReport) -> Void = { [weak self] report in
+            self?.record(report, for: plugin, command: command, action: action, arguments: arguments)
+            completion(report)
+        }
         guard !needsSetup(plugin.id), let json = configurationJSON[plugin.id] else {
-            completion(.failure(.configurationRequired))
+            finish(PluginRunReport(result: .failure(.configurationRequired)))
             return nil
         }
         guard let executable = plugin.executableURL, let manifest = plugin.manifest else {
-            completion(.failure(.launchFailed("\(plugin.name) has no executable")))
+            finish(PluginRunReport(result: .failure(.launchFailed("\(plugin.name) has no executable"))))
             return nil
         }
         let data = PluginStore.dataDirectory(for: plugin.id)
         try? FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
-        return PluginRun.start(
-            executable: executable, arguments: arguments,
-            environment: PluginEnvironment.make(for: plugin, query: query, dataDirectory: data, configurationJSON: json),
-            directory: plugin.directory, timeout: manifest.timeout
-        ) { result in
-            Task { @MainActor in completion(result) }
+        let variables = PluginEnvironment.configurationVariables(
+            ids: manifest.settings.map(\.id), values: configurations[plugin.id]?.values ?? [:])
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let environment = PluginEnvironment.make(
+            for: plugin, query: query, dataDirectory: data, configurationJSON: json,
+            configurationVariables: variables, command: command, action: action,
+            appearance: dark ? "dark" : "light", version: Self.appVersion)
+        return PluginRun.startReporting(executable: executable, arguments: arguments, environment: environment,
+                                        directory: plugin.directory, timeout: manifest.timeout) { report in
+            Task { @MainActor in finish(report) }
         }
+    }
+
+    private func record(_ report: PluginRunReport, for plugin: InstalledPlugin, command: String,
+                        action: PluginRunAction, arguments: [String]) {
+        lastRuns[plugin.id] = PluginRunRecord(report: report, commandID: command, action: action, arguments: arguments)
+        onRunRecorded?(plugin.id)
     }
 }
 
