@@ -31,6 +31,7 @@ make dmg      # build/Spotlite-<version>.dmg
 - Matching runs synchronously on the main thread (~6.5 µs per keystroke, ranking included). Don't move it to a queue.
 - Icons load on a background queue (~670 µs each), only for visible rows.
 - Plugins run nothing while idle: a child process per use, read through dispatch I/O, no helper process, timer or folder watcher. Keep the root keystroke path free of plugin work.
+- Streamed plugin rows are decoded on the run's queue and reach the main actor at most once per frame, each delivery preparing only the new rows (`PluginList.appending`).
 - Hotkey uses Carbon `RegisterEventHotKey`: no Accessibility permission, no per-keystroke wakeups.
 - Measure with `--bench` before and after touching the matcher or ranking.
 
@@ -56,6 +57,7 @@ make dmg      # build/Spotlite-<version>.dmg
 | `SPOTLITE_DEV_UTILITIES=1` | Exercise conversion cards, UUID actions, Utility settings and visibility; preserve clipboard, dump frames and exit |
 | `SPOTLITE_DEV_PLUGINS=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/examples/plugins`: exercise the Caffeinate and GitHub examples, row accessories, empty text and `sort: false`; dump row frames (starts and stops a real `caffeinate`, needs network); exit |
 | `SPOTLITE_DEV_DIAGNOSTICS=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/Tests/Fixtures/Plugins`: exercise run context env, last-run records, Settings → Plugins buttons and the debug runner; dump frames and exit |
+| `SPOTLITE_DEV_STREAM=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/Tests/Fixtures/Plugins`: exercise streamed rows (before exit, selection while appending, Loading…, empty text, failure keeps rows, superseded and abandoned searches, debug runner); time keystrokes on 500 streamed rows; dump frames; exit |
 | `SPOTLITE_DEV_PLUGINS_DIR=<dir>` | Read plugins from this folder instead of Application Support |
 | `SPOTLITE_DEV_TOAST=1` | Exercise toasts, timed Caffeinate sessions and the Appearance page; exit |
 | `SPOTLITE_DEV_FOCUS=1` | Check focus returns to the previous app and window; needs another app in front; exit |

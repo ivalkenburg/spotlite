@@ -91,6 +91,26 @@ struct PluginListTests {
 
     /// Keystroke cost for a full list, sorted with keywords and not, against the plain
     /// title-only list it extends. Printed, not asserted: timing varies by machine.
+    @Test func appendingMatchesAFreshList() {
+        let items = (0..<40).map { i in
+            PluginItem(id: i % 7 == 0 ? "same" : "row \(i)", title: "row \(i) \(i % 3 == 0 ? "alpha" : "beta")",
+                       keywords: i % 5 == 0 ? ["gamma \(i)"] : [])
+        }
+        let matcher = Matcher()
+        for sorts in [true, false] {
+            var streamed = PluginList(items: Array(items.prefix(3)), sorts: sorts)
+            for count in [3, 10, 11, 25, 40] { streamed = streamed.appending(Array(items.prefix(count))) }
+            let fresh = PluginList(items: items, sorts: sorts)
+            #expect(streamed.items == fresh.items)
+            for query in ["alpha", "gamma", "row 2", "zz", ""] {
+                #expect(streamed.matchingIndices(query, matcher: matcher) == fresh.matchingIndices(query, matcher: matcher))
+            }
+            #expect(items.indices.map(streamed.occurrence) == items.indices.map(fresh.occurrence))
+        }
+        let search = PluginList(items: Array(items.prefix(2)), filterLocally: false).appending(items)
+        #expect(search.matchingIndices("alpha", matcher: matcher) == Array(items.indices))
+    }
+
     @Test func keystrokeCostForAFullList() {
         let words = ["alpha", "beta", "gamma", "delta", "kube", "prod", "stage", "swift", "react", "infra"]
         let items = (0..<PluginItem.maxItems).map { i in

@@ -38,6 +38,7 @@ public enum PluginRunError: Error, Equatable, Sendable {
 public final class PluginRun: @unchecked Sendable {
     public typealias Completion = @Sendable (Result<PluginResponse, PluginRunError>) -> Void
     public typealias ReportCompletion = @Sendable (PluginRunReport) -> Void
+    public typealias Rows = @Sendable ([PluginItem]) -> Void
 
     /// Enough for hundreds of rows; a runaway program is stopped rather than buffered.
     static let maxOutput = 4 * 1024 * 1024
@@ -59,6 +60,9 @@ public final class PluginRun: @unchecked Sendable {
     private var errorEnded = false
     private var stopReason: PluginRunError?
     private var finished = false
+    /// Set for a streamed run, whose output is decoded line by line as it arrives.
+    private var stream: PluginStreamDecoder?
+    private let rows: RowMailbox?
 
     /// Starts `executable` with `arguments`. `completion` is called once, on a
     /// background queue, unless the run is cancelled first.
@@ -71,11 +75,18 @@ public final class PluginRun: @unchecked Sendable {
     }
 
     /// The same run, reporting what the program wrote besides the decoded result.
+    ///
+    /// With `stream` the output is one JSON object per line (see `PluginStreamDecoder`),
+    /// and `rows` receives every row so far on `rowsQueue` as lines arrive. Deliveries
+    /// are coalesced: at most one waits on the queue, and it carries the latest rows, so
+    /// a burst of lines costs one delivery. The report repeats them all.
     @discardableResult
     public static func startReporting(executable: URL, arguments: [String], environment: [String: String],
-                                      directory: URL, timeout: TimeInterval,
+                                      directory: URL, timeout: TimeInterval, stream: Bool = false,
+                                      rows: Rows? = nil, rowsQueue: DispatchQueue = .main,
                                       report: @escaping ReportCompletion) -> PluginRun {
-        let run = PluginRun(completion: report)
+        let run = PluginRun(completion: report, stream: stream,
+                            rows: stream ? rows.map { RowMailbox(queue: rowsQueue, deliver: $0) } : nil)
         run.queue.async {
             run.launch(executable: executable, arguments: arguments, environment: environment,
                        directory: directory, timeout: timeout)
@@ -83,8 +94,10 @@ public final class PluginRun: @unchecked Sendable {
         return run
     }
 
-    private init(completion: @escaping ReportCompletion) {
+    private init(completion: @escaping ReportCompletion, stream: Bool, rows: RowMailbox?) {
         self.completion = completion
+        self.stream = stream ? PluginStreamDecoder() : nil
+        self.rows = rows
     }
 
     /// Stops the program; the completion is not called.
@@ -140,6 +153,7 @@ public final class PluginRun: @unchecked Sendable {
             if stopReason == nil {
                 output.append(chunk)
                 if output.count > PluginRun.maxOutput { stop(.outputTooLarge) }
+                else if stream?.feed(chunk) == true, let items = stream?.items { rows?.post(items) }
             }
             if ended {
                 outputEnded = true
@@ -192,7 +206,10 @@ public final class PluginRun: @unchecked Sendable {
             }
         }
         // A cancelled run reports nothing, so it need not wait for the exit.
-        if reason == .cancelled { finish() }
+        if reason == .cancelled {
+            rows?.drop()
+            finish()
+        }
     }
 
     private func finishIfReady() {
@@ -213,10 +230,13 @@ public final class PluginRun: @unchecked Sendable {
         process.terminationHandler = nil
 
         let errors = errorOutput.bytes
+        // A last line without a newline counts only when the output ended on its own.
+        if stopReason == nil { stream?.finish() }
         func report(_ result: Result<PluginResponse, PluginRunError>) {
             let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1e9
             completion(PluginRunReport(result: result, status: exitStatus, output: output,
-                                       errorOutput: errors, duration: elapsed))
+                                       errorOutput: errors, duration: elapsed,
+                                       stream: stream?.summary, streamedItems: stream?.items ?? []))
         }
         if let stopReason {
             if stopReason != .cancelled { report(.failure(stopReason)) }
@@ -228,12 +248,58 @@ public final class PluginRun: @unchecked Sendable {
             report(.failure(.failed(status: status, message: line)))
             return
         }
+        if let stream {
+            var response = stream.response
+            response.items = stream.items
+            return report(.success(response))
+        }
         do {
             report(.success(try PluginResponse.decode(output)))
         } catch {
             report(.failure(.invalidOutput(PluginDiagnostics.invalidOutputDetail(error, output: output))))
         }
     }
+}
+
+/// Hands a streamed run's rows to another queue without queueing one delivery per
+/// chunk: a delivery already waiting picks up the newer rows instead. Deliveries are
+/// at least a frame apart, so a trickle of lines does not redraw the list for each;
+/// the first comes at once, and a later one waits out the rest of the frame, one-shot.
+private final class RowMailbox: @unchecked Sendable {
+    private let queue: DispatchQueue
+    private let deliver: PluginRun.Rows
+    private let lock = NSLock()
+    private var latest: [PluginItem]?
+    private var lastDelivery: UInt64 = 0
+
+    static let interval: UInt64 = 16_000_000
+
+    init(queue: DispatchQueue, deliver: @escaping PluginRun.Rows) {
+        self.queue = queue
+        self.deliver = deliver
+    }
+
+    func post(_ items: [PluginItem]) {
+        let (waiting, last) = lock.withLock {
+            defer { latest = items }
+            return (latest != nil, lastDelivery)
+        }
+        guard !waiting else { return }
+        let now = DispatchTime.now().uptimeNanoseconds
+        let work: @Sendable () -> Void = { [self] in
+            let items = lock.withLock { () -> [PluginItem]? in
+                defer { latest = nil }
+                if latest != nil { lastDelivery = DispatchTime.now().uptimeNanoseconds }
+                return latest
+            }
+            if let items { deliver(items) }
+        }
+        if last == 0 || now >= last + Self.interval { queue.async(execute: work) }
+        else { queue.asyncAfter(deadline: DispatchTime(uptimeNanoseconds: last + Self.interval), execute: work) }
+    }
+
+    /// A cancelled run delivers nothing more, including what is already queued.
+    func drop() { lock.withLock { latest = nil } }
 }
 
 public enum PluginEnvironment {

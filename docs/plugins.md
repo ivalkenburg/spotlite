@@ -2,13 +2,14 @@
 
 A plugin adds commands to search. It is a folder with a `plugin.json` and, usually, one
 executable in any language. Spotlite starts the executable only when one of the plugin's
-commands is used, and reads one JSON object from its standard output. Between uses a
+commands is used, and reads one JSON object from its standard output, or one row per
+line when the action [streams](#streaming). Between uses a
 plugin costs its manifest in memory: no process, timer or watcher.
 
 Install a plugin folder in Settings → Plugins, or put (or symlink) it in
 `~/Library/Application Support/Spotlite/Plugins/` and press Reload. Working examples are
-in [`examples/plugins`](../examples/plugins): Caffeinate, a kubectl context switcher and a
-GitHub repository search.
+in [`examples/plugins`](../examples/plugins): Caffeinate, a kubectl context switcher, a
+GitHub repository search and Find Files, which streams.
 
 A plugin runs with your user's permissions. Install only ones you trust.
 
@@ -150,6 +151,7 @@ back. ⌥↩ on a row whose action is `open` copies its address.
 | --- | --- |
 | `emptyText` | Shown when the level has no rows: nothing came back, or typing filtered every row out. A `search` also shows it while the query is shorter than `minQuery`. Default: “No results”, and nothing below `minQuery`. Nothing shows while the first answer is still loading. |
 | `sort` | `list` and `menu` only. `false` keeps matches in the plugin's order; typing still narrows the rows. Default `true`, best match first. |
+| `stream` | `list` and `search` only. `true` reads one row per line and shows rows as they arrive. See [Streaming](#streaming). Default `false`. |
 
 ## Running
 
@@ -190,17 +192,57 @@ Leaving a list or search cancels its pending retrieval. An explicit `run` action
 continues to completion or timeout, including its copy/open/toast response. A late
 `keepOpen` response cannot replace rows after leaving its level or starting a newer action.
 
+## Streaming
+
+With `"stream": true` on a `list` or `search` action, the executable prints one JSON
+object per line ([NDJSON](https://github.com/ndjson/ndjson-spec)) instead of one object,
+and each row shows as soon as its line arrives. A slow source (a network page, `find`,
+`git log`) shows its first rows while the rest are still coming.
+
+```sh
+find "$HOME/Documents" -iname "*$1*" |
+jq -n -R -c --unbuffered 'limit(200; inputs) | {title: (split("/") | last), action: {type: "open", url: .}}'
+```
+
+- A line with a `title` is a row, with the keys of an item in `items`.
+- Any other object is a response line: its `items` are more rows, and its `toast`,
+  `copy`, `open` and `update` apply when the program exits successfully. When several
+  lines give one, the last `toast`, `copy` and `open` win and every `update` applies.
+  A whole classic response on one line therefore works too.
+- Blank lines are ignored; a line may end in `\r\n`, and the last needs no newline.
+- A line that is not a JSON object, or a row whose keys have the wrong type, is skipped
+  on its own. The others still show; Settings lists the skipped lines with why.
+- Flush every line. Tools buffer output to a pipe, so use `jq --unbuffered`,
+  `grep --line-buffered`, `sed -l`, or `fflush()` in awk, and in Python `print(…, flush=True)`.
+
+Typing filters and ranks a `list`'s rows as they arrive, and a row the user selected stays
+selected while rows are added. Updates are coalesced, at most one per frame. “Loading…”
+shows if no row has arrived after a moment, and while the program runs, also when typing
+filters out every row so far. The empty text shows only once the program has exited and
+no row matches.
+
+A search superseded by newer typing, or a level the user leaves, stops the program, and
+none of its rows show after that. The timeout covers the whole run. After 500 rows the
+output is still read, for response lines, but further rows are ignored: stop at 500, as
+`limit(500; …)` or `head -n 500` do. The 4 MB output limit applies as for any action.
+
+A run that fails after rows arrived (a non-zero exit, the timeout, too much output) keeps
+those rows and shows the failure as a toast; its response lines are not applied. A failure
+before any row replaces the list with the error, as without streaming.
+
 ## Debugging
 
 Select a plugin in Settings → Plugins to see its last run since Spotlite started: the
 command, action and arguments, the exit status or error, how long it took, the last
-16 KB of standard error and the start of standard output. It is kept in memory only.
+16 KB of standard error, the start of standard output and, for a streamed run, how many
+rows came and which lines were skipped. It is kept in memory only.
 
 Run… starts one of the plugin's `run`, `list` or `search` commands the same way search
 does, with the same environment and configuration. The query field is `SPOTLITE_QUERY`
 and, for `search`, the last argument. The sheet shows standard output (indented when it
 is JSON) with what Spotlite understood from it, standard error, the exit status and the
-time taken. Nothing in the response is applied: no toast, copy, open or update. Stop
+time taken. For a streamed command it also says how many rows were decoded and which
+lines were skipped, and why. Nothing in the response is applied: no toast, copy, open or update. Stop
 ends the run; closing the sheet does too.
 
 Reveal in Finder opens the plugin's folder, and Open Data Folder its

@@ -74,6 +74,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// Only the latest action in the same navigation session may replace its rows.
     private var pluginActionGeneration = 0
     private var pluginDebounce: DispatchWorkItem?
+    /// The generation whose stream has shown rows, so its failure keeps them.
+    private var pluginStreamedGeneration = -1
     /// The row to return to once a parent level's list has loaded again.
     private var pluginPendingSelection: (id: String, style: Selection)?
     /// The query before the latest edit, to tell typing from deleting.
@@ -1095,14 +1097,28 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         pluginGeneration &+= 1
         let generation = pluginGeneration
         pluginRun?.cancel()
+        // A streamed level shows rows as lines arrive. Each delivery holds every row so
+        // far; one that lands after the run finished or was replaced is dropped.
+        var streamed: (@MainActor ([PluginItem]) -> Void)?
+        if scope.source.options.streams {
+            streamed = { [weak self] rows in
+                guard let self, self.pluginGeneration == generation, self.pluginRun != nil else { return }
+                self.showPluginItems(rows, streaming: true, extending: self.pluginStreamedGeneration == generation)
+                self.pluginStreamedGeneration = generation
+            }
+        }
         pluginRun = plugins.run(plugin, arguments: arguments, query: query, command: scope.commandID,
-                                action: scope.source.isSearch ? .search : .list) { [weak self] result in
+                                action: scope.source.isSearch ? .search : .list, rows: streamed) { [weak self] result in
             guard let self, self.pluginGeneration == generation else { return }
             self.pluginRun = nil
             switch result {
             case .success(let response):
                 self.applyPluginResponse(response, from: plugin, on: self.panel.screen)
-                self.showPluginItems(response.items ?? [])
+                self.showPluginItems(response.items ?? [], extending: self.pluginStreamedGeneration == generation)
+            case .failure(let error) where self.pluginStreamedGeneration == generation:
+                // Rows a stream printed before failing stay usable; the toast says why it stopped.
+                self.toasts.show(.pluginFailure(error), position: self.preferences.toastPosition, on: self.panel.screen)
+                self.showPluginItems(self.pluginList.items, extending: true)
             case .failure(let error):
                 self.pluginList = .empty
                 self.pluginStatus = PluginItem(title: error.message, icon: "exclamationmark.triangle")
@@ -1113,19 +1129,27 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.pluginLoadingDelay) { [weak self] in
             guard let self, self.pluginGeneration == generation, self.pluginRun != nil,
                   self.pluginList.items.isEmpty else { return }
-            self.pluginStatus = PluginItem(title: "Loading…", icon: "ellipsis")
+            self.pluginStatus = Self.pluginLoadingRow
             self.refreshPluginRows()
         }
     }
 
-    private func showPluginItems(_ items: [PluginItem]) {
+    /// `streaming` rows are the ones so far: “Loading…” shows when typing filters them
+    /// all out, and the empty text waits for the end. `extending` rows begin with
+    /// the ones on screen, from the same stream, so only the new ones are prepared.
+    private func showPluginItems(_ items: [PluginItem], streaming: Bool = false, extending: Bool = false) {
         let source = pluginScope?.source
-        pluginList = PluginList(items: items, filterLocally: source?.isSearch != true,
-                                sorts: source?.options.sorts ?? true)
-        pluginStatus = nil
-        pluginLoaded = true
+        pluginList = extending ? pluginList.appending(items)
+            : PluginList(items: items, filterLocally: source?.isSearch != true, sorts: source?.options.sorts ?? true)
+        // Rows from anywhere else end what a stream may extend.
+        if !extending { pluginStreamedGeneration = -1 }
+        // Still loading: what typing filters out may yet arrive.
+        pluginStatus = streaming ? Self.pluginLoadingRow : nil
+        pluginLoaded = !streaming
         refreshPluginRows()
     }
+
+    private static let pluginLoadingRow = PluginItem(title: "Loading…", icon: "ellipsis")
 
     /// Stands in for a level with no rows: nothing came back, or typing filtered every row out.
     private static func pluginEmptyRow(_ text: String) -> PluginItem {
@@ -1135,8 +1159,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private func refreshPluginRows() {
         guard panel.isVisible, !isDismissing else { return }
         if let pending = pluginPendingSelection {
-            pluginPendingSelection = nil
             updateMatches(for: field.stringValue, selecting: pending)
+            // A stream may not have reached the row to return to yet.
+            if pluginRun == nil || items.contains(where: { $0.identity == pending.id }) { pluginPendingSelection = nil }
         } else {
             refreshMatches()
         }
@@ -2416,6 +2441,173 @@ extension SpotliteController {
 
 }
 
+#endif
+
+#if DEBUG
+extension SpotliteController {
+    /// Streamed rows against the offline stream fixture: rows before exit, selection while
+    /// rows append, Loading…, empty text after the end, a failure keeping its rows,
+    /// superseded and abandoned searches, and the keystroke cost of a full streamed list.
+    func runDevStreamChecks() async throws {
+        func check(_ condition: @autoclosure () -> Bool, _ message: @autoclosure () -> String) throws {
+            guard condition() else {
+                throw NSError(domain: "SpotliteStreamChecks", code: 1, userInfo: [NSLocalizedDescriptionKey: message()])
+            }
+        }
+        func settle(_ milliseconds: Int) async { try? await Task.sleep(for: .milliseconds(milliseconds)) }
+        guard let fixture = plugins.plugin(id: "stream") else {
+            return try check(false, "Set SPOTLITE_DEV_PLUGINS_DIR to Tests/Fixtures/Plugins")
+        }
+        let savedPreferences = preferences
+        defer {
+            resetNavigation()
+            preferencesDidChange(savedPreferences)
+            toasts.dismiss()
+            panel.orderOut(nil)
+        }
+        func enter(_ args: [String], search: Bool = false, emptyText: String? = nil) {
+            show()
+            let options = PluginListOptions(emptyText: emptyText, streams: true)
+            let source: PluginSource = search ? .search(args: args, debounce: 0, minimumQuery: 1, options: options)
+                : .list(args: args, options: options)
+            enterScope(.plugin(PluginScope(pluginID: fixture.id, title: "Stream", icon: nil, source: source,
+                                           commandID: search ? "search" : "list")))
+        }
+        func type(_ query: String) {
+            let editor = field.currentEditor() as! NSTextView
+            editor.insertText(query, replacementRange: NSRange(location: 0, length: (field.stringValue as NSString).length))
+        }
+        var titles: [String] { items.map(\.title) }
+
+        // Rows show while the program still runs, and typing filters them as more arrive.
+        enter(["list"])
+        await settle(250)
+        try check(pluginRun != nil && titles == ["alpha one", "beta two"], "Before exit: \(titles), running \(pluginRun != nil)")
+        dumpFrames("stream-partial")
+        dumpVisibleRows("stream-partial-rows")
+        select(1, as: .navigated)
+        await settle(600)
+        try check(pluginRun != nil && titles.count == 4 && items[cursor].title == "beta two",
+                  "Appended rows moved the selection: \(titles), cursor \(cursor)")
+        type("zzzz")
+        try check(titles == ["Loading…"], "Filtering out every row while streaming gave \(titles)")
+        type("alpha")
+        try check(titles == ["alpha one", "alpha three"], "Filter while streaming gave \(titles)")
+        await settle(900)
+        try check(pluginRun == nil && Set(titles) == ["alpha one", "alpha three", "alpha five"], "After exit: \(titles)")
+        toasts.checkDevMessage("stream finished")
+        let record = plugins.lastRun(for: fixture.id)
+        try check(record?.stream?.rows == 5 && record?.stream?.skipped == 1
+                  && record?.stream?.errors.first?.hasPrefix("Line 4:") == true,
+                  "Record: \(record?.details ?? "none")")
+        dumpFrames("stream-done")
+        print("DEV stream: rows before exit, filtering and stable selection while appending passed")
+
+        // Nothing yet shows Loading…; the empty text waits for the end of the stream.
+        enter(["empty"], emptyText: "Nothing streamed")
+        await settle(150)
+        try check(titles.isEmpty, "Empty stream showed \(titles) before Loading…")
+        await settle(300)
+        try check(titles == ["Loading…"], "Slow stream showed \(titles)")
+        await settle(500)
+        try check(titles == ["Nothing streamed"], "Ended empty stream showed \(titles)")
+        enter(["late"])
+        await settle(450)
+        try check(titles == ["Loading…"], "Late stream showed \(titles)")
+        await settle(500)
+        try check(titles == ["late row"], "Late row: \(titles)")
+        print("DEV stream: Loading… and empty text after the end passed")
+
+        // A failure after rows keeps them and says why in a toast.
+        enter(["fail"])
+        await settle(700)
+        try check(titles == ["kept row"] && pluginStatus == nil, "Failed stream showed \(titles)")
+        toasts.checkDevMessage("stream broke")
+        print("DEV stream: a failure keeps its rows and shows a toast")
+
+        // A newer query cancels the older stream; none of its rows show, then or later.
+        enter(["search"], search: true)
+        type("old")
+        await settle(150)
+        try check(titles == ["old 0"], "First search showed \(titles)")
+        let pidFile = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("spotlite-stream-search.pid")
+        let oldPID = pid_t((try? String(contentsOf: pidFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
+        type("new")
+        try check(titles.isEmpty, "The old query's rows stayed: \(titles)")
+        for wait in [150, 300, 400] {
+            await settle(wait)
+            try check(!titles.isEmpty && titles.allSatisfy { $0.hasPrefix("new ") }, "Superseded search leaked rows: \(titles)")
+        }
+        try check(oldPID > 0 && kill(oldPID, 0) == -1, "The superseded stream kept running")
+        // Leaving the level cancels its stream too.
+        type("leave")
+        await settle(150)
+        let leavingPID = pid_t((try? String(contentsOf: pidFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
+        leaveScope()
+        await settle(1_200)
+        try check(pluginScope == nil && pluginRun == nil && pluginList.items.isEmpty, "Leaving kept stream rows")
+        try check(leavingPID > 0 && leavingPID != oldPID && kill(leavingPID, 0) == -1, "Leaving left the stream running")
+        try? FileManager.default.removeItem(at: pidFile)
+        print("DEV stream: superseded and abandoned searches show no stale rows and stop")
+
+        // Keystroke cost with a full streamed list: the same ranking as any 500-row list.
+        enter(["many"])
+        for _ in 0..<100 where pluginRun != nil { await settle(20) }
+        try check(pluginList.items.count == PluginItem.maxItems && titles.count == PluginItem.maxItems,
+                  "Many rows: \(pluginList.items.count)")
+        dumpVisibleRows("stream-many")
+        let queries = ["r", "re", "rep", "repo 4", "tools", "project42", "zz"]
+        var samples: [Double] = []
+        for round in 0..<20 {
+            for query in queries {
+                setQuery(query)
+                let start = DispatchTime.now().uptimeNanoseconds
+                updateMatches(for: query)
+                if round > 0 { samples.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000) }
+            }
+        }
+        var ranking: [Double] = []
+        for _ in 0..<20 {
+            for query in queries {
+                let start = DispatchTime.now().uptimeNanoseconds
+                _ = pluginList.matchingIndices(query, matcher: matcher)
+                ranking.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000)
+            }
+        }
+        let rebuild = DispatchTime.now().uptimeNanoseconds
+        for _ in 0..<20 { _ = PluginList(items: pluginList.items) }
+        let perList = Double(DispatchTime.now().uptimeNanoseconds - rebuild) / 20_000
+        // A delivery of 20 more rows onto 480 prepares only those 20.
+        let head = PluginList(items: Array(pluginList.items.prefix(480)))
+        let append = DispatchTime.now().uptimeNanoseconds
+        for _ in 0..<20 { _ = head.appending(pluginList.items) }
+        let perAppend = Double(DispatchTime.now().uptimeNanoseconds - append) / 20_000
+        func median(_ values: [Double]) -> Double { values.sorted()[values.count / 2] }
+        print(String(format: "DEV stream: 500 streamed rows, per keystroke median %.0f µs (ranking %.0f µs); "
+                     + "whole list %.0f µs, appending 20 rows %.0f µs", median(samples), median(ranking), perList, perAppend))
+        hide()
+
+        // The debug runner shows the raw lines and says what was decoded from them.
+        let runner = PluginDebugRunnerWindowController(plugin: fixture, host: plugins)
+        let controls = devDescendants(of: runner.window!.contentView!)
+        let identified = { (id: String) in controls.first { $0.identifier?.rawValue == id } }
+        let status = identified("status") as! NSTextField
+        let output = identified("stdout") as! NSTextView
+        let picker = controls.compactMap { $0 as? NSPopUpButton }.first!
+        try check(picker.itemTitles == ["Stream List (list)", "Stream Search (search)"], "Runner offers \(picker.itemTitles)")
+        picker.selectItem(at: 0)
+        controls.compactMap { $0 as? NSButton }.first { $0.title == "Run" }!.performClick(nil)
+        for _ in 0..<150 where status.stringValue.isEmpty || status.stringValue == "Running…" { await settle(20) }
+        try check(status.stringValue.contains("exit 0") && status.stringValue.contains("Valid response: 5 items, toast")
+                  && status.stringValue.contains("Streamed 5 rows, skipped 1 line\nLine 4: "),
+                  "Runner status: \(status.stringValue)")
+        try check(output.string.hasPrefix("{\"title\":\"alpha one\"}\n") && output.string.contains("not json"),
+                  "Runner output: \(output.string)")
+        print("DEV stream: debug runner status: \(status.stringValue.replacingOccurrences(of: "\n", with: " | "))")
+        runner.close()
+        print("DEV stream: all checks passed")
+    }
+}
 #endif
 
 /// Top-left origin, so everything pinned to the top keeps its frame while the glass

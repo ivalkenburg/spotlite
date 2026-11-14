@@ -85,6 +85,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return
         }
+        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_STREAM"] == "1" {
+            Task { @MainActor in
+                do {
+                    try await self.controller.runDevStreamChecks()
+                    exit(0)
+                } catch {
+                    print("DEV stream failed: \(error)")
+                    exit(1)
+                }
+            }
+            return
+        }
         if ProcessInfo.processInfo.environment["SPOTLITE_DEV_REGRESSIONS"] == "1" {
             Task { @MainActor in
                 do {

@@ -44,6 +44,7 @@ public enum PluginAction: Sendable, Equatable {
 extension PluginAction: Decodable {
     private enum CodingKeys: String, CodingKey {
         case type, url, text, args, keepOpen, debounce, minQuery, items, sort, emptyText
+        case stream
     }
 
     public init(from decoder: Decoder) throws {
@@ -54,18 +55,20 @@ extension PluginAction: Decodable {
         // Read only where Spotlite filters: a search's rows already answer the query.
         let filtered = PluginListOptions(sorts: try c.decodeIfPresent(Bool.self, forKey: .sort) ?? true,
                                          emptyText: emptyText)
+        // Only an executable's output can stream; a menu's rows are already here.
+        let streams = try c.decodeIfPresent(Bool.self, forKey: .stream) ?? false
         switch type {
         case "open": self = .open(try c.decode(String.self, forKey: .url))
         case "copy": self = .copy(try c.decode(String.self, forKey: .text))
         case "run": self = .run(args: args, keepOpen: try c.decodeIfPresent(Bool.self, forKey: .keepOpen) ?? false)
-        case "list": self = .list(args: args, options: filtered)
+        case "list": self = .list(args: args, options: filtered.streaming(streams))
         case "search":
             let debounce = try c.decodeIfPresent(Int.self, forKey: .debounce) ?? PluginAction.defaultDebounce
             let range = PluginAction.debounceRange
             self = .search(args: args,
                            debounce: min(max(debounce, range.lowerBound), range.upperBound),
                            minimumQuery: max(0, try c.decodeIfPresent(Int.self, forKey: .minQuery) ?? 1),
-                           options: PluginListOptions(emptyText: emptyText))
+                           options: PluginListOptions(emptyText: emptyText, streams: streams))
         case "menu":
             self = .menu(PluginItem.decodeList(from: c, forKey: .items), options: filtered)
         default:
@@ -81,11 +84,20 @@ public struct PluginListOptions: Sendable, Equatable {
     public var sorts: Bool
     /// Shown when the level has no rows; nil for the default.
     public var emptyText: String?
+    /// Whether the executable prints one row per line, shown as each arrives.
+    public var streams: Bool
 
     /// Blank text counts as none, so the default still shows.
-    public init(sorts: Bool = true, emptyText: String? = nil) {
+    public init(sorts: Bool = true, emptyText: String? = nil, streams: Bool = false) {
         self.sorts = sorts
         self.emptyText = emptyText.flatMap { $0.allSatisfy(\.isWhitespace) ? nil : $0 }
+        self.streams = streams
+    }
+
+    func streaming(_ streams: Bool) -> PluginListOptions {
+        var options = self
+        options.streams = streams
+        return options
     }
 }
 
@@ -361,23 +373,40 @@ public struct PluginList: Sendable {
     public static let empty = PluginList(items: [])
 
     public init(items: [PluginItem], filterLocally: Bool = true, sorts: Bool = true) {
+        self.init(items: items, after: nil, filterLocally: filterLocally, sorts: sorts)
+    }
+
+    /// The same list with more rows after its own, as a stream delivers them: `items`
+    /// begins with this list's rows, and only the rows after them are prepared.
+    public func appending(_ items: [PluginItem]) -> PluginList {
+        PluginList(items: items, after: self, filterLocally: corpus != nil, sorts: sorts)
+    }
+
+    private init(items: [PluginItem], after previous: PluginList?, filterLocally: Bool, sorts: Bool) {
         self.items = items
         self.sorts = sorts
+        let start = previous.map { min($0.items.count, items.count) } ?? 0
         var counts: [String: Int] = [:]
-        occurrences = items.map {
+        for index in 0..<start { counts[items[index].id, default: 0] += 1 }
+        occurrences = Array((previous?.occurrences ?? []).prefix(start)) + items[start...].map {
             let occurrence = counts[$0.id, default: 0]
             counts[$0.id] = occurrence + 1
             return occurrence
         }
         guard filterLocally else { corpus = nil; keywordCorpus = nil; return }
         // The position stands in for an id: a plugin's own ids need not be unique.
-        corpus = SearchCorpus(entries: items.enumerated().map { index, item in
-            AppEntry(url: PluginList.entryURL, name: item.title, bundleID: String(index), kind: .command)
-        })
-        let keywords = items.enumerated().flatMap { index, item in
-            item.keywords.map { AppEntry(url: PluginList.entryURL, name: $0, bundleID: String(index), kind: .command) }
+        let titles = items[start...].enumerated().map { offset, item in
+            AppEntry(url: PluginList.entryURL, name: item.title, bundleID: String(start + offset), kind: .command)
         }
-        keywordCorpus = keywords.isEmpty ? nil : SearchCorpus(entries: keywords)
+        let keywords = items[start...].enumerated().flatMap { offset, item in
+            item.keywords.map { AppEntry(url: PluginList.entryURL, name: $0, bundleID: String(start + offset), kind: .command) }
+        }
+        let earlierTitles = Array((previous?.corpus?.entries ?? []).prefix(start))
+        // Keywords are in row order, so the earlier rows' are those naming a row before `start`.
+        let earlierKeywords = (previous?.keywordCorpus?.entries ?? []).filter { Int($0.bundleID ?? "").map { $0 < start } ?? false }
+        corpus = SearchCorpus(entries: earlierTitles + titles)
+        let allKeywords = earlierKeywords + keywords
+        keywordCorpus = allKeywords.isEmpty ? nil : SearchCorpus(entries: allKeywords)
     }
 
     private static let entryURL = URL(string: "spotlite-plugin-item:")!

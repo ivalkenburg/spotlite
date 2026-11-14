@@ -1,0 +1,10 @@
+{
+  "id": "stream",
+  "name": "Stream Fixture",
+  "description": "Exercises streamed list and search rows.",
+  "executable": "run.sh",
+  "commands": [
+    { "id": "list", "title": "Stream List", "action": { "type": "list", "args": ["list"], "stream": true } },
+    { "id": "search", "title": "Stream Search", "action": { "type": "search", "args": ["search"], "stream": true, "debounce": 0 } }
+  ]
+}

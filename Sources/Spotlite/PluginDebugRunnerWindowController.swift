@@ -180,11 +180,14 @@ final class PluginDebugRunnerWindowController: NSWindowController {
     private func show(_ report: PluginRunReport) {
         let facts = [report.status.map { "exit \($0)" }, PluginDiagnostics.duration(report.duration)]
             .compactMap { $0 }.joined(separator: " · ")
+        // A stream says how many rows it decoded and why lines were skipped.
+        let streamed = report.stream.map { ([$0.text] + $0.errors).joined(separator: "\n") }
         switch report.result {
         case .success(let response):
-            show(status: facts + " · " + PluginDiagnostics.summary(of: response), failed: false)
+            show(status: [facts + " · " + PluginDiagnostics.summary(of: response), streamed]
+                .compactMap { $0 }.joined(separator: "\n"), failed: false)
         case .failure(let error):
-            show(status: facts + " · " + error.detail, failed: true)
+            show(status: [facts + " · " + error.detail, streamed].compactMap { $0 }.joined(separator: "\n"), failed: true)
         }
         output.text.string = report.output.isEmpty ? "" : PluginDiagnostics.formatted(report.output)
         errors.text.string = report.errorText

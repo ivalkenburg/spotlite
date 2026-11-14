@@ -1,0 +1,24 @@
+{
+  "id": "findfiles",
+  "name": "Find Files",
+  "version": "1.0.0",
+  "description": "Find files by name, showing each as it is found.",
+  "executable": "findfiles.sh",
+  "timeout": 30,
+  "settings": [
+    {
+      "id": "folder", "label": "Search in", "type": "folder", "default": "~",
+      "description": "Only files inside this folder are found."
+    }
+  ],
+  "commands": [
+    {
+      "id": "find",
+      "title": "Find Files",
+      "keyword": "find",
+      "icon": "doc.text.magnifyingglass",
+      "action": { "type": "search", "stream": true, "debounce": 250, "minQuery": 2,
+                  "emptyText": "No files with that name" }
+    }
+  ]
+}
