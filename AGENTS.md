@@ -7,7 +7,7 @@ macOS 26 app launcher (Swift package, AppKit, no Xcode project). Goal #1: fast a
 - `Sources/SpotliteCore`: pure Swift, no AppKit. Matcher, calculator, result assembly, index, preferences. Tested headless in `Tests/SpotliteCoreTests`.
 - `Sources/Spotlite`: AppKit layer (panel, settings, hotkey, launching).
 - Keep logic in Core where possible so it stays testable.
-- Plugins: manifest, store, installer (`PluginInstaller`, `PluginArchive`, `PluginSource`), gallery index (`PluginGallery`) and process runner in Core (`Plugin*.swift`); `PluginHost`, the Settings tab, the install sheet and the gallery sheet in the AppKit layer. API in `docs/plugins.md`, examples in `examples/plugins`.
+- Plugins: manifest, store, installer (`PluginInstaller`, `PluginArchive`, `PluginSource`), gallery index (`PluginGallery`) and process runner in Core (`Plugin*.swift`); `PluginHost`, the Settings tab, the install sheet and the gallery sheet in the AppKit layer. API in `docs/plugins.md`, examples in `plugins`.
 - `plugins/index.json`: the plugin gallery index the app reads from `main` (schema in `docs/plugin-index.schema.json`). Keep its versions in step with the examples' manifests; a test checks.
 
 ## Commands
@@ -56,7 +56,7 @@ make dmg      # build/Spotlite-<version>.dmg
 | `SPOTLITE_DEV_MENU=1` | Exercise Caffeinate durations, Turn Off, navigation and filtering; dump frames and exit |
 | `SPOTLITE_DEV_COMPLETION=1` | Exercise app completion modes, caret and Backspace; dump search and settings frames and exit |
 | `SPOTLITE_DEV_UTILITIES=1` | Exercise conversion cards, UUID actions, Utility settings and visibility; preserve clipboard, dump frames and exit |
-| `SPOTLITE_DEV_PLUGINS=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/examples/plugins`: exercise the Caffeinate and GitHub examples, row accessories, empty text and `sort: false`; dump row frames (starts and stops a real `caffeinate`, needs network); exit |
+| `SPOTLITE_DEV_PLUGINS=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/plugins`: exercise the Caffeinate and GitHub examples, row accessories, empty text and `sort: false`; dump row frames (starts and stops a real `caffeinate`, needs network); exit |
 | `SPOTLITE_DEV_DIAGNOSTICS=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/Tests/Fixtures/Plugins`: exercise run context env, last-run records, Settings → Plugins buttons and the debug runner; dump frames and exit |
 | `SPOTLITE_DEV_STREAM=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/Tests/Fixtures/Plugins`: exercise streamed rows (before exit, selection while appending, Loading…, empty text, failure keeps rows, a keepOpen run replacing them, superseded and abandoned searches, debug runner); time keystrokes on 500 streamed rows; dump frames; exit |
 | `SPOTLITE_DEV_ACTIONS=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/Tests/Fixtures/Plugins` and `SPOTLITE_DEV_PIN=1`: exercise modifier titles, the ⌘K action list, confirmations and closing runs with posted key events; dump frames and exit |

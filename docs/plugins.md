@@ -9,7 +9,7 @@ plugin costs its manifest in memory: no process, timer or watcher.
 Install a plugin in Settings → Plugins from a folder or an address (see
 [Installing](#installing)), or put (or symlink) it in
 `~/Library/Application Support/Spotlite/Plugins/` and choose ⋯ → Reload Plugins. Working examples are
-in [`examples/plugins`](../examples/plugins): Caffeinate, a kubectl context switcher, a
+in [`plugins`](../plugins): Caffeinate, a kubectl context switcher, a
 GitHub repository search and Find Files, which streams.
 
 A plugin runs with your user's permissions. Install only ones you trust.

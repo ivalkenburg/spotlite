@@ -220,9 +220,9 @@ struct PluginGalleryTests {
                 continue
             }
             #expect(owner == "ivalkenburg" && repository == "spotlite" && ref == "main")
-            #expect(subpath == "examples/plugins/\(entry.id)")
+            #expect(subpath == "plugins/\(entry.id)")
             let manifest = url.deletingLastPathComponent().deletingLastPathComponent()
-                .appendingPathComponent("examples/plugins/\(entry.id)/plugin.json")
+                .appendingPathComponent("plugins/\(entry.id)/plugin.json")
             let plugin = try JSONDecoder().decode(PluginManifest.self, from: Data(contentsOf: manifest))
             #expect(plugin.version == entry.version, "\(entry.id) lists \(entry.version), its manifest \(plugin.version ?? "none")")
             #expect(plugin.name == entry.name)

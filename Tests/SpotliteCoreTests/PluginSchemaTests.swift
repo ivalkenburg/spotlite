@@ -24,7 +24,7 @@ import Testing
 
     static func manifestFolders() throws -> [URL] {
         let files = FileManager.default
-        return try ["examples/plugins", "Tests/Fixtures/Plugins"].flatMap { parent in
+        return try ["plugins", "Tests/Fixtures/Plugins"].flatMap { parent in
             try files.contentsOfDirectory(at: root.appendingPathComponent(parent), includingPropertiesForKeys: nil)
                 .filter { files.fileExists(atPath: $0.appendingPathComponent(PluginStore.manifestName).path) }
         }
@@ -56,7 +56,7 @@ import Testing
 
     @Test func examplesPointAtTheSchema() throws {
         let id = try #require(try Self.schema("plugin.schema.json")["$id"] as? String)
-        for folder in try Self.manifestFolders() where folder.path.contains("/examples/") {
+        for folder in try Self.manifestFolders() where folder.path.contains("/plugins/") {
             let data = try Data(contentsOf: folder.appendingPathComponent(PluginStore.manifestName))
             let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
             #expect(object["$schema"] as? String == id, "\(folder.lastPathComponent)")

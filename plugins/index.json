@@ -8,8 +8,8 @@
       "description": "Keep the display awake for a while, or until turned off.",
       "author": "Spotlite",
       "version": "1.0.0",
-      "source": "https://github.com/ivalkenburg/spotlite/tree/main/examples/plugins/caffeinate",
-      "homepage": "https://github.com/ivalkenburg/spotlite/tree/main/examples/plugins/caffeinate",
+      "source": "https://github.com/ivalkenburg/spotlite/tree/main/plugins/caffeinate",
+      "homepage": "https://github.com/ivalkenburg/spotlite/tree/main/plugins/caffeinate",
       "icon": "cup.and.saucer",
       "tags": [
         "power",
@@ -23,8 +23,8 @@
       "description": "Find files by name, showing each as it is found.",
       "author": "Spotlite",
       "version": "1.0.0",
-      "source": "https://github.com/ivalkenburg/spotlite/tree/main/examples/plugins/findfiles",
-      "homepage": "https://github.com/ivalkenburg/spotlite/tree/main/examples/plugins/findfiles",
+      "source": "https://github.com/ivalkenburg/spotlite/tree/main/plugins/findfiles",
+      "homepage": "https://github.com/ivalkenburg/spotlite/tree/main/plugins/findfiles",
       "icon": "doc.text.magnifyingglass",
       "tags": [
         "files",
@@ -38,8 +38,8 @@
       "description": "Search GitHub repositories and open one in the browser.",
       "author": "Spotlite",
       "version": "1.2.0",
-      "source": "https://github.com/ivalkenburg/spotlite/tree/main/examples/plugins/github",
-      "homepage": "https://github.com/ivalkenburg/spotlite/tree/main/examples/plugins/github",
+      "source": "https://github.com/ivalkenburg/spotlite/tree/main/plugins/github",
+      "homepage": "https://github.com/ivalkenburg/spotlite/tree/main/plugins/github",
       "icon": "chevron.left.forwardslash.chevron.right",
       "tags": [
         "github",
@@ -53,8 +53,8 @@
       "description": "Switch the current kubectl context.",
       "author": "Spotlite",
       "version": "1.0.1",
-      "source": "https://github.com/ivalkenburg/spotlite/tree/main/examples/plugins/kubectx",
-      "homepage": "https://github.com/ivalkenburg/spotlite/tree/main/examples/plugins/kubectx",
+      "source": "https://github.com/ivalkenburg/spotlite/tree/main/plugins/kubectx",
+      "homepage": "https://github.com/ivalkenburg/spotlite/tree/main/plugins/kubectx",
       "icon": "shippingbox",
       "tags": [
         "kubernetes",

@@ -2435,7 +2435,7 @@ extension SpotliteController {
         print("DEV settings: Search page=\(page.frame) back-query picker=\(pickerFrame)")
     }
 
-    /// SPOTLITE_DEV_PLUGINS=1 with SPOTLITE_DEV_PLUGINS_DIR=examples/plugins: finds the
+    /// SPOTLITE_DEV_PLUGINS=1 with SPOTLITE_DEV_PLUGINS_DIR=plugins: finds the
     /// example Caffeinate plugin by keyword, loads and filters its list, starts and stops a
     /// session through it, and runs one GitHub search when the network answers.
     func runDevPluginChecks() async throws {
