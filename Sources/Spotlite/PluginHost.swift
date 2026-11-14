@@ -47,6 +47,32 @@ final class PluginHost {
         }
     }
 
+    /// Where plugins installed from an address record their source.
+    private(set) lazy var sources: PluginSourceStore = {
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        if environment["SPOTLITE_DEV_PLUGINS_DIR"] != nil || environment["SPOTLITE_DEV_PLUGIN_SOURCES_DIR"] != nil {
+            // Dev runs keep source records away from the real ones.
+            return PluginSourceStore(directory: URL(fileURLWithPath: environment["SPOTLITE_DEV_PLUGIN_SOURCES_DIR"]
+                ?? NSTemporaryDirectory() + "spotlite-dev-plugin-sources", isDirectory: true))
+        }
+        #endif
+        return PluginSourceStore()
+    }()
+
+    #if DEBUG
+    /// Dev checks serve archives from disk instead of the network.
+    var devLoader: (any PluginDownloading)?
+    #endif
+
+    /// Installs into this host's folder. Made per use: it holds no state between installs.
+    func installer() -> PluginInstaller {
+        #if DEBUG
+        if let devLoader { return PluginInstaller(pluginsDirectory: pluginsDirectory, sources: sources, loader: devLoader) }
+        #endif
+        return PluginInstaller(pluginsDirectory: pluginsDirectory, sources: sources)
+    }
+
     private static var defaultDirectory: URL {
         #if DEBUG
         if let override = ProcessInfo.processInfo.environment["SPOTLITE_DEV_PLUGINS_DIR"] {

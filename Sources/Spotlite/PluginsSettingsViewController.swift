@@ -1,8 +1,9 @@
 import AppKit
 import SpotliteCore
 
-/// Installed plugins: switch one off, install from a folder, remove, or reload after
-/// editing one. A plugin that cannot be used is listed with the reason.
+/// Installed plugins: switch one off, install from a folder or an address, check for
+/// updates, remove, or reload after editing one. A plugin that cannot be used is listed
+/// with the reason.
 @MainActor
 final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDataSource, NSTableViewDelegate {
     private let table = NSTableView()
@@ -14,7 +15,14 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
     private let emptyLabel = SettingsForm.hint("No plugins installed.")
     private let lastRunTitle = NSTextField(labelWithString: "Last run")
     private let lastRun = NSTextView.scrollableTextView()
+    private let sourceLabel = NSTextField(labelWithString: "")
+    private let updatesButton = NSButton(title: "Check for Updates", target: nil, action: nil)
     private var plugins: [InstalledPlugin] = []
+    /// Read with the list, only while Settings shows it.
+    private var sources: [String: PluginSourceRecord] = [:]
+    /// Found by the last check, in memory: nothing checks on its own.
+    private var availableUpdates: [String: String?] = [:]
+    private var installController: PluginInstallWindowController?
     private var configurationController: PluginConfigurationWindowController?
     private var runnerController: PluginDebugRunnerWindowController?
 
@@ -38,8 +46,16 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
         scroll.addSubview(emptyLabel)
 
-        let install = button("Install…", #selector(installClicked))
-        install.toolTip = "Choose a folder that contains a plugin.json"
+        let install = NSPopUpButton(frame: .zero, pullsDown: true)
+        install.addItem(withTitle: "Install")
+        for (title, action, tip) in [("From Folder…", #selector(installClicked), "Choose a folder that contains a plugin.json"),
+                                     ("From URL…", #selector(installFromURLClicked), "A GitHub repository, an https .zip or a git address")] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.toolTip = tip
+            install.menu?.addItem(item)
+        }
+        install.setAccessibilityLabel("Install")
         removeButton.target = self
         removeButton.action = #selector(removeClicked)
         removeButton.bezelStyle = .rounded
@@ -68,6 +84,20 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
         let utilities = NSStackView(views: [reloadButton, folder, utilitySpacer, revealButton, dataButton])
         utilities.orientation = .horizontal
         utilities.spacing = 8
+        sourceLabel.font = .systemFont(ofSize: 11)
+        sourceLabel.textColor = .secondaryLabelColor
+        sourceLabel.lineBreakMode = .byTruncatingMiddle
+        sourceLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        sourceLabel.setAccessibilityLabel("Source")
+        updatesButton.target = self
+        updatesButton.action = #selector(checkUpdatesClicked)
+        updatesButton.bezelStyle = .rounded
+        updatesButton.toolTip = "Ask each plugin’s source for a newer version. Spotlite never checks on its own."
+        let originSpacer = NSView()
+        originSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let origin = NSStackView(views: [sourceLabel, originSpacer, updatesButton])
+        origin.orientation = .horizontal
+        origin.spacing = 8
 
         lastRunTitle.font = .systemFont(ofSize: 11, weight: .semibold)
         lastRunTitle.textColor = .secondaryLabelColor
@@ -87,15 +117,15 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
             "Plugins add commands to search. A plugin is a program that runs with your permissions when you use it: install only ones you trust.")
         caption.preferredMaxLayoutWidth = SettingsForm.width - 40
 
-        let stack = NSStackView(views: [scroll, buttons, utilities, lastRunTitle, lastRun, caption])
+        let stack = NSStackView(views: [scroll, buttons, utilities, origin, lastRunTitle, lastRun, caption])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
         stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
-        stack.setCustomSpacing(14, after: utilities)
+        stack.setCustomSpacing(14, after: origin)
         stack.setCustomSpacing(4, after: lastRunTitle)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        for fullWidth in [scroll, buttons, utilities, lastRunTitle, lastRun, caption] as [NSView] {
+        for fullWidth in [scroll, buttons, utilities, origin, lastRunTitle, lastRun, caption] as [NSView] {
             fullWidth.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
         }
         NSLayoutConstraint.activate([
@@ -118,6 +148,10 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
     func reload() {
         guard isViewLoaded else { return }
         plugins = PluginHost.shared.plugins
+        let store = PluginHost.shared.sources
+        sources = Dictionary(plugins.compactMap { plugin in store.load(for: plugin.id).map { (plugin.id, $0) } },
+                             uniquingKeysWith: { first, _ in first })
+        updatesButton.isEnabled = !sources.isEmpty
         table.reloadData()
         emptyLabel.isHidden = !plugins.isEmpty
         updateRemoveButton()
@@ -135,7 +169,30 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
             && selected?.manifest?.commands.contains { PluginRunAction($0.action) != nil } == true
         revealButton.isEnabled = selected != nil
         dataButton.isEnabled = selected?.isUsable == true
+        showSource()
         showLastRun()
+    }
+
+    /// Where the selected plugin came from, which decides whether it can be updated.
+    private func showSource() {
+        guard let plugin = selectedPlugin else {
+            sourceLabel.stringValue = sources.isEmpty ? "" : "Select a plugin to see its source."
+            sourceLabel.toolTip = nil
+            return
+        }
+        if PluginInstaller.isLinked(plugin) {
+            let target = (try? FileManager.default.destinationOfSymbolicLink(atPath: plugin.directory.path)) ?? ""
+            sourceLabel.stringValue = "Linked folder " + (target as NSString).abbreviatingWithTildeInPath
+        } else if let record = sources[plugin.id] {
+            var parts = ["Source: " + record.address]
+            if let commit = record.commit { parts.append(String(commit.prefix(7))) }
+            parts.append("Installed " + record.installedAt.formatted(date: .abbreviated, time: .omitted))
+            if let update = availableUpdates[plugin.id] { parts.append("Update available: " + (update ?? "new version")) }
+            sourceLabel.stringValue = parts.joined(separator: " · ")
+        } else {
+            sourceLabel.stringValue = "Installed from a folder, so it has no update check."
+        }
+        sourceLabel.toolTip = sourceLabel.stringValue
     }
 
     /// The selected plugin's last run since launch, from the host's memory.
@@ -166,7 +223,7 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
     }
 
     func configure(pluginID: String) {
-        guard let window = view.window, configurationController == nil, runnerController == nil,
+        guard let window = view.window, configurationController == nil, runnerController == nil, installController == nil,
               let row = plugins.firstIndex(where: { $0.id == pluginID && $0.isUsable }),
               plugins[row].manifest?.settings.isEmpty == false else { return }
         table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
@@ -182,7 +239,7 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
     }
 
     @objc private func runClicked() {
-        guard let window = view.window, runnerController == nil, configurationController == nil,
+        guard let window = view.window, runnerController == nil, configurationController == nil, installController == nil,
               let plugin = selectedPlugin, plugin.isUsable else { return }
         let runner = PluginDebugRunnerWindowController(plugin: plugin)
         runnerController = runner
@@ -232,6 +289,39 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
         }
     }
 
+    @objc private func installFromURLClicked() {
+        present(.address)
+    }
+
+    @objc private func checkUpdatesClicked() {
+        present(.checkUpdates(plugins.filter { sources[$0.id] != nil && !PluginInstaller.isLinked($0) }))
+    }
+
+    /// The address flow in one sheet: what it installs, Settings shows as a folder install.
+    @discardableResult
+    func present(_ start: PluginInstallWindowController.Start) -> PluginInstallWindowController? {
+        guard let window = view.window, installController == nil, configurationController == nil,
+              runnerController == nil else { return nil }
+        let controller = PluginInstallWindowController(installer: PluginHost.shared.installer(), start: start)
+        controller.onInstalled = { [weak self] installed in
+            self?.availableUpdates[installed.id] = nil
+            self?.installed(installed)
+        }
+        controller.onChecked = { [weak self] checks in
+            guard let self else { return }
+            for check in checks {
+                if case .available(let version) = check.status { self.availableUpdates[check.pluginID] = .some(version) }
+                else { self.availableUpdates[check.pluginID] = nil }
+            }
+            self.showSource()
+        }
+        installController = controller
+        guard let sheet = controller.window else { installController = nil; return nil }
+        // Dropping the controller cancels whatever it was downloading.
+        window.beginSheet(sheet) { [weak self] _ in self?.installController = nil }
+        return controller
+    }
+
     private func install(from url: URL) {
         let candidate = PluginStore.load(url)
         guard candidate.isUsable else {
@@ -257,13 +347,20 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
     private func finishInstall(from url: URL) {
         do {
             let installed = try PluginStore.install(from: url, into: PluginHost.shared.pluginsDirectory)
-            pluginsChanged()
-            if let row = plugins.firstIndex(where: { $0.id == installed.id }) {
-                table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-                table.scrollRowToVisible(row)
-            }
+            // A folder replaces whatever an address installed: it has no source to check.
+            PluginHost.shared.sources.remove(for: installed.id)
+            availableUpdates[installed.id] = nil
+            self.installed(installed)
         } catch {
             alert("Couldn’t install the plugin", error.message)
+        }
+    }
+
+    private func installed(_ plugin: InstalledPlugin) {
+        pluginsChanged()
+        if let row = plugins.firstIndex(where: { $0.id == plugin.id }) {
+            table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            table.scrollRowToVisible(row)
         }
     }
 
@@ -289,8 +386,12 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
             PluginHost.shared.reload()
             // A plugin installed again later starts enabled. A twin that still uses the
             // id keeps its switch.
-            if !PluginHost.shared.plugins.contains(where: { $0.id == plugin.id }),
-               self.model.preferences.disabledPlugins.remove(plugin.id) != nil {
+            let gone = !PluginHost.shared.plugins.contains(where: { $0.id == plugin.id })
+            if gone {
+                PluginHost.shared.sources.remove(for: plugin.id)
+                self.availableUpdates[plugin.id] = nil
+            }
+            if gone, self.model.preferences.disabledPlugins.remove(plugin.id) != nil {
                 // Search takes the change with the preferences.
                 self.model.persist()
             } else {

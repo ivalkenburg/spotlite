@@ -5,12 +5,57 @@ executable in any language. Spotlite starts the executable only when one of the 
 commands is used, and reads one JSON object from its standard output. Between uses a
 plugin costs its manifest in memory: no process, timer or watcher.
 
-Install a plugin folder in Settings → Plugins, or put (or symlink) it in
+Install a plugin in Settings → Plugins from a folder or an address (see
+[Installing](#installing)), or put (or symlink) it in
 `~/Library/Application Support/Spotlite/Plugins/` and press Reload. Working examples are
 in [`examples/plugins`](../examples/plugins): Caffeinate, a kubectl context switcher and a
 GitHub repository search.
 
 A plugin runs with your user's permissions. Install only ones you trust.
+
+## Installing
+
+Install → From Folder… copies a plugin folder. Install → From URL… takes an address:
+
+| Address | |
+| --- | --- |
+| `https://github.com/owner/repo` | The repository's default branch; `plugin.json` at its top |
+| `https://github.com/owner/repo/tree/<ref>/<folder>` | A branch, tag or commit, and the plugin's folder in it. A ref containing `/` (`feat/x`) is found by trying each split. A `…/blob/<ref>/<folder>/plugin.json` link works too. |
+| `https://example.com/plugin.zip` | A zip archive with `plugin.json` at its top or in its single top folder |
+| `https://example.com/plugin.git#<ref>` | Cloned with `git clone --depth 1`; the optional ref is a branch or tag |
+
+Only `https` is accepted, redirects included. GitHub addresses download GitHub's zip of
+the ref, so they need no git. A `.git` address needs git from Xcode, the Command Line
+Tools or Homebrew; Spotlite never runs `/usr/bin/git`, which would offer to install the
+tools. Only public repositories work: no credentials are sent or asked for.
+
+The download goes to a temporary folder, is checked, and is shown before anything is
+installed. A download over 50 MB, an archive that expands past 200 MB or holds more than
+10,000 items, an entry with an absolute path or `..`, a link that resolves outside the
+plugin's folder, an encrypted or ZIP64 archive, and a folder without a valid
+`plugin.json` are all refused, and the temporary folder is removed. Executable bits are
+kept.
+
+The confirmation lists the name, id, version, author, description, source, each command
+with its action type, the executable and the declared settings. When the id is already
+installed it offers Update (with the old and new version) or Reinstall. Replacing is
+atomic: if anything fails, the installed copy stays. Settings, secrets and
+`SPOTLITE_PLUGIN_DATA` are kept. A plugin whose folder is a symbolic link (a checkout
+under development) is never replaced; update the checkout instead.
+
+A plugin installed from an address keeps a source record in
+`~/Library/Application Support/Spotlite/PluginSources/<id>.json`: the address, the ref,
+the commit when GitHub reports it, and the installed version and date. Settings shows it
+below the buttons. A plugin installed from a folder, or linked, has none, and installing
+it from a folder later removes the record, as does removing the plugin.
+
+Check for Updates asks each recorded source for its version, only when clicked: Spotlite
+never checks on its own. A GitHub source is checked by fetching its `plugin.json` alone
+(GitHub's raw files may lag a push by a few minutes); a zip or git source is downloaded
+again and discarded. Versions compare as semantic versions (`1.10` is newer than `1.9`,
+`1.0.0-beta` precedes `1.0.0`, a leading `v` and `+build` are ignored); a version that is
+not one is offered as an update whenever it differs. Update… goes through the same
+confirmation.
 
 ## Manifest
 
