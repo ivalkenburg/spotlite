@@ -101,6 +101,10 @@ public struct PluginItem: Sendable, Equatable, Decodable {
     /// An SF Symbol name, an image file, or any other file whose Finder icon to show.
     public let icon: String?
     public let action: PluginAction?
+    /// Asks before `action` runs.
+    public let confirm: PluginConfirmation?
+    /// Other things the row can do, by a modifier with Return or from the action list.
+    public let actions: [PluginSecondaryAction]
 
     /// A response larger than this is cut off: nobody scrolls further, and each row
     /// costs matching metadata.
@@ -108,10 +112,11 @@ public struct PluginItem: Sendable, Equatable, Decodable {
     /// Each keyword is matched like a title, so a row's are capped as its count is.
     public static let maxKeywords = 8
 
-    private enum CodingKeys: String, CodingKey { case id, title, subtitle, accessory, keywords, icon, action }
+    private enum CodingKeys: String, CodingKey { case id, title, subtitle, accessory, keywords, icon, action, actions }
 
     public init(id: String? = nil, title: String, subtitle: String? = nil, accessory: String? = nil,
-                keywords: [String] = [], icon: String? = nil, action: PluginAction? = nil) {
+                keywords: [String] = [], icon: String? = nil, action: PluginAction? = nil,
+                confirm: PluginConfirmation? = nil, actions: [PluginSecondaryAction] = []) {
         self.id = id ?? title
         self.title = title
         self.subtitle = subtitle
@@ -119,17 +124,22 @@ public struct PluginItem: Sendable, Equatable, Decodable {
         self.keywords = Array(keywords.lazy.filter { !$0.allSatisfy(\.isWhitespace) }.prefix(PluginItem.maxKeywords))
         self.icon = icon
         self.action = action
+        self.confirm = action == nil ? nil : confirm
+        self.actions = Array(actions.prefix(PluginSecondaryAction.maxCount))
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let title = try c.decode(String.self, forKey: .title)
+        // A malformed `confirm` drops the row: running it unasked is worse than not at all.
         self.init(id: try c.decodeIfPresent(String.self, forKey: .id), title: title,
                   subtitle: try c.decodeIfPresent(String.self, forKey: .subtitle),
                   accessory: try c.decodeIfPresent(String.self, forKey: .accessory),
                   keywords: try c.decodeIfPresent([String].self, forKey: .keywords) ?? [],
                   icon: try c.decodeIfPresent(String.self, forKey: .icon),
-                  action: try c.decodeIfPresent(PluginAction.self, forKey: .action))
+                  action: try c.decodeIfPresent(PluginAction.self, forKey: .action),
+                  confirm: try c.decodeIfPresent(PluginConfirmKey.self, forKey: .action)?.confirm,
+                  actions: PluginSecondaryAction.decodeList(from: c, forKey: .actions))
     }
 
     /// Per element, so one malformed row does not empty the list.
@@ -157,6 +167,24 @@ public struct PluginCommand: Sendable, Equatable, Decodable {
     public let subtitle: String?
     public let icon: String?
     public let action: PluginAction
+    /// Asks before `action` runs.
+    public let confirm: PluginConfirmation?
+    /// Other things the command does, by a modifier with Return or from the action list.
+    public let actions: [PluginSecondaryAction]
+
+    private enum CodingKeys: String, CodingKey { case id, title, keyword, subtitle, icon, action, actions }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        keyword = try c.decodeIfPresent(String.self, forKey: .keyword)
+        subtitle = try c.decodeIfPresent(String.self, forKey: .subtitle)
+        icon = try c.decodeIfPresent(String.self, forKey: .icon)
+        action = try c.decode(PluginAction.self, forKey: .action)
+        confirm = try c.decode(PluginConfirmKey.self, forKey: .action).confirm
+        actions = PluginSecondaryAction.decodeList(from: c, forKey: .actions)
+    }
 }
 
 /// `plugin.json` at the root of a plugin's folder.

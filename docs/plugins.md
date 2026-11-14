@@ -142,7 +142,8 @@ A command and every row carry one action, which is what Return does.
 | `{"type":"run","args":[…],"keepOpen":false}` | Runs and applies the response; with `keepOpen` the panel stays and the list reloads | once |
 
 Tab also enters `menu`, `list` and `search`. Backspace on an empty query or Shift-Tab goes
-back. ⌥↩ on a row whose action is `open` copies its address.
+back. ⌥↩ on a row whose action is `open` copies its address, unless the row binds ⌥ itself
+(see [Other actions](#other-actions)).
 
 `list`, `search` and `menu` also take:
 
@@ -150,6 +151,56 @@ back. ⌥↩ on a row whose action is `open` copies its address.
 | --- | --- |
 | `emptyText` | Shown when the level has no rows: nothing came back, or typing filtered every row out. A `search` also shows it while the query is shorter than `minQuery`. Default: “No results”, and nothing below `minQuery`. Nothing shows while the first answer is still loading. |
 | `sort` | `list` and `menu` only. `false` keeps matches in the plugin's order; typing still narrows the rows. Default `true`, best match first. |
+
+### Other actions
+
+A command or a row can offer more than Return's action. `actions` lists them, each with a
+`title`, any `action` above, an optional SF Symbol `icon` and an optional `shortcut`:
+
+```json
+{ "title": "octo/app", "action": { "type": "open", "url": "https://github.com/octo/app" },
+  "actions": [
+    { "title": "Copy Clone URL", "shortcut": "cmd", "icon": "doc.on.doc",
+      "action": { "type": "copy", "text": "https://github.com/octo/app.git" } },
+    { "title": "Open Issues",
+      "action": { "type": "open", "url": "https://github.com/octo/app/issues" } }
+  ] }
+```
+
+`shortcut` is a modifier held with Return: `cmd`, `opt`, `shift` or `ctrl`, or several
+joined by `+`, such as `cmd+shift`. While it is held, the selected row shows the action's
+title. Only the exact chord matches. The first action to claim a chord gets it; a later one
+is still listed without it. An action without a `shortcut` is reached only from the action
+list. A declared `opt` replaces the built-in ⌥↩ copy.
+
+⌘K opens the selected row's action list: Return's action first, then the others in order,
+each with its key, then the built-in Copy Link on an `open` row. Typing filters it, Return
+or a click runs one, and Escape, Backspace on an empty query, Shift-Tab or ⌘K again goes back
+to the rows with the query and selection as they were. An action that enters a level goes
+back to the row, not to the list.
+
+At most 16 actions are read. An action that is malformed (no title, an unknown action type
+or `shortcut`) is skipped alone; `actions` inside an action are ignored. On rows without an
+`action`, the list still offers the others.
+
+### Confirmation
+
+Any action can ask before it runs with `confirm`, a question or an object:
+
+```json
+{ "type": "run", "args": ["delete", "main"], "keepOpen": true,
+  "confirm": { "title": "Delete branch main?", "message": "It is not merged.",
+               "button": "Delete", "destructive": true } }
+```
+
+`"confirm": "Delete branch main?"` is the short form. The question takes the place of the
+rows inside the panel: the chip asks it, the first row is the button (default “Confirm”)
+with the `message` beside it, and the second is Cancel. Return or a click on the button runs
+the action; Escape, Cancel, Backspace or Shift-Tab goes back to the rows. A Return still held
+from the row that asked does not answer it. `destructive` marks the button with a warning
+icon. A `confirm` that is not a nonempty string or an object with a `title` drops the row
+or action that carries it, rather than running it unasked; on a manifest command it makes
+the manifest invalid.
 
 ## Running
 
@@ -233,6 +284,8 @@ One JSON object on standard output. Every key is optional and printing nothing i
   strings, also find the row when typing filters it; a title match ranks above a
   keyword-only one. The same keys work on `menu` items. A row whose keys have the wrong
   type is skipped.
+- `actions` and `confirm` work on rows as on commands; see [Other actions](#other-actions)
+  and [Confirmation](#confirmation).
 - `toast`: a string, or an object. `"style":"failure"` shows even when confirmation
   messages are off.
 - `update`: changes how one of the plugin's commands looks in root results, until

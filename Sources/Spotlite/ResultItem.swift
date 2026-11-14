@@ -27,6 +27,17 @@ enum ResultItem {
         }
     }
 
+    /// Return's action and the others a plugin row or command declares. Nil for every
+    /// other row, and for the action list's and a confirmation's own rows.
+    var pluginActions: PluginActionSet? {
+        switch self {
+        case .plugin(let item, let context) where context.key == nil: PluginActionSet(item)
+        case .app(let match) where match.entry.kind == .plugin:
+            PluginHost.shared.command(forEntryID: match.entry.id).map { PluginActionSet($0.command) }
+        default: nil
+        }
+    }
+
     init(_ result: SearchResult, caffeine: CaffeineState) {
         switch result {
         case .app(let match): self = .app(match)
@@ -158,10 +169,9 @@ enum ResultItem {
         if case .menuItem(let item, _) = self, case .generateUUID = item.action {
             return [Hint(text: "Copy UUID", key: "↩")]
         }
-        if case .plugin(let item, _) = self {
-            if modifiers.contains(.option), case .open = item.action {
-                return [Hint(text: "Copy Link", key: "⌥↩")]
-            }
+        if case .plugin(let item, let context) = self {
+            if context.key != nil { return restingHints }
+            if let entry = pluginEntry(for: modifiers) { return [Hint(text: entry.title, key: entry.keyText)] }
             return ResultItem.pluginHints(subtitle: item.subtitle, accessory: item.accessory, action: item.action)
         }
         guard case .app(let match) = self else { return [] }
@@ -170,10 +180,9 @@ enum ResultItem {
         case .app:
             break
         case .plugin:
-            if modifiers.contains(.command) { return [Hint(text: "Hide", key: "⌘⌫")] }
-            if modifiers.contains(.option), case .open = pluginAction {
-                return [Hint(text: "Copy Link", key: "⌥↩")]
-            }
+            let bound = pluginEntry(for: modifiers).map { [Hint(text: $0.title, key: $0.keyText)] } ?? []
+            if modifiers.contains(.command) { return bound + [Hint(text: "Hide", key: "⌘⌫")] }
+            if !bound.isEmpty { return bound }
             return ResultItem.pluginHints(
                 subtitle: PluginHost.shared.subtitle(forEntryID: entry.id),
                 action: PluginHost.shared.command(forEntryID: entry.id)?.command.action)
@@ -217,10 +226,22 @@ enum ResultItem {
         return (text.isEmpty ? [] : [Hint(text: text, key: nil)]) + [Hint(text: accessory, key: key, isAccessory: true)]
     }
 
-    /// What an unselected row shows at its right: only a plugin row's accessory.
+    /// The plugin action bound to the modifiers held, if any. Built only while one is
+    /// held, and only for the selected row.
+    private func pluginEntry(for modifiers: NSEvent.ModifierFlags) -> PluginActionEntry? {
+        let shortcut = PluginShortcut(modifiers)
+        guard !shortcut.isEmpty else { return nil }
+        return pluginActions?.entry(for: shortcut)
+    }
+
+    /// What an unselected row shows at its right: only a plugin row's accessory. The
+    /// action list's and a confirmation's rows show their keys too, selected or not.
     var restingHints: [Hint] {
-        guard case .plugin(let item, _) = self, let accessory = item.accessory else { return [] }
-        return [Hint(text: accessory, key: nil, isAccessory: true)]
+        guard case .plugin(let item, let context) = self else { return [] }
+        guard let key = context.key else {
+            return item.accessory.map { [Hint(text: $0, key: nil, isAccessory: true)] } ?? []
+        }
+        return [Hint(text: item.accessory ?? "", key: key, isAccessory: item.accessory != nil)]
     }
 
     /// Running instances of this row's app, matched by bundle location rather than

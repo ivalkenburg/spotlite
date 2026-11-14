@@ -97,6 +97,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return
         }
+        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_ACTIONS"] == "1" {
+            Task { @MainActor in
+                do {
+                    try await self.controller.runDevPluginActionChecks()
+                    exit(0)
+                } catch {
+                    print("DEV actions failed: \(error)")
+                    exit(1)
+                }
+            }
+            return
+        }
         if ProcessInfo.processInfo.environment["SPOTLITE_DEV_FOCUS"] == "1" {
             let previousApplication = NSWorkspace.shared.frontmostApplication
             Task { @MainActor in

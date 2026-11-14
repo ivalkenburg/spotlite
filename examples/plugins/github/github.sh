@@ -30,7 +30,12 @@ jq '
       subtitle: .language,
       accessory: "★ \(.stargazers_count | short)",
       icon: (if .private then "lock" elif .fork then "arrow.triangle.branch" else "book.closed" end),
-      action: {type: "open", url: .html_url}
+      action: {type: "open", url: .html_url},
+      # ⌥↩ copies the link, as on any row that opens an address; ⌘K lists all of these.
+      actions: [
+        {title: "Copy Clone URL", shortcut: "cmd", icon: "doc.on.doc", action: {type: "copy", text: .clone_url}},
+        {title: "Open Issues", icon: "exclamationmark.bubble", action: {type: "open", url: "\(.html_url)/issues"}}
+      ]
     }]
   } else {
     items: [{title: (.message // "GitHub did not answer"), icon: "exclamationmark.triangle"}]

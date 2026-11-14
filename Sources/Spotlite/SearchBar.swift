@@ -225,6 +225,9 @@ final class SearchBar {
     }
 
     #if DEBUG
+    /// The chip's text while it shows, for dev checks.
+    var chipTitle: String? { chip.isHidden ? nil : chipLabel.stringValue }
+
     func dumpFrames(_ tag: String) {
         print("[\(tag)] completion=\(completion.frame) text=\(completionLabel.stringValue) hidden=\(completion.isHidden) iconHidden=\(barIcon.isHidden)")
         print("[\(tag)] field=\(field.frame) chip=\(chip.frame) chipHidden=\(chip.isHidden)")

@@ -76,6 +76,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private var pluginDebounce: DispatchWorkItem?
     /// The row to return to once a parent level's list has loaded again.
     private var pluginPendingSelection: (id: String, style: Selection)?
+    /// The action list or a confirmation while one shows.
+    private var pluginOverlay: PluginOverlay?
     /// The query before the latest edit, to tell typing from deleting.
     private var lastQuery = ""
     /// The query at the last close, offered back on a quick reopen.
@@ -152,7 +154,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
         field.delegate = self
         field.onCommandDigit = { [weak self] index in self?.launch(at: index) }
-        field.onCommandReturn = { [weak self] in self?.revealInFinder() }
+        field.onCommandReturn = { [weak self] modifiers in self?.commandReturn(modifiers) ?? false }
+        field.onCommandK = { [weak self] in self?.togglePluginActions() ?? false }
         field.onCommandQ = { [weak self] in self?.quitApp() }
         field.onUndoHide = { [weak self] in self?.undoHide() ?? false }
 
@@ -474,7 +477,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// Scripted dev runs press Return on utilities; they must not train the real history.
     private let recordsUtilityUse: Bool = {
         let environment = ProcessInfo.processInfo.environment
-        return ["FRAMES", "SEQUENCE", "MENU", "COMPLETION", "UTILITIES", "PLUGINS", "REGRESSIONS", "CONFIGURATION"].allSatisfy {
+        return ["FRAMES", "SEQUENCE", "MENU", "COMPLETION", "UTILITIES", "PLUGINS", "REGRESSIONS", "CONFIGURATION", "ACTIONS"].allSatisfy {
             environment["SPOTLITE_DEV_\($0)"] != "1"
         }
     }()
@@ -570,9 +573,13 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                 ?? scope.source.emptyText(query: query, loaded: pluginLoaded).map(Self.pluginEmptyRow) {
                 return [.plugin(status, PluginRowContext(plugin: plugin, completes: false))]
             }
+            // The action list's and a confirmation's rows complete nothing and show their keys.
+            let keys = pluginOverlay?.keys
             return rows.map { index in
-                .plugin(pluginList.items[index], PluginRowContext(plugin: plugin, completes: !scope.source.isSearch,
-                                                                 occurrence: pluginList.occurrence(at: index)))
+                .plugin(pluginList.items[index], PluginRowContext(
+                    plugin: plugin, completes: keys == nil && !scope.source.isSearch,
+                    occurrence: pluginList.occurrence(at: index),
+                    key: keys.flatMap { $0.indices.contains(index) ? $0[index] : nil }))
             }
         case .menu(let menu):
             if let utility = SearchUtility(rawValue: menu.id), preferences.hiddenUtilities.contains(utility) {
@@ -705,13 +712,24 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         case #selector(NSResponder.insertBacktab(_:)):
             leaveScope(); return true
         case #selector(NSResponder.insertNewline(_:)):
-            if argument != nil { openArgument() } else { launch(at: cursor) }
+            // A Return still held from the row that asked must not answer the question.
+            if case .confirm = pluginOverlay?.kind, NSApp.currentEvent?.isARepeat == true { return true }
+            if argument != nil { openArgument(); return true }
+            // Shift and Control run Return's action unless a plugin row binds them.
+            let modifiers = returnModifiers
+            if modifiers.isEmpty || !performPluginShortcut(modifiers) { launch(at: cursor) }
             return true
         case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
             // Option-Return arrives as this, not as insertNewline.
-            copyPath(); return true
+            if !performPluginShortcut(returnModifiers.union(.option)) { copyPath() }
+            return true
+        case #selector(NSResponder.insertLineBreak(_:)):
+            // Control-Return arrives as this. Only a plugin gives it a meaning.
+            return performPluginShortcut(returnModifiers.union(.control))
         case #selector(NSResponder.cancelOperation(_:)):
-            hide(); return true
+            // Escape closes the action list or a question before the panel.
+            if !leavePluginOverlay() { hide() }
+            return true
         case #selector(NSResponder.deleteBackward(_:)):
             if navigation.canGoBack, field.stringValue.isEmpty {
                 leaveScope(); return true
@@ -821,14 +839,14 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             guard let url = engine.url(for: query) else { return }
             NSWorkspace.shared.open(url)
 
-        case .plugin(let item, let context):
-            performPlugin(item.action, plugin: context.plugin, title: item.title, icon: item.icon,
-                          historyID: nil, commandID: pluginScope?.commandID ?? "")
+        case .plugin(let item, _) where pluginOverlay != nil:
+            performOverlayRow(item)
+
+        case .plugin:
+            launchPlugin(at: index)
 
         case .app(let match) where match.entry.kind == .plugin:
-            guard let (plugin, command) = plugins.command(forEntryID: match.entry.id) else { return }
-            performPlugin(command.action, plugin: plugin, title: command.title, icon: command.icon,
-                          historyID: match.entry.id, commandID: command.id)
+            launchPlugin(at: index)
 
         case .app(let match) where match.entry.kind == .settingsPane:
             hide()
@@ -903,6 +921,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     private func leaveScope() {
+        if leavePluginOverlay() { return }
         guard let parent = navigation.back(behavior: preferences.backNavigationBehavior) else { return }
         pluginActionGeneration &+= 1
         updateScopeChip()
@@ -942,6 +961,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     private func resetNavigation() {
         pluginActionGeneration &+= 1
+        pluginOverlay = nil
         navigation.reset()
         bar.hideChip()
         loadPluginScope()
@@ -949,19 +969,28 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     // MARK: - Plugins
 
-    /// `historyID` is a root command's entry id; rows inside a plugin learn no history.
-    /// `commandID` is the manifest command the user started from, at any depth.
-    private func performPlugin(_ action: PluginAction?, plugin: InstalledPlugin, title: String,
-                               icon: String?, historyID: String?, commandID: String) {
+    /// Runs one of a target's actions, asking first when it says to. `confirmed` is the
+    /// answer to that question.
+    private func performPlugin(_ entry: PluginActionEntry?, on target: PluginTarget, confirmed: Bool = false) {
         // A row without an action only informs.
-        guard let action else { return }
+        guard let entry else { return }
+        let plugin = target.plugin
+        let title = entry.levelTitle
+        let icon = entry.levelIcon
+        let commandID = target.commandID
         guard !plugins.needsSetup(plugin.id) else {
             hide()
             onConfigurePlugin?(plugin.id)
             return
         }
-        if let historyID { recordUtilityUse(historyID) }
-        switch action {
+        if let confirmation = entry.confirm, !confirmed {
+            enterPluginOverlay(.confirm(entry), target: target,
+                               rows: confirmation.items(icon: entry.icon).map { ($0, nil) },
+                               keys: ["↩", "esc"], title: confirmation.title, icon: icon)
+            return
+        }
+        if let historyID = target.historyID { recordUtilityUse(historyID) }
+        switch entry.action {
         case .open(let target):
             hide()
             guard let url = PluginAction.url(for: target) else {
@@ -978,9 +1007,160 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         case .run(let args, let keepOpen):
             runPlugin(plugin, arguments: args, keepOpen: keepOpen, commandID: commandID)
         case .list, .search, .menu:
-            guard let source = PluginSource(action) else { return }
+            guard let source = PluginSource(entry.action) else { return }
             enterScope(.plugin(PluginScope(pluginID: plugin.id, title: title, icon: icon, source: source,
                                            commandID: commandID)))
+        }
+    }
+
+    // MARK: - Plugin actions
+
+    /// What a plugin row's or command's actions run with. `historyID` is a root command's
+    /// entry id; rows inside a plugin learn no history. `commandID` is the manifest
+    /// command the user started from, at any depth.
+    private struct PluginTarget {
+        let plugin: InstalledPlugin
+        let actions: PluginActionSet
+        let historyID: String?
+        let commandID: String
+    }
+
+    /// The action list or a confirmation, entered like a level. Its rows stand in for
+    /// the level it came from, whose own are kept to come back to without running the
+    /// plugin again.
+    private struct PluginOverlay {
+        enum Kind {
+            case actions([PluginActionEntry])
+            case confirm(PluginActionEntry)
+        }
+        let kind: Kind
+        let target: PluginTarget
+        let ids: [String]
+        let keys: [String?]
+        let list: PluginList
+        let status: PluginItem?
+        let loaded: Bool
+        /// The level was still loading, so it asks again on return.
+        let reloads: Bool
+    }
+
+    /// Return on a plugin row or command.
+    private func launchPlugin(at index: Int) {
+        guard let target = pluginTarget(at: index) else { return }
+        performPlugin(target.actions.primary, on: target)
+    }
+
+    private func pluginTarget(at index: Int) -> PluginTarget? {
+        guard pluginOverlay == nil, items.indices.contains(index) else { return nil }
+        switch items[index] {
+        case .plugin(let item, let context):
+            return PluginTarget(plugin: context.plugin, actions: PluginActionSet(item), historyID: nil,
+                                commandID: pluginScope?.commandID ?? "")
+        case .app(let match) where match.entry.kind == .plugin:
+            guard let (plugin, command) = plugins.command(forEntryID: match.entry.id) else { return nil }
+            return PluginTarget(plugin: plugin, actions: PluginActionSet(command), historyID: match.entry.id,
+                                commandID: command.id)
+        default:
+            return nil
+        }
+    }
+
+    /// The modifiers held with the Return being handled; none outside a key event.
+    private var returnModifiers: NSEvent.ModifierFlags {
+        guard let event = NSApp.currentEvent, event.type == .keyDown else { return [] }
+        return event.modifierFlags.intersection([.command, .option, .shift, .control])
+    }
+
+    /// Runs the selected plugin row's action for these modifiers. False when the row
+    /// is not a plugin's or binds nothing to them, so Return keeps its usual meaning.
+    private func performPluginShortcut(_ modifiers: NSEvent.ModifierFlags) -> Bool {
+        guard let target = pluginTarget(at: cursor),
+              let entry = target.actions.entry(for: PluginShortcut(modifiers)) else { return false }
+        performPlugin(entry, on: target)
+        return true
+    }
+
+    /// ⌘↩ and its chords: a plugin's binding, else Reveal in Finder for ⌘↩ alone.
+    private func commandReturn(_ modifiers: NSEvent.ModifierFlags) -> Bool {
+        if argument == nil, performPluginShortcut(modifiers) { return true }
+        guard modifiers == .command else { return false }
+        revealInFinder()
+        return true
+    }
+
+    /// ⌘K: the selected plugin row's actions, or back out of them. Other rows let the
+    /// key go on as before.
+    private func togglePluginActions() -> Bool {
+        if case .actions = pluginOverlay?.kind { return leavePluginOverlay() }
+        guard let target = pluginTarget(at: cursor) else { return false }
+        let actions = target.actions
+        guard !actions.entries.isEmpty else {
+            NSSound.beep()
+            return true
+        }
+        enterPluginOverlay(.actions(actions.entries), target: target, rows: actions.items.map { ($0.item, $0.key) },
+                           title: actions.title, icon: actions.icon)
+        return true
+    }
+
+    private func enterPluginOverlay(_ kind: PluginOverlay.Kind, target: PluginTarget,
+                                    rows: [(item: PluginItem, key: String?)], keys: [String?]? = nil,
+                                    title: String, icon: String?) {
+        let reloads = pluginRun != nil || pluginDebounce != nil
+        let saved = (list: pluginList, status: pluginStatus, loaded: pluginLoaded)
+        // Nothing may replace the level's rows underneath; a reload on return catches up.
+        cancelPluginWork()
+        let source = PluginSource.items(rows.map(\.item), options: PluginListOptions(sorts: false))
+        navigation.enter(.plugin(PluginScope(pluginID: target.plugin.id, title: title, icon: icon, source: source,
+                                             commandID: target.commandID)),
+                         query: field.stringValue,
+                         selectedID: items.indices.contains(cursor) ? items[cursor].identity : nil,
+                         selection: selection)
+        pluginOverlay = PluginOverlay(kind: kind, target: target, ids: rows.map(\.item.id),
+                                      keys: keys ?? rows.map(\.key), list: saved.list, status: saved.status,
+                                      loaded: saved.loaded, reloads: reloads)
+        updateScopeChip()
+        setQuery("")
+        selection = .topHit
+        pluginList = PluginList(items: rows.map(\.item), sorts: false)
+        pluginStatus = nil
+        pluginLoaded = true
+        updateMatches(for: "")
+    }
+
+    /// Back to the rows, query and selection the overlay opened over, whatever the
+    /// back-navigation setting: it is a step aside, not a level the user typed into.
+    @discardableResult
+    private func leavePluginOverlay() -> Bool {
+        guard let overlay = pluginOverlay, let parent = navigation.back(behavior: .restoreQuery) else { return false }
+        pluginOverlay = nil
+        updateScopeChip()
+        setQuery(parent.query)
+        selection = .topHit
+        let returning = parent.selectedID.map { (id: $0, style: parent.selection) }
+        if overlay.reloads {
+            loadPluginScope()
+            if pluginRun != nil { pluginPendingSelection = returning }
+        } else {
+            pluginList = overlay.list
+            pluginStatus = overlay.status
+            pluginLoaded = overlay.loaded
+        }
+        updateMatches(for: parent.query, selecting: returning)
+        return true
+    }
+
+    /// Return or a click on the action list's or a confirmation's row. The overlay
+    /// closes first, so a level the action enters goes back to the row it came from.
+    private func performOverlayRow(_ item: PluginItem) {
+        guard let overlay = pluginOverlay, let index = overlay.ids.firstIndex(of: item.id) else { return }
+        leavePluginOverlay()
+        switch overlay.kind {
+        case .actions(let entries):
+            performPlugin(entries[index], on: overlay.target)
+        case .confirm(let entry):
+            guard item.id == PluginConfirmation.confirmID else { return }
+            performPlugin(entry, on: overlay.target, confirmed: true)
         }
     }
 
@@ -1211,13 +1391,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     private func copyPath() {
         let url: URL
-        if items.indices.contains(cursor), let action = items[cursor].pluginAction {
-            guard case .open(let target) = action else {
-                NSSound.beep()
-                return
-            }
-            toasts.copy(target, position: preferences.toastPosition, on: panel.screen)
-            hide()
+        // A plugin row copies what ⌥↩ is bound to: its address unless it says otherwise.
+        if pluginTarget(at: cursor) != nil {
+            if !performPluginShortcut(.option) { NSSound.beep() }
             return
         }
         if argument != nil {
@@ -1247,11 +1423,16 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     /// Redraws only the selected row: it is the only one whose detail depends on modifiers.
+    /// Shift and Control mean something only to a plugin's row.
     private func modifiersChanged(_ flags: NSEvent.ModifierFlags) {
-        let relevant = flags.intersection([.command, .option])
-        guard relevant != modifiers.intersection([.command, .option]) else { return }
+        let tracked: NSEvent.ModifierFlags = [.command, .option, .shift, .control]
+        let previous = modifiers.intersection(tracked)
+        guard flags.intersection(tracked) != previous else { return }
         modifiers = flags
         guard panel.isVisible, items.indices.contains(cursor) else { return }
+        let everyRow: NSEvent.ModifierFlags = [.command, .option]
+        guard flags.intersection(everyRow) != previous.intersection(everyRow)
+                || items[cursor].pluginActions != nil else { return }
         table.reloadData(forRowIndexes: IndexSet(integer: cursor), columnIndexes: IndexSet(integer: 0))
     }
 
@@ -2343,6 +2524,9 @@ extension SpotliteController {
         if items.count > 1 {
             try check(items.allSatisfy { if case .plugin(let item, _) = $0 { item.accessory?.hasPrefix("★ ") == true } else { false } },
                       "GitHub rows lack star accessories")
+            try check(items[0].pluginActions?.entry(for: .command)?.title == "Copy Clone URL"
+                      && items[0].pluginActions?.entry(for: .option)?.title == "Copy Link",
+                      "GitHub rows lack ⌘↩ Copy Clone URL and ⌥↩ Copy Link")
             dumpVisibleRows("plugin-search-rows")
         }
         try check(!bar.isShowingCompletion, "Search rows must not complete the query")
@@ -2385,6 +2569,186 @@ extension SpotliteController {
         updateMatches(for: "zzzz")
         try check(items.map(\.title) == [PluginSource.defaultEmptyText], "Default empty text missing: \(items.map(\.title))")
         print("DEV plugins: accessories, keyword ranking and default empty text passed")
+    }
+
+    /// SPOTLITE_DEV_ACTIONS=1 with SPOTLITE_DEV_PLUGINS_DIR=Tests/Fixtures/Plugins: modifier
+    /// titles, the ⌘K list, confirmations and a closing run's late answer, through posted
+    /// key events where the panel holds the keyboard.
+    func runDevPluginActionChecks() async throws {
+        func check(_ condition: @autoclosure () -> Bool, _ message: @autoclosure () -> String) throws {
+            guard condition() else {
+                throw NSError(domain: "SpotliteActionChecks", code: 1, userInfo: [NSLocalizedDescriptionKey: message()])
+            }
+        }
+        guard let fixture = plugins.plugin(id: "actions") else {
+            return try check(false, "Set SPOTLITE_DEV_PLUGINS_DIR to Tests/Fixtures/Plugins")
+        }
+        func settle(_ milliseconds: Int = 150) async { try? await Task.sleep(for: .milliseconds(milliseconds)) }
+        let pasteboard = NSPasteboard.general
+        let savedPreferences = preferences
+        let savedConfirmations = toasts.showConfirmationMessages
+        let restoreClipboard = savedClipboard()
+        defer {
+            resetNavigation()
+            preferencesDidChange(savedPreferences)
+            toasts.showConfirmationMessages = savedConfirmations
+            toasts.dismiss()
+            panel.orderOut(nil)
+            restoreClipboard()
+        }
+        toasts.showConfirmationMessages = true
+        preferences.hiddenBundleIDs = []
+        // Restoring is the overlay's own rule; the user's setting must not change it.
+        preferences.backNavigationBehavior = .clearQuery
+        library.extras = savedPreferences.extraEntries + plugins.entries(disabled: [])
+
+        /// A key typed into the panel, dispatched by AppKit as a real one would be.
+        func press(_ keyCode: Int, _ characters: String, _ flags: NSEvent.ModifierFlags = [],
+                   repeating: Bool = false) async throws {
+            // Another app can take the keyboard mid-run; SPOTLITE_DEV_PIN=1 keeps the panel open.
+            if !panel.isKeyWindow {
+                panel.makeKey()
+                panel.makeFirstResponder(field)
+            }
+            try check(panel.isKeyWindow, "The panel must hold the keyboard for posted keys")
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+                                         timestamp: ProcessInfo.processInfo.systemUptime,
+                                         windowNumber: panel.windowNumber, context: nil, characters: characters,
+                                         charactersIgnoringModifiers: characters, isARepeat: repeating,
+                                         keyCode: UInt16(keyCode))!
+            NSApp.postEvent(event, atStart: false)
+            await settle(60)
+        }
+        // kVK_Return, kVK_Escape and kVK_ANSI_K.
+        let returnKey = (36, "\r"), escape = (53, "\u{1b}"), commandK = (40, "k")
+        func open(_ title: String) throws -> Int {
+            show()
+            setQuery(title)
+            updateMatches(for: title)
+            guard let row = items.firstIndex(where: { $0.title == title }) else {
+                try check(false, "No root command \(title): \(items.map(\.title))")
+                return 0
+            }
+            select(row, as: .navigated)
+            return row
+        }
+
+        // Holding a modifier names what Return would do; app rows are untouched.
+        var row = try open("Actions Fixture Link")
+        try check(items[row].hints(modifiers: .command, running: false).map { [$0.text, $0.key ?? ""] }
+                  == [["Copy Name", "⌘↩"], ["Hide", "⌘⌫"]], "⌘ hint: \(items[row].hints(modifiers: .command, running: false))")
+        try check(items[row].hints(modifiers: .option, running: false).map(\.text) == ["Copy Link"], "⌥ keeps Copy Link")
+        try check(items[row].hints(modifiers: .shift, running: false).map { $0.key } == ["⇧↩"], "⇧ hint")
+        try check(items[row].hints(modifiers: [.shift, .command], running: false).map(\.text) == ["Hide"],
+                  "An unbound chord keeps the default")
+        dumpFrames("plugin-actions-command")
+
+        // ⌘K lists Return's action first, the plugin's next, the built-in copy last.
+        try await press(commandK.0, commandK.1, .command)
+        try check(pluginOverlay != nil && items.map(\.title) == ["Open", "Copy Name", "Run Confirmed", "Show Rows", "Copy Link"],
+                  "Action list: \(items.map(\.title))")
+        try check(items.map { $0.restingHints.last?.key } == ["↩", "⌘↩", "⇧↩", nil, "⌥↩"], "Action keys")
+        try check(bar.isShowingCompletion == false, "The action list must not complete the query")
+        try await Task.sleep(for: .milliseconds(400))
+        dumpFrames("plugin-actions-list")
+        dumpVisibleRows("plugin-actions-list")
+        try? await SettingsForm.captureWindow(panel, name: "plugin-actions-list")
+        setQuery("copy")
+        updateMatches(for: "copy")
+        try check(items.map(\.title) == ["Copy Name", "Copy Link"], "Filtering the list: \(items.map(\.title))")
+        // Escape, Backspace on empty, Shift-Tab and ⌘K each return to the row and its query.
+        for back in 0..<4 {
+            if back > 0 { try await press(commandK.0, commandK.1, .command) }
+            switch back {
+            case 0: try await press(escape.0, escape.1)
+            case 1: _ = control(field, textView: field.currentEditor() as! NSTextView, doCommandBy: #selector(NSResponder.deleteBackward(_:)))
+            case 2: _ = control(field, textView: field.currentEditor() as! NSTextView, doCommandBy: #selector(NSResponder.insertBacktab(_:)))
+            default: try await press(commandK.0, commandK.1, .command)
+            }
+            try check(pluginOverlay == nil && panel.isVisible && !isDismissing, "Back \(back) left the list open or closed the panel")
+            try check(field.stringValue == "Actions Fixture Link" && cursor == row && selection == .navigated,
+                      "Back \(back) lost the query or selection: \(field.stringValue) \(cursor)")
+        }
+
+        // ⌘↩ runs its binding through the field's key equivalent.
+        try await press(returnKey.0, returnKey.1, .command)
+        try check(pasteboard.string(forType: .string) == "actions-name" && isDismissing, "⌘↩ did not copy the name")
+        await settle(300)
+
+        // ⇧↩ asks first. Escape and Cancel answer no; a held Return does not answer.
+        row = try open("Actions Fixture Link")
+        pasteboard.clearContents()
+        try await press(returnKey.0, returnKey.1, .shift)
+        guard case .confirm = pluginOverlay?.kind else { return try check(false, "⇧↩ did not ask") }
+        try check(items.map(\.title) == ["Run", "Cancel"] && cursor == 0, "Confirmation rows: \(items.map(\.title))")
+        try check(items[0].hints(modifiers: [], running: false).map { [$0.text, $0.key ?? ""] }
+                  == [["It copies a fixed text.", "↩"]], "Confirmation hint: \(items[0].hints(modifiers: [], running: false))")
+        try await Task.sleep(for: .milliseconds(400))
+        dumpFrames("plugin-confirm")
+        dumpVisibleRows("plugin-confirm")
+        try? await SettingsForm.captureWindow(panel, name: "plugin-confirm")
+        try await press(returnKey.0, returnKey.1, repeating: true)
+        try check(pluginOverlay != nil && !isDismissing, "A repeated Return answered the question")
+        try await press(escape.0, escape.1)
+        try check(pluginOverlay == nil && panel.isVisible && cursor == row, "Escape did not cancel the question")
+        try await press(returnKey.0, returnKey.1, .shift)
+        launch(at: 1)
+        try check(pluginOverlay == nil && panel.isVisible && pasteboard.string(forType: .string) == nil, "Cancel ran the action")
+        try await press(returnKey.0, returnKey.1, .shift)
+        try await press(returnKey.0, returnKey.1)
+        try check(isDismissing, "Confirming did not run the action: overlay=\(pluginOverlay != nil) query=\(field.stringValue) items=\(items.map(\.title)) cursor=\(cursor)")
+        await settle(400)
+        try check(pasteboard.string(forType: .string) == "confirmed-run", "The confirmed run did not apply its copy")
+        print("DEV actions: modifier hints, ⌘K list and its four ways back, ⌘↩, confirmation and repeat guard passed")
+
+        // A manifest command asks too, and a secondary that enters a level goes back to the row.
+        pasteboard.clearContents()
+        _ = try open("Actions Fixture Ask")
+        launch(at: cursor)
+        try check(pluginOverlay != nil && bar.chipTitle == "Run the fixture?", "Command confirm: \(items.map(\.title))")
+        try check(items[0].title == PluginConfirmation.defaultButton, "Default button: \(items[0].title)")
+        try await press(escape.0, escape.1)
+        row = try open("Actions Fixture Link")
+        try await press(commandK.0, commandK.1, .command)
+        select(3, as: .navigated)
+        try await press(returnKey.0, returnKey.1)
+        await settle(300)
+        try check(pluginScope?.title == "Show Rows" && pluginOverlay == nil && items.map(\.title) == ["alpha", "beta"],
+                  "The secondary did not enter its level: \(items.map(\.title))")
+        // Rows' own actions, with ⌃ bound to a confirmed keepOpen run.
+        try check(items[0].hints(modifiers: .control, running: false).map(\.text) == ["Delete"], "⌃ hint")
+        try await press(returnKey.0, returnKey.1, .control)
+        try check(bar.chipTitle == "Delete alpha?", "⌃↩ did not ask")
+        try await press(returnKey.0, returnKey.1)
+        await settle(400)
+        try check(pasteboard.string(forType: .string) == "deleted-alpha" && pluginScope?.title == "Show Rows"
+                  && panel.isVisible, "The confirmed keepOpen run did not stay in its level")
+        try await press(commandK.0, commandK.1, .command)
+        try check(items.map(\.title) == ["Open", "Copy Clone URL", "Delete", "Copy Link"], "Row actions: \(items.map(\.title))")
+        try await press(escape.0, escape.1)
+        // The list was loaded, so returning does not run the plugin again.
+        try check(pluginRun == nil && items.map(\.title) == ["alpha", "beta"], "Returning reloaded the level")
+        leaveScope()
+        try check(pluginScope == nil && cursor == row, "Back from the level did not return to the command")
+        print("DEV actions: command confirmation, a secondary's level, row actions and ⌃↩ passed")
+
+        // A closing run answers after a new session started: its copy applies, its rows do not.
+        _ = try open("Actions Fixture Link")
+        runPlugin(fixture, arguments: ["late"], keepOpen: false, commandID: "link")
+        try check(isDismissing, "A closing run must close the panel at once")
+        await settle(250)
+        show()
+        let fixed = [PluginItem(title: "Session row", action: .copy("session"))]
+        enterScope(.plugin(PluginScope(pluginID: fixture.id, title: "Session", icon: nil, source: .items(fixed))))
+        await settle(400)
+        try check(pasteboard.string(forType: .string) == "late-copy", "The closing run's copy did not apply")
+        try check(items.map(\.title) == ["Session row"], "A late answer replaced a newer session's rows: \(items.map(\.title))")
+        hide()
+        runPlugin(fixture, arguments: ["fail"], keepOpen: false, commandID: "link")
+        await settle(400)
+        toasts.checkDevMessage("fixture failure")
+        print("DEV actions: closing runs apply late answers without touching rows, and report failures")
+        print("DEV actions: all checks passed")
     }
 
     /// Every visible row's frames, for checking accessories against the layout.

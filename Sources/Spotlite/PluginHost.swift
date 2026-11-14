@@ -266,11 +266,26 @@ struct PluginRowContext {
     /// False for a search's rows, which answer the query rather than complete it.
     let completes: Bool
     let occurrence: Int
+    /// The key drawn on every row of the action list or a confirmation, which are
+    /// Spotlite's rows rather than the plugin's.
+    let key: String?
 
-    init(plugin: InstalledPlugin, completes: Bool, occurrence: Int = 0) {
+    init(plugin: InstalledPlugin, completes: Bool, occurrence: Int = 0, key: String? = nil) {
         self.plugin = plugin
         self.completes = completes
         self.occurrence = occurrence
+        self.key = key
+    }
+}
+
+extension PluginShortcut {
+    /// The modifiers a plugin can bind, out of everything an event carries.
+    init(_ flags: NSEvent.ModifierFlags) {
+        self = []
+        if flags.contains(.command) { insert(.command) }
+        if flags.contains(.option) { insert(.option) }
+        if flags.contains(.shift) { insert(.shift) }
+        if flags.contains(.control) { insert(.control) }
     }
 }
 
