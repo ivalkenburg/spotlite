@@ -404,8 +404,10 @@ below the buttons. A plugin installed from a folder, or linked, has none, and in
 it from a folder later removes the record, as does removing the plugin.
 
 ⋯ → Check for Updates asks each recorded source for its version, only when clicked: Spotlite
-never checks on its own. A GitHub source is checked by fetching its `plugin.json` alone
-(GitHub's raw files may lag a push by a few minutes); a zip or git source is downloaded
+never checks on its own. A GitHub source is checked by asking GitHub's API for the ref's
+current commit and fetching that commit's `plugin.json` alone, so a push is seen at once (if
+the API is unreachable or rate limited, the branch's file is used, which may lag a push by a
+few minutes); a zip or git source is downloaded
 again and discarded. Versions compare as semantic versions (`1.10` is newer than `1.9`,
 `1.0.0-beta` precedes `1.0.0`, a leading `v` and `+build` are ignored); a version that is
 not one is offered as an update whenever it differs. Update… goes through the same

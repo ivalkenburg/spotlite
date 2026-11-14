@@ -227,7 +227,16 @@ public struct PluginInstaller: Sendable {
         }
         let remote: PluginManifest
         do throws(PluginInstallError) {
-            if let url = source.manifestURL {
+            if var url = source.manifestURL {
+                // Pin to the ref's current commit so a fresh push is seen at once. Without
+                // it (API unreachable or rate limited) the branch's file may lag by minutes.
+                if let commitURL = source.commitURL,
+                   let body = try? await loader.data(from: commitURL, limit: 128),
+                   let commit = String(data: body, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   commit.count == 40, commit.allSatisfy(\.isHexDigit),
+                   let pinned = source.manifestURL(at: commit) {
+                    url = pinned
+                }
                 guard let data = try await loader.data(from: url, limit: limits.manifest) else {
                     return result(.failed("The source no longer has a \(PluginStore.manifestName)."))
                 }
@@ -323,6 +332,9 @@ public struct URLSessionPluginDownloader: PluginDownloading {
         configuration.timeoutIntervalForRequest = 30
         configuration.timeoutIntervalForResource = 600
         configuration.httpAdditionalHeaders = ["User-Agent": "Spotlite"]
+        if url.host?.lowercased() == "api.github.com" {
+            configuration.httpAdditionalHeaders?["Accept"] = "application/vnd.github.sha"
+        }
         let delegate = DownloadDelegate(limit: limit, file: file, progress: progress)
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = 1

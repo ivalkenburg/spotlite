@@ -616,6 +616,22 @@ final class PluginInstallerTests {
         guard case .failed = await installer.checkForUpdate(plugin).status else { Issue.record("no source"); return }
     }
 
+    @Test func checksGitHubManifestsAtTheCurrentCommit() async throws {
+        let zip = try archive(version: "1.0.0")
+        let sha = String(repeating: "a1", count: 20)
+        var loader = FixtureLoader(files: ["https://codeload.github.com/o/r/zip/main": zip])
+        let first = try installer(loader)
+        let plugin = try first.install(try await first.prepare(from: "https://github.com/o/r/tree/main"))
+        // The branch's file is a cached copy of the old version; the commit has the new one.
+        loader.bodies["https://raw.githubusercontent.com/o/r/main/plugin.json"] = Data(Self.manifest(version: "1.0.0").utf8)
+        loader.bodies["https://api.github.com/repos/o/r/commits/main"] = Data((sha + "\n").utf8)
+        loader.bodies["https://raw.githubusercontent.com/o/r/\(sha)/plugin.json"] = Data(Self.manifest(version: "1.0.1").utf8)
+        #expect(await (try installer(loader)).checkForUpdate(plugin).status == .available("1.0.1"))
+        // An unusable answer falls back to the branch.
+        loader.bodies["https://api.github.com/repos/o/r/commits/main"] = Data("rate limited".utf8)
+        #expect(await (try installer(loader)).checkForUpdate(plugin).status == .upToDate)
+    }
+
     @Test func checksArchivesByStagingThem() async throws {
         var loader = FixtureLoader(files: ["https://example.com/p.zip": try archive(version: "1.0.0")])
         let first = try installer(loader)

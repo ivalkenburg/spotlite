@@ -153,10 +153,21 @@ public enum PluginInstallSource: Sendable, Equatable {
 
     /// The manifest alone, for an update check without downloading the plugin. Only
     /// GitHub serves one; other sources are checked by staging them.
-    public var manifestURL: URL? {
+    public var manifestURL: URL? { manifestURL(at: nil) }
+
+    /// The manifest at `commit`, or at the ref when nil. raw.githubusercontent.com
+    /// caches a branch's files for up to five minutes; a commit's never go stale.
+    public func manifestURL(at commit: String?) -> URL? {
         guard case .github(let owner, let repository, let ref, let subpath) = self else { return nil }
-        let path = [ref ?? "HEAD", subpath, PluginStore.manifestName].compactMap { $0 }.joined(separator: "/")
+        let path = [commit ?? ref ?? "HEAD", subpath, PluginStore.manifestName].compactMap { $0 }.joined(separator: "/")
         return URL(string: "https://raw.githubusercontent.com/\(owner)/\(repository)/" + Self.encode(path))
+    }
+
+    /// GitHub's API for the commit the ref points to now. Answered as the bare hash,
+    /// since `URLSessionPluginDownloader` asks api.github.com for `vnd.github.sha`.
+    public var commitURL: URL? {
+        guard case .github(let owner, let repository, let ref, _) = self else { return nil }
+        return URL(string: "https://api.github.com/repos/\(owner)/\(repository)/commits/" + Self.encode(ref ?? "HEAD"))
     }
 
     private static func encode(_ path: String) -> String {
