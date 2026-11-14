@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/docs/plugin-response.schema.json",
+  "title": "Spotlite plugin response",
+  "description": "What a plugin's executable prints: one JSON object. Every key is optional and printing nothing is fine. A streamed action prints lines matching #/$defs/streamLine instead. See docs/plugins.md.",
+  "$ref": "#/$defs/response",
+
+  "$defs": {
+    "response": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "description": "Rows for list and search, and for a keepOpen run. Rows past 500 are ignored; a malformed row is skipped on its own.",
+          "type": "array",
+          "maxItems": 500,
+          "items": { "$ref": "plugin.schema.json#/$defs/item" }
+        },
+        "toast": { "$ref": "#/$defs/toast" },
+        "copy": { "description": "Text to put on the clipboard.", "type": "string" },
+        "open": { "description": "A URL or file path to open.", "type": "string" },
+        "update": {
+          "description": "Changes how the plugin's commands look in root results.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/commandUpdate" }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "toast": {
+      "description": "A message shown after the run: a string, or an object.",
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "required": ["text"],
+          "properties": {
+            "text": { "type": "string" },
+            "symbol": { "description": "An SF Symbol name.", "type": "string" },
+            "style": {
+              "description": "failure shows even when confirmation messages are off.",
+              "enum": ["success", "failure"]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+
+    "commandUpdate": {
+      "description": "Changes how one command looks until expires or the next update. Naming only the command restores the manifest's look.",
+      "type": "object",
+      "required": ["command"],
+      "properties": {
+        "command": { "description": "A command id from the manifest.", "type": "string" },
+        "icon": { "$ref": "plugin.schema.json#/$defs/icon" },
+        "subtitle": { "type": "string" },
+        "expires": { "description": "Seconds since 1970.", "type": "number" }
+      },
+      "additionalProperties": false
+    },
+
+    "streamLine": {
+      "title": "Stream line",
+      "description": "One line of a streamed (NDJSON) response. An object with a title is a row; any other object is a response line, whose items are more rows and whose toast, copy, open and update apply when the program exits successfully.",
+      "type": "object",
+      "if": { "required": ["title"] },
+      "then": { "$ref": "plugin.schema.json#/$defs/item" },
+      "else": { "$ref": "#/$defs/response" }
+    }
+  }
+}

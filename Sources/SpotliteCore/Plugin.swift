@@ -22,6 +22,9 @@ public enum PluginAction: Sendable, Equatable {
     public static let defaultDebounce = 200
     static let debounceRange = 0...2_000
 
+    /// The `type` names an action may have.
+    public enum Kind: String, CaseIterable, Sendable { case open, copy, run, list, search, menu }
+
     /// Whether the action opens another level rather than finishing.
     public var entersScope: Bool {
         switch self {
@@ -50,6 +53,10 @@ extension PluginAction: Decodable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let type = try c.decode(String.self, forKey: .type)
+        guard let kind = Kind(rawValue: type) else {
+            throw DecodingError.dataCorruptedError(forKey: .type, in: c,
+                                                   debugDescription: "Unknown action type \(type)")
+        }
         let args = try c.decodeIfPresent([String].self, forKey: .args) ?? []
         let emptyText = try c.decodeIfPresent(String.self, forKey: .emptyText)
         // Read only where Spotlite filters: a search's rows already answer the query.
@@ -57,23 +64,20 @@ extension PluginAction: Decodable {
                                          emptyText: emptyText)
         // Only an executable's output can stream; a menu's rows are already here.
         let streams = try c.decodeIfPresent(Bool.self, forKey: .stream) ?? false
-        switch type {
-        case "open": self = .open(try c.decode(String.self, forKey: .url))
-        case "copy": self = .copy(try c.decode(String.self, forKey: .text))
-        case "run": self = .run(args: args, keepOpen: try c.decodeIfPresent(Bool.self, forKey: .keepOpen) ?? false)
-        case "list": self = .list(args: args, options: filtered.streaming(streams))
-        case "search":
+        switch kind {
+        case .open: self = .open(try c.decode(String.self, forKey: .url))
+        case .copy: self = .copy(try c.decode(String.self, forKey: .text))
+        case .run: self = .run(args: args, keepOpen: try c.decodeIfPresent(Bool.self, forKey: .keepOpen) ?? false)
+        case .list: self = .list(args: args, options: filtered.streaming(streams))
+        case .search:
             let debounce = try c.decodeIfPresent(Int.self, forKey: .debounce) ?? PluginAction.defaultDebounce
             let range = PluginAction.debounceRange
             self = .search(args: args,
                            debounce: min(max(debounce, range.lowerBound), range.upperBound),
                            minimumQuery: max(0, try c.decodeIfPresent(Int.self, forKey: .minQuery) ?? 1),
                            options: PluginListOptions(emptyText: emptyText, streams: streams))
-        case "menu":
+        case .menu:
             self = .menu(PluginItem.decodeList(from: c, forKey: .items), options: filtered)
-        default:
-            throw DecodingError.dataCorruptedError(forKey: .type, in: c,
-                                                   debugDescription: "Unknown action type \(type)")
         }
     }
 }

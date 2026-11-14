@@ -1,4 +1,5 @@
 {
+  "$schema": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/docs/plugin.schema.json",
   "id": "findfiles",
   "name": "Find Files",
   "version": "1.0.0",

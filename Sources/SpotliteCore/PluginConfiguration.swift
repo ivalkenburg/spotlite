@@ -46,7 +46,7 @@ public enum PluginSettingValue: Codable, Sendable, Equatable {
 }
 
 public struct PluginSetting: Decodable, Sendable, Equatable {
-    public enum Kind: String, Decodable, Sendable { case text, number, boolean, choice, secret, file, folder, list }
+    public enum Kind: String, Decodable, Sendable, CaseIterable { case text, number, boolean, choice, secret, file, folder, list }
     public struct Option: Decodable, Sendable, Equatable {
         public let value: String
         public let label: String
