@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/plugins/plugin.schema.json",
+  "id": "uuid",
+  "name": "Generate UUID",
+  "version": "1.0.0",
+  "description": "Copy a new random (v4) or time-ordered (v7) UUID.",
+  "executable": "uuid.sh",
+  "commands": [
+    {
+      "id": "generate",
+      "title": "Generate UUID",
+      "keyword": "uuid",
+      "icon": "number",
+      "action": {
+        "type": "menu",
+        "sort": false,
+        "items": [
+          { "id": "v4", "title": "v4 — Random", "keywords": ["random"], "icon": "dice",
+            "action": { "type": "run", "args": ["v4"] } },
+          { "id": "v7", "title": "v7 — Time ordered", "keywords": ["time", "sortable"], "icon": "clock",
+            "action": { "type": "run", "args": ["v7"] } }
+        ]
+      }
+    }
+  ]
+}

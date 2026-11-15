@@ -2,12 +2,8 @@ import AppKit
 import SpotliteCore
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate {
 
-    /// Shared by the launcher row and the menu-bar indicator. Keeping this outside the
-    /// lazily-created controller lets the status items reflect caffeine without paying
-    /// the cost of constructing the panel and its views at launch.
-    private let caffeine = CaffeineAssertion()
     private let toasts = ToastPresenter()
     private var libraryInstance: AppLibrary?
     /// Opening Settings needs the index, but an idle agent need not load launch history
@@ -36,8 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var controller: SpotliteController {
         if let controllerInstance { return controllerInstance }
 
-        let controller = SpotliteController(library: library, caffeine: caffeine,
-                                            preferences: preferences, toasts: toasts)
+        let controller = SpotliteController(library: library, preferences: preferences, toasts: toasts)
         controller.onOpenSettings = { [weak self] in self?.openSettings() }
         controller.onConfigurePlugin = { [weak self] id in
             self?.openSettings()
@@ -52,8 +47,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var hotKey: HotKey?
     private var statusItem: NSStatusItem?
-    private var caffeineStatusItem: NSStatusItem?
-    private var caffeineRefreshTimer: DispatchSourceTimer?
     private var settings: SettingsWindowController?
     private var preferences = Storage.loadPreferences()
 
@@ -82,19 +75,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         #endif
         applyTheme()
-        // Query before drawing the status item so an assertion that predates Spotlite is
-        // represented immediately. Later changes all flow through this single callback.
-        caffeine.refresh()
-        caffeine.onChange = { [weak self] _ in
-            guard let self else { return }
-            self.refreshCaffeineStatusItem()
-            self.controllerInstance?.caffeineStateDidChange()
-        }
-        caffeine.onExpiration = { [weak self] succeeded, state in
-            guard let self else { return }
-            self.toasts.show(.caffeineFinished(succeeded: succeeded, state: state),
-                             position: self.preferences.toastPosition)
-        }
         // Before the hotkey: a chord already claimed opens Settings too, which would take
         // its copy of the preferences from before this flag was set.
         if !preferences.hasCompletedFirstRun {
@@ -138,9 +118,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 exit(0)
             }
         }
-        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_MENU"] == "1" {
+        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_NAVIGATION"] == "1" {
             Task { @MainActor in
-                await self.controller.runDevMenuFrames()
+                await self.controller.runDevNavigationChecks()
                 exit(0)
             }
         }
@@ -149,14 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let previousController = self.controllerInstance
                 let previousLibrary = self.libraryInstance
                 do {
-                    try await self.toasts.runDevChecks(caffeine: self.caffeine)
-                    precondition(self.caffeine.start(.oneHour))
-                    let description = self.caffeine.state.sessionDescription!
-                    precondition(self.caffeineStatusItem?.button?.toolTip?.contains(description) == true)
-                    precondition(self.caffeineStatusItem?.menu?.items.contains { $0.title == description } == true)
-                    precondition(self.caffeine.stop())
-                    if !self.caffeine.state.external { precondition(self.caffeineStatusItem == nil) }
-                    print("DEV caffeine: cup tooltip, menu deadline and Turn Off state passed")
+                    try await self.toasts.runDevChecks()
                     precondition(self.controllerInstance === previousController)
                     precondition(self.libraryInstance === previousLibrary)
                     print("DEV toast: launcher and library remained lazy")
@@ -189,7 +162,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     #endif
 
     func applicationWillTerminate(_ notification: Notification) {
-        stopCaffeineRefreshTimer()
         toasts.dismiss()
     }
 
@@ -241,7 +213,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                          accessibilityDescription: "Spotlite")
             item.button?.toolTip = "Spotlite"
             let menu = NSMenu()
-            menu.delegate = self
             menu.addItem(withTitle: "Search…", action: #selector(showPanel), keyEquivalent: "")
                 .target = self
             menu.addItem(.separator())
@@ -253,9 +224,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item.menu = menu
             statusItem = item
         }
-
-        refreshCaffeineStatusItem()
-        startCaffeineRefreshTimer()
     }
 
     private func applyTheme() {
@@ -266,83 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// The cup is a separate, transient status item. The normal Spotlite icon never
-    /// changes identity, and no empty cup occupies menu-bar space while caffeine is off.
-    private func refreshCaffeineStatusItem() {
-        let state = caffeine.state
-        guard state.isActive else {
-            if let caffeineStatusItem { NSStatusBar.system.removeStatusItem(caffeineStatusItem) }
-            caffeineStatusItem = nil
-            return
-        }
-
-        // One line per source, so turning Spotlite's off and seeing the cup stay makes sense.
-        var lines: [String] = []
-        if let description = state.sessionDescription { lines.append(description) }
-        if state.external {
-            lines.append(state.spotlite ? "Also active in another app" : "Caffeinate active in another app")
-        }
-        let description = lines.joined(separator: "\n")
-
-        if caffeineStatusItem == nil {
-            caffeineStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        }
-        guard let item = caffeineStatusItem, let button = item.button else { return }
-        let configuration = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
-        let image = NSImage(systemSymbolName: "cup.and.saucer.fill",
-                            accessibilityDescription: description)?
-            .withSymbolConfiguration(configuration)
-        image?.isTemplate = true
-        button.image = image
-        button.imagePosition = .imageOnly
-        button.toolTip = description
-
-        let menu = NSMenu()
-        menu.delegate = self
-        for line in lines {
-            let entry = NSMenuItem(title: line, action: nil, keyEquivalent: "")
-            entry.isEnabled = false
-            menu.addItem(entry)
-        }
-        if state.spotlite {
-            menu.addItem(.separator())
-            let turnOff = menu.addItem(withTitle: "Turn Off Caffeinate",
-                                       action: #selector(turnOffCaffeine), keyEquivalent: "")
-            turnOff.target = self
-        }
-        item.menu = menu
-    }
-
-    /// macOS does not publish a notification when arbitrary processes add or remove
-    /// power assertions. A coalescible timer is the smallest reliable way
-    /// to keep the independent caffeine status icon current.
-    private func startCaffeineRefreshTimer() {
-        guard caffeineRefreshTimer == nil else { return }
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + .seconds(5),
-                       repeating: .seconds(5), leeway: .seconds(1))
-        timer.setEventHandler { [weak self] in
-            MainActor.assumeIsolated {
-                self?.caffeine.refresh()
-            }
-        }
-        timer.resume()
-        caffeineRefreshTimer = timer
-    }
-
-    private func stopCaffeineRefreshTimer() {
-        caffeineRefreshTimer?.cancel()
-        caffeineRefreshTimer = nil
-    }
-
-    func menuWillOpen(_ menu: NSMenu) { caffeine.refresh() }
-
     @objc private func showPanel() { controller.show() }
-
-    @objc private func turnOffCaffeine() {
-        guard caffeine.state.spotlite else { return }
-        toasts.stopCaffeinate(caffeine, position: preferences.toastPosition)
-    }
 
     @objc private func openSettingsMenuItem() { openSettings() }
 
@@ -381,7 +273,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// the other side after the theme is applied, since the panel resolves its appearance
     /// from the app's.
     private func adoptPreferences(_ prefs: Preferences, forward: (Preferences) -> Void) {
-        let enabledStatusItem = !preferences.showMenuBarIcon && prefs.showMenuBarIcon
         let directoriesChanged = preferences.applicationDirectories != prefs.applicationDirectories
         let extrasChanged = preferences.links != prefs.links
             || preferences.disabledPlugins != prefs.disabledPlugins
@@ -392,7 +283,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if extrasChanged { library.extras = extraEntries }
         applyTheme()
         forward(prefs)
-        if enabledStatusItem { caffeine.refresh() }
         refreshStatusItem()
     }
 }

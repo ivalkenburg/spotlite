@@ -27,7 +27,7 @@ make dmg      # build/Spotlite-<version>.dmg
 
 ## Performance rules
 
-- Idle CPU must stay 0%. Avoid polling; only the coalescible 5 s caffeine refresh repeats. Timed sessions use a one-shot expiration.
+- Idle CPU must stay 0%. Avoid polling; nothing repeats while idle.
 - Keep memory to a minimum. Idle is ~32 MB (45 MB with menu bar icon); ~88 MB after first panel open, mostly `NSGlassEffectView`.
 - Matching runs synchronously on the main thread (~6.5 µs per keystroke, ranking included). Don't move it to a queue.
 - Icons load on a background queue (~670 µs each), only for visible rows.
@@ -53,10 +53,10 @@ make dmg      # build/Spotlite-<version>.dmg
 | `SPOTLITE_SHOW_ON_LAUNCH=1` | Show the panel at launch |
 | `SPOTLITE_DEV_FRAMES=1` | Dump view frames (collapsed, expanded for `SPOTLITE_DEV_QUERY` or "a") and exit |
 | `SPOTLITE_DEV_SEQUENCE=1` | Show, type, clear; log panel frames |
-| `SPOTLITE_DEV_MENU=1` | Exercise Caffeinate durations, Turn Off, navigation and filtering; dump frames and exit |
+| `SPOTLITE_DEV_NAVIGATION=1` | Exercise leaving a link argument with each back key and back-query mode; dump frames and exit |
 | `SPOTLITE_DEV_COMPLETION=1` | Exercise app completion modes, caret and Backspace; dump search and settings frames and exit |
-| `SPOTLITE_DEV_UTILITIES=1` | Exercise conversion cards, UUID actions, Utility settings and visibility; preserve clipboard, dump frames and exit |
-| `SPOTLITE_DEV_PLUGINS=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/plugins`: exercise the Caffeinate and GitHub examples, row accessories, empty text and `sort: false`; dump row frames (starts and stops a real `caffeinate`, needs network); exit |
+| `SPOTLITE_DEV_UTILITIES=1` | Exercise conversion cards and Utility settings; preserve clipboard, dump frames and exit |
+| `SPOTLITE_DEV_PLUGINS=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/plugins`: exercise the Caffeinate, UUID and GitHub examples, row accessories, empty text and `sort: false`; dump row frames (starts and stops a real `caffeinate`, needs network); exit |
 | `SPOTLITE_DEV_DIAGNOSTICS=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/Tests/Fixtures/Plugins`: exercise run context env, last-run records, Settings → Plugins buttons and the debug runner; dump frames and exit |
 | `SPOTLITE_DEV_STREAM=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/Tests/Fixtures/Plugins`: exercise streamed rows (before exit, selection while appending, Loading…, empty text, failure keeps rows, a keepOpen run replacing them, superseded and abandoned searches, debug runner); time keystrokes on 500 streamed rows; dump frames; exit |
 | `SPOTLITE_DEV_ACTIONS=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/Tests/Fixtures/Plugins` and `SPOTLITE_DEV_PIN=1`: exercise modifier titles, the ⌘K action list, confirmations and closing runs with posted key events; dump frames and exit |
@@ -64,7 +64,7 @@ make dmg      # build/Spotlite-<version>.dmg
 | `SPOTLITE_DEV_GALLERY=1` | With `SPOTLITE_DEV_PLUGINS_DIR` set to a scratch folder and `SPOTLITE_DEV_GALLERY_URL=file://$PWD/Tests/Fixtures/Gallery/index.json`: exercise the gallery offline (zips served from disk): unknown-version error and Retry, statuses, skipped entry, search, install and update through the confirmation, refreshed status, the kept index and Refresh; dump frames and exit |
 | `SPOTLITE_DEV_GALLERY_URL=<url>` | Debug builds: read the gallery index from this https or `file:` URL instead of `main` |
 | `SPOTLITE_DEV_PLUGINS_DIR=<dir>` | Read plugins from this folder instead of Application Support; source records then go to `SPOTLITE_DEV_PLUGIN_SOURCES_DIR` or a temporary folder |
-| `SPOTLITE_DEV_TOAST=1` | Exercise toasts, timed Caffeinate sessions and the Appearance page; exit |
+| `SPOTLITE_DEV_TOAST=1` | Exercise toasts and the Appearance page; exit |
 | `SPOTLITE_DEV_FOCUS=1` | Check focus returns to the previous app and window; needs another app in front; exit |
 | `SPOTLITE_DEV_CAPTURE_DIR=<dir>` | Also save screenshots from the hooks above (needs Screen Recording) |
 | `SPOTLITE_DEV_PIN=1` | Keep the panel open when it loses focus |

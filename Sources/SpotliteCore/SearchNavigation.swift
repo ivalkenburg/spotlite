@@ -1,7 +1,6 @@
-/// The query field searches the root, a menu, or takes a template link's argument.
+/// The query field searches the root, a plugin level, or takes a template link's argument.
 public enum SearchScope: Sendable {
     case root
-    case menu(SearchMenu)
     case argument(AppEntry)
     case plugin(PluginScope)
 }
@@ -11,7 +10,7 @@ public enum SearchSelection: Sendable {
 }
 
 /// Saves the exact parent context on each entry, including a dismissed completion.
-/// No navigation or submenu query is persisted when the panel closes.
+/// No navigation or nested query is persisted when the panel closes.
 public struct SearchNavigation {
     public struct Location {
         public let scope: SearchScope
@@ -26,7 +25,7 @@ public struct SearchNavigation {
     public init() {}
 
     public var canGoBack: Bool { !parents.isEmpty }
-    /// Query memory recalls the root search, never a menu filter or link argument.
+    /// Query memory recalls the root search, never a plugin filter or link argument.
     public var rootQuery: String? { parents.first?.query }
 
     public mutating func enter(_ scope: SearchScope, query: String,

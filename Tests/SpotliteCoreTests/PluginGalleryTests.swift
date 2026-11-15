@@ -213,7 +213,7 @@ struct PluginGalleryTests {
             .deletingLastPathComponent().appendingPathComponent("plugins/index.json")
         let index = try PluginGallery.decode(try Data(contentsOf: url))
         #expect(index.skipped == 0)
-        #expect(Set(index.entries.map(\.id)) == ["caffeinate", "kubectx", "github", "findfiles"])
+        #expect(Set(index.entries.map(\.id)) == ["caffeinate", "kubectx", "github", "findfiles", "uuid"])
         for entry in index.entries {
             guard case .github(let owner, let repository, let ref, let subpath) = entry.installSource else {
                 Issue.record("\(entry.id) is not a GitHub source")

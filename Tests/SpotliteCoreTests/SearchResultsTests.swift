@@ -25,9 +25,7 @@ struct SearchResultsTests {
             case .calculation(_, let value): return "= \(value)"
             case .app(let match): return match.entry.name
             case .conversion(_, let result): return result
-            case .generateUUID: return "generateUUID"
             case .settings: return "settings"
-            case .caffeinate: return "caffeinate"
             case .webSearch(let query, let engine): return "\(engine.name): \(query)"
             }
         }
@@ -52,48 +50,7 @@ struct SearchResultsTests {
 
     @Test func builtInEntriesNeedTwoCharacters() {
         #expect(!describe(build("s")).contains("settings"))
-        #expect(!describe(build("c")).contains("caffeinate"))
         #expect(describe(build("se")).contains("settings"))
-        #expect(describe(build("ca")).contains("caffeinate"))
-    }
-
-    @Test func unusedBuiltInRanksBelowNamePrefixAppsAndAboveTheRest() {
-        // "Calculator" starts with "ca"; "Safari" only contains "a".
-        #expect(describe(build("ca")) == ["Calculator", "caffeinate"])
-        #expect(describe(build("caf")) == ["caffeinate"])
-        #expect(describe(build("af")) == ["Safari"])
-    }
-
-    @Test func launchHistoryLiftsABuiltInAboveNeverUsedApps() {
-        var frecency = Frecency()
-        frecency.recordLaunch(SearchUtility.caffeinate.historyID)
-        #expect(describe(build("ca", frecency: frecency)) == ["caffeinate", "Calculator"])
-        // An app with more history still wins the tier.
-        frecency.recordLaunch("app.calculator")
-        frecency.recordLaunch("app.calculator")
-        frecency.recordLaunch("app.calculator")
-        #expect(describe(build("ca", frecency: frecency)) == ["Calculator", "caffeinate"])
-    }
-
-    @Test func historyNeverLiftsABuiltInAboveAnAliasMatch() {
-        var frecency = Frecency()
-        for _ in 0..<30 { frecency.recordLaunch(SearchUtility.caffeinate.historyID) }
-        let corpus = SearchCorpus(entries: entries, aliases: AliasIndex(aliases: ["app.safari": "caf"]))
-        let results = SearchResults.build(for: "caf", corpus: corpus, matcher: Matcher(), frecency: frecency)
-        #expect(describe(results) == ["Safari", "caffeinate"])
-    }
-
-    @Test func utilityActionsShareOneHistoryIDPerUtility() {
-        #expect(SearchMenuAction.startCaffeinate(.oneHour).historyID == SearchUtility.caffeinate.historyID)
-        #expect(SearchMenuAction.stopCaffeinate.historyID == SearchUtility.caffeinate.historyID)
-        #expect(SearchMenuAction.generateUUID(.v4).historyID == SearchMenuAction.generateUUID(.v7).historyID)
-    }
-
-    @Test func historyIDsAreDistinctAndCannotBeAppIDs() {
-        let ids = SearchUtility.allCases.map(\.historyID) + [SearchResults.settingsHistoryID]
-        #expect(Set(ids).count == ids.count)
-        #expect(SearchMenuAction.generateUUID(.v7).historyID == SearchUtility.generateUUID.historyID)
-        #expect(!entries.contains { ids.contains($0.id) })
     }
 
     @Test func settingsRanksByItsOwnHistory() {
@@ -101,27 +58,26 @@ struct SearchResultsTests {
         var frecency = Frecency()
         frecency.recordLaunch(SearchResults.settingsHistoryID)
         #expect(describe(build("se", frecency: frecency)) == ["settings", "Settings Sync"])
-        // History under another utility's id does not lift it.
-        var other = Frecency()
-        other.recordLaunch(SearchUtility.caffeinate.historyID)
-        #expect(describe(build("se", frecency: other)) == ["Settings Sync", "settings"])
+        // An app with more history still wins the tier.
+        for _ in 0..<3 { frecency.recordLaunch("app.settings.sync") }
+        #expect(describe(build("se", frecency: frecency)) == ["Settings Sync", "settings"])
     }
 
-    @Test func twoCharactersReachEachBuiltIn() {
+    @Test func historyNeverLiftsABuiltInAboveAnAliasMatch() {
+        var frecency = Frecency()
+        for _ in 0..<30 { frecency.recordLaunch(SearchResults.settingsHistoryID) }
+        let corpus = SearchCorpus(entries: entries, aliases: AliasIndex(aliases: ["app.safari": "spo"]))
+        let results = SearchResults.build(for: "spo", corpus: corpus, matcher: Matcher(), frecency: frecency)
+        #expect(describe(results) == ["Safari", "settings"])
+    }
+
+    @Test func settingsHistoryIDCannotBeAnAppID() {
+        #expect(!entries.contains { $0.id == SearchResults.settingsHistoryID })
+    }
+
+    @Test func twoCharactersReachEachKeyword() {
         #expect(describe(build("sp")) == ["settings"])
         #expect(describe(build("pr")) == ["settings"])
-        #expect(describe(build("ge")) == ["generateUUID"])
-        #expect(describe(build("uu")) == ["generateUUID"])
-        // Each keyword set starts differently, so one query never offers two built-ins.
-        #expect(describe(build("ca")).filter { ["settings", "generateUUID"].contains($0) }.isEmpty)
-    }
-
-    @Test func hiddenUtilityStaysHiddenDespiteHistory() {
-        var frecency = Frecency()
-        frecency.recordLaunch(SearchUtility.caffeinate.historyID)
-        frecency.recordLaunch(SearchUtility.generateUUID.historyID)
-        #expect(describe(build("ca", frecency: frecency, hiddenUtilities: [.caffeinate])) == ["Calculator"])
-        #expect(build("ge", frecency: frecency, hiddenUtilities: [.generateUUID]).isEmpty)
     }
 
     @Test func builtInsOutrankLowerTiersAndNonAppsOfTheSameTier() {
@@ -139,33 +95,30 @@ struct SearchResultsTests {
 
     @Test func builtInIsNotCutOffByTheRowLimit() {
         let many = (0..<80).map { index in
-            AppEntry(url: URL(fileURLWithPath: "/Applications/Cab\(index).app"), name: "Cab\(index)",
-                     bundleID: "app.cab\(index)")
+            AppEntry(url: URL(fileURLWithPath: "/Applications/Set\(index).app"), name: "Set\(index)",
+                     bundleID: "app.set\(index)")
         }
         let corpus = SearchCorpus(entries: many)
-        let unused = SearchResults.build(for: "ca", corpus: corpus, matcher: Matcher(), frecency: Frecency())
+        let unused = SearchResults.build(for: "se", corpus: corpus, matcher: Matcher(), frecency: Frecency())
         #expect(describe(unused).count == 51)
-        #expect(describe(unused).contains("caffeinate"))
+        #expect(describe(unused).contains("settings"))
         var frecency = Frecency()
-        frecency.recordLaunch(SearchUtility.caffeinate.historyID)
-        let used = SearchResults.build(for: "ca", corpus: corpus, matcher: Matcher(), frecency: frecency)
-        #expect(describe(used).first == "caffeinate")
+        frecency.recordLaunch(SearchResults.settingsHistoryID)
+        let used = SearchResults.build(for: "se", corpus: corpus, matcher: Matcher(), frecency: frecency)
+        #expect(describe(used).first == "settings")
     }
 
     @Test func builtInsCountAsLocalResultsForWebSearchFallback() {
-        for query in ["se", "sp", "pr", "ca", "uu", "ge"] {
+        for query in ["se", "sp", "pr"] {
             let results = build(query, web: .google, mode: .onlyWhenNoLocalResults)
             #expect(!describe(results).contains { $0.hasPrefix("Google:") })
             #expect(describe(build(query, web: .google, mode: .always)).last == "Google: \(query)")
         }
-        #expect(describe(build("ge", web: .google, mode: .onlyWhenNoLocalResults,
-                               hiddenUtilities: [.generateUUID])) == ["Google: ge"])
     }
 
     @Test func recentsIgnoreUtilityHistory() {
         var frecency = Frecency()
-        for _ in 0..<5 { frecency.recordLaunch(SearchUtility.caffeinate.historyID) }
-        frecency.recordLaunch(SearchResults.settingsHistoryID)
+        for _ in 0..<5 { frecency.recordLaunch(SearchResults.settingsHistoryID) }
         #expect(build("", frecency: frecency, recents: 5).isEmpty)
         frecency.recordLaunch("app.safari")
         #expect(describe(build("", frecency: frecency, recents: 5)) == ["Safari"])
@@ -221,7 +174,7 @@ struct SearchResultsTests {
     }
 
     @Test func fallbackWebSearchWaitsUntilEveryLocalResultIsAbsent() {
-        for query in ["saf", "sett", "caf", "uuid", "2+2", "10 km to miles"] {
+        for query in ["saf", "sett", "2+2", "10 km to miles"] {
             let results = build(query, web: .google, mode: .onlyWhenNoLocalResults)
             #expect(!results.isEmpty)
             #expect(!describe(results).contains { $0.hasPrefix("Google:") })
@@ -229,8 +182,6 @@ struct SearchResultsTests {
         #expect(describe(build("zzq", web: .google, mode: .onlyWhenNoLocalResults)) == ["Google: zzq"])
         #expect(describe(build("saf", hidden: ["app.safari"], web: .google,
                                mode: .onlyWhenNoLocalResults)) == ["Google: saf"])
-        #expect(describe(build("uuid", web: .google, mode: .onlyWhenNoLocalResults,
-                               hiddenUtilities: [.generateUUID])) == ["Google: uuid"])
     }
 
     @Test(arguments: [EntryKind.app, .settingsPane, .command, .link])
@@ -259,8 +210,6 @@ struct SearchResultsTests {
     @Test(arguments: SearchUtility.allCases)
     func utilityVisibilityIsIndependent(_ utility: SearchUtility) {
         let query = switch utility {
-        case .caffeinate: "caf"
-        case .generateUUID: "uuid"
         case .calculator: "2+2"
         case .unitConversion: "10 km to miles"
         }
@@ -275,31 +224,11 @@ struct SearchResultsTests {
         #expect(describe(build("calc", hiddenUtilities: hidden)) == ["Calculator"])
         #expect(describe(build("sett", hiddenUtilities: hidden)) == ["Settings Sync", "settings"])
         #expect(describe(build("2+2", web: .google, hiddenUtilities: hidden)) == ["Google: 2+2"])
-        #expect(describe(build("uuid", web: .google, hiddenUtilities: hidden)) == ["Google: uuid"])
-    }
-
-    @Test func uuidKeywordsKeepWorkingByDefault() {
-        for query in ["uuid", "gen", "generate uuid"] {
-            #expect(describe(build(query)).contains("generateUUID"))
-        }
-    }
-
-    @Test func offersCaffeinateIgnoresSurroundingSpaces() {
-        #expect(SearchResults.offersCaffeinate("  caffeine "))
-        #expect(!SearchResults.offersCaffeinate("cof"))
-    }
-
-    @Test func offersCaffeinateFromTwoCharacters() {
-        #expect(SearchResults.offersCaffeinate("ca"))
-        #expect(SearchResults.offersCaffeinate(" CA "))
-        #expect(!SearchResults.offersCaffeinate("c"))
-        #expect(!SearchResults.offersCaffeinate("co"))
-        #expect(!SearchResults.offersCaffeinate(String(repeating: "c", count: 10_000)))
     }
 
     @Test func aLineBreakPastedAroundAQueryIsIgnored() {
         #expect(describe(build("safari\n")).first == "Safari")
-        #expect(SearchResults.offersCaffeinate("caf\n"))
+        #expect(describe(build(" spotlite\n")) == ["settings"])
     }
 
     @Test func ansReachesTheCalculator() {

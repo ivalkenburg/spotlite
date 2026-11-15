@@ -61,6 +61,21 @@
         "kubectl",
         "developer"
       ]
+    },
+    {
+      "id": "uuid",
+      "name": "Generate UUID",
+      "description": "Copy a new random (v4) or time-ordered (v7) UUID.",
+      "author": "Spotlite",
+      "version": "1.0.0",
+      "source": "https://github.com/ivalkenburg/spotlite/tree/main/plugins/uuid",
+      "homepage": "https://github.com/ivalkenburg/spotlite/tree/main/plugins/uuid",
+      "icon": "number",
+      "tags": [
+        "uuid",
+        "clipboard",
+        "developer"
+      ]
     }
   ]
 }

@@ -4,7 +4,7 @@ import SpotliteCore
 struct ToastMessage: Equatable {
     let text: String
     let symbol: String
-    /// Failures, external-assertion explanations and explicit previews always show.
+    /// Failures and explicit previews always show.
     var isConfirmation = true
 
     static func copied(succeeded: Bool) -> ToastMessage {
@@ -17,37 +17,9 @@ struct ToastMessage: Equatable {
         ToastMessage(text: "\(hidden ? "Hidden" : "Restored") \(name)",
                      symbol: hidden ? "eye.slash" : "eye")
     }
-
-    static func caffeine(succeeded: Bool, state: CaffeineState) -> ToastMessage {
-        guard succeeded else {
-            return ToastMessage(text: "Couldn’t \(state.spotlite ? "disable" : "enable") Caffeinate",
-                                symbol: "exclamationmark.triangle", isConfirmation: false)
-        }
-        let text: String
-        if state.spotlite {
-            text = "Caffeinate enabled"
-        } else if state.external {
-            text = "Spotlite Caffeinate disabled; another app is keeping the display awake"
-        } else {
-            text = "Caffeinate disabled"
-        }
-        return ToastMessage(text: text, symbol: state.spotlite ? "cup.and.saucer.fill" : "cup.and.saucer",
-                            isConfirmation: state.spotlite || !state.external)
-    }
-
-    static func caffeineFinished(succeeded: Bool, state: CaffeineState) -> ToastMessage {
-        guard succeeded else {
-            return ToastMessage(text: "Couldn’t stop Caffeinate", symbol: "exclamationmark.triangle",
-                                isConfirmation: false)
-        }
-        return ToastMessage(text: state.external
-                            ? "Caffeinate finished; another app is keeping the display awake"
-                            : "Caffeinate finished",
-                            symbol: "cup.and.saucer", isConfirmation: !state.external)
-    }
 }
 
-/// Shared by launcher, menu bar and Settings. No views or scheduled work exist while
+/// Shared by launcher and Settings. No views or scheduled work exist while
 /// idle. A new message replaces the current one, including during its closing fade.
 @MainActor
 final class ToastPresenter {
@@ -95,28 +67,11 @@ final class ToastPresenter {
         }
     }
 
-    @discardableResult
     func copy(_ value: String, position: ToastPosition, on screen: NSScreen?,
-              to pasteboard: NSPasteboard = .general) -> Bool {
+              to pasteboard: NSPasteboard = .general) {
         pasteboard.clearContents()
         let succeeded = pasteboard.setString(value, forType: .string)
         show(.copied(succeeded: succeeded), position: position, on: screen)
-        return succeeded
-    }
-
-    @discardableResult
-    func startCaffeinate(_ caffeine: CaffeineAssertion, duration: CaffeineDuration,
-                         position: ToastPosition, on screen: NSScreen? = nil) -> Bool {
-        let succeeded = caffeine.start(duration)
-        show(.caffeine(succeeded: succeeded, state: caffeine.state), position: position, on: screen)
-        return succeeded
-    }
-
-    @discardableResult
-    func stopCaffeinate(_ caffeine: CaffeineAssertion, position: ToastPosition, on screen: NSScreen? = nil) -> Bool {
-        let succeeded = caffeine.stop()
-        show(.caffeine(succeeded: succeeded, state: caffeine.state), position: position, on: screen)
-        return succeeded
     }
 
     func dismiss() {
@@ -257,14 +212,9 @@ private final class ToastView: NSView {
 
 #if DEBUG
 extension ToastPresenter {
-    private func toggleCaffeinate(_ caffeine: CaffeineAssertion, position: ToastPosition, on screen: NSScreen? = nil) {
-        let succeeded = caffeine.toggle()
-        show(.caffeine(succeeded: succeeded, state: caffeine.state), position: position, on: screen)
-    }
-
     /// SPOTLITE_DEV_TOAST=1: exercise native windows and controls without saving prefs
     /// or touching the general clipboard. Frame assertions catch clipped/wrapped labels.
-    func runDevChecks(caffeine: CaffeineAssertion) async throws {
+    func runDevChecks() async throws {
         func check(_ condition: @autoclosure () -> Bool, _ description: String) throws {
             guard condition() else {
                 throw NSError(domain: "ToastChecks", code: 1,
@@ -299,31 +249,16 @@ extension ToastPresenter {
             }
         }
 
-        let external = ToastMessage.caffeine(succeeded: true,
-                                             state: CaffeineState(external: true))
-        show(external, position: .bottomCenter, on: screen)
+        let long = ToastMessage(text: "A long message that cannot fit on one line and must wrap within the toast",
+                                symbol: "exclamationmark.triangle", isConfirmation: false)
+        show(long, position: .bottomCenter, on: screen)
         let content = panel!.contentView as! ToastView
         let labelFrame = content.label.convert(content.label.bounds, to: content)
         try check(content.bounds.contains(labelFrame) && labelFrame.height > 20,
-                  "External caffeine message must wrap within the toast")
+                  "A long message must wrap within the toast")
         print("DEV toast: wrapped window=\(panel!.frame) label=\(labelFrame)")
-        try check(ToastMessage.caffeine(succeeded: false, state: CaffeineState()).text == "Couldn’t enable Caffeinate",
-                  "Enable failure was reported as success")
-        try check(ToastMessage.caffeine(succeeded: false, state: CaffeineState(session: CaffeineSession(duration: .untilTurnedOff))).text == "Couldn’t disable Caffeinate",
-                  "Disable failure was reported as success")
         try check(ToastMessage.copied(succeeded: false).text == "Couldn’t copy to clipboard",
                   "Clipboard failure was reported as success")
-        let originalState = caffeine.state.spotlite
-        defer { if caffeine.state.spotlite != originalState { caffeine.toggle() } }
-        toggleCaffeinate(caffeine, position: .bottomCenter, on: screen)
-        checkDevMessage(ToastMessage.caffeine(succeeded: caffeine.state.spotlite != originalState,
-                                              state: caffeine.state).text)
-        let beforeRefresh = panel?.contentView
-        caffeine.refresh()
-        try check(panel?.contentView === beforeRefresh, "Background refresh generated a toast")
-        if caffeine.state.spotlite != originalState {
-            toggleCaffeinate(caffeine, position: .bottomCenter, on: screen)
-        }
 
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
@@ -334,56 +269,20 @@ extension ToastPresenter {
 
         showConfirmationMessages = false
         try check(panel == nil && dismissal == nil, "Disabling confirmations kept a routine message alive")
-        for message in [ToastMessage.copied(succeeded: true), .visibility("Fixture", hidden: true),
-                        .caffeine(succeeded: true, state: CaffeineState()),
-                        .caffeineFinished(succeeded: true, state: CaffeineState())] {
+        for message in [ToastMessage.copied(succeeded: true), .visibility("Fixture", hidden: true)] {
             show(message, position: .bottomCenter, on: screen)
             try check(panel == nil && dismissal == nil, "A disabled confirmation created views or work")
         }
         copy("copy without confirmation", position: .bottomCenter, on: screen, to: pasteboard)
         try check(panel == nil && pasteboard.string(forType: .string) == "copy without confirmation",
                   "Suppressing confirmation changed clipboard behavior")
-        for message in [ToastMessage.copied(succeeded: false),
-                        .caffeine(succeeded: false, state: CaffeineState()),
-                        .caffeineFinished(succeeded: false, state: CaffeineState()), external,
-                        .caffeineFinished(succeeded: true, state: CaffeineState(external: true))] {
+        for message in [ToastMessage.copied(succeeded: false), long] {
             show(message, position: .bottomCenter, on: screen)
             checkDevMessage(message.text)
             dismiss()
         }
         showConfirmationMessages = true
-        print("DEV toast: routine confirmations suppressed; clipboard, failures and external explanations preserved")
-
-        // Real IOKit assertions plus a short wall-clock deadline exercise scheduling,
-        // renewal and cancellation without waiting for a full duration preset.
-        try check(caffeine.start(.fifteenMinutes, now: Date().addingTimeInterval(-899.8)), "Could not start timed session")
-        try check(caffeine.start(.thirtyMinutes), "Could not replace timed session")
-        let replacement = caffeine.state.session?.deadline
-        try await Task.sleep(for: .milliseconds(400))
-        try check(caffeine.state.spotlite && caffeine.state.session?.deadline == replacement,
-                  "An old deadline stopped its replacement")
-        try check(caffeine.start(.fifteenMinutes, now: Date().addingTimeInterval(-899.8)), "Could not shorten session")
-        try check(caffeine.start(.untilTurnedOff), "Could not remove deadline")
-        try await Task.sleep(for: .milliseconds(400))
-        try check(caffeine.state.spotlite && caffeine.state.session?.deadline == nil,
-                  "A canceled deadline stopped an indefinite session")
-        try check(caffeine.start(.fifteenMinutes, now: Date().addingTimeInterval(-899.8)), "Could not schedule expiry")
-        try await Task.sleep(for: .milliseconds(500))
-        try check(!caffeine.state.spotlite, "Timed assertion did not expire")
-        checkDevMessage(ToastMessage.caffeineFinished(succeeded: true, state: caffeine.state).text)
-        try check(caffeine.start(.fifteenMinutes, now: Date().addingTimeInterval(-901)), "Could not start expired fixture")
-        try check(!caffeine.state.spotlite, "Refresh did not handle an expired session")
-        checkDevMessage(ToastMessage.caffeineFinished(succeeded: true, state: caffeine.state).text)
-        let expirationContent = panel?.contentView
-        caffeine.refresh()
-        try check(panel?.contentView === expirationContent, "Refresh repeated the expiration message")
-        // A resume after the deadline must release immediately, without needing ticks.
-        let now = Date()
-        try check(caffeine.start(.fifteenMinutes, now: now), "Could not start wake fixture")
-        caffeine.expireIfNeeded(now: now.addingTimeInterval(2400))
-        try check(!caffeine.state.spotlite, "Sleep extended the session")
-        try check(NSApp.keyWindow === keyWindow && NSApp.isActive == active, "Expiry took focus")
-        print("DEV caffeine: deadline replacement, cancellation, timer/refresh expiry, single feedback and elapsed sleep passed")
+        print("DEV toast: routine confirmations suppressed; clipboard and failures preserved")
 
         let model = SettingsModel(preferences: Preferences(), library: AppLibrary(directories: []),
                                   savePreferences: { _ in })
@@ -456,7 +355,7 @@ extension ToastPresenter {
         dismiss()
         try await Task.sleep(for: .milliseconds(170))
         try check(panel == nil && dismissal == nil, "Explicit dismissal left work behind")
-        print("DEV toast: focus, placement, wrapping, copy, caffeine, Settings, replacement, fades and cleanup passed")
+        print("DEV toast: focus, placement, wrapping, copy, Settings, replacement, fades and cleanup passed")
     }
 
     func checkDevMessage(_ text: String) {

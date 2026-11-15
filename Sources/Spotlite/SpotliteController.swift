@@ -37,7 +37,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// Rebuilt when the index, aliases, hidden apps, links or kind settings change, never
     /// per keystroke.
     private var corpus = SearchCorpus.empty
-    private let caffeine: CaffeineAssertion
     private let toasts: ToastPresenter
     private var cursor = 0
     /// Bundle paths of running apps, taken when the panel opens rather than per row
@@ -116,9 +115,8 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// Called when the panel itself changes preferences, by hiding an app or being dragged.
     var onPreferencesChanged: ((Preferences) -> Void)?
 
-    init(library: AppLibrary, caffeine: CaffeineAssertion, preferences: Preferences, toasts: ToastPresenter) {
+    init(library: AppLibrary, preferences: Preferences, toasts: ToastPresenter) {
         self.library = library
-        self.caffeine = caffeine
         self.preferences = preferences
         self.toasts = toasts
         super.init()
@@ -177,7 +175,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         table.delegate = self
         table.target = self
         table.action = #selector(tableClicked)
-        // A click must not take focus from the field: submenus and template-link
+        // A click must not take focus from the field: plugin levels and template-link
         // arguments keep the panel open, and typing must keep reaching the query.
         table.refusesFirstResponder = true
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("main"))
@@ -332,10 +330,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         isDismissing = false
         modifiers = NSEvent.modifierFlags
         applyResolvedAppearance()
-        caffeine.refresh()
         loadLibrary()
         runningPaths = Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL.map(AppEntry.standardizedPath) })
-        // A show during the close fade can still find a submenu or argument open.
+        // A show during the close fade can still find a plugin level or argument open.
         resetNavigation()
         ResultItem.forgetHandlers()
 
@@ -480,10 +477,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     #if DEBUG
     /// Dev captures steal key focus, which would dismiss the panel mid-measurement.
     private let pinnedOpen = ProcessInfo.processInfo.environment["SPOTLITE_DEV_PIN"] == "1"
-    /// Scripted dev runs press Return on utilities; they must not train the real history.
+    /// Scripted dev runs press Return on Settings and plugin commands; they must not train the real history.
     private let recordsUtilityUse: Bool = {
         let environment = ProcessInfo.processInfo.environment
-        return ["FRAMES", "SEQUENCE", "MENU", "COMPLETION", "UTILITIES", "PLUGINS", "REGRESSIONS", "CONFIGURATION", "ACTIONS"].allSatisfy {
+        return ["FRAMES", "SEQUENCE", "NAVIGATION", "COMPLETION", "UTILITIES", "PLUGINS", "REGRESSIONS", "CONFIGURATION", "ACTIONS"].allSatisfy {
             environment["SPOTLITE_DEV_\($0)"] != "1"
         }
     }()
@@ -525,7 +522,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         updateMatches(for: query, selecting: nil)
     }
 
-    /// Resolve the selection before creating row views, so entering a menu or
+    /// Resolve the selection before creating row views, so entering a level or
     /// refreshing it does not render one selection and immediately replace its cells.
     private func updateMatches(for query: String, selecting preferred: (id: String, style: Selection)?) {
         items = buildItems(for: query)
@@ -544,7 +541,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     /// Rebuilds the list for an unchanged query when something beneath it changes: the
-    /// index, or caffeine's state. Keep navigated rows stable, so a refresh does not
+    /// index or preferences. Keep navigated rows stable, so a refresh does not
     /// change what Return will do.
     private func refreshMatches() {
         let navigatedTo = selection == .navigated && items.indices.contains(cursor)
@@ -568,7 +565,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     }
 
     private func buildItems(for query: String) -> [ResultItem] {
-        let state = caffeine.state
         switch navigation.scope {
         case .argument: return []
         case .plugin(let scope):
@@ -587,13 +583,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                     occurrence: pluginList.occurrence(at: index),
                     key: keys.flatMap { $0.indices.contains(index) ? $0[index] : nil }))
             }
-        case .menu(let menu):
-            if let utility = SearchUtility(rawValue: menu.id), preferences.hiddenUtilities.contains(utility) {
-                return []
-            }
-            let current = menu.id == SearchUtility.caffeinate.rawValue
-                ? SearchMenu.caffeinate(active: state.spotlite) : menu
-            return current.search(query, matcher: matcher).map { .menuItem($0, state: state) }
         case .root: break
         }
         return SearchResults.build(for: query, corpus: corpus, matcher: matcher,
@@ -603,7 +592,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                                    webSearch: preferences.webSearchEngine,
                                    webSearchMode: preferences.webSearchMode,
                                    hiddenUtilities: preferences.hiddenUtilities)
-            .map { ResultItem($0, caffeine: state) }
+            .map(ResultItem.init)
     }
 
     private var cardFirst: Bool {
@@ -707,9 +696,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         case #selector(NSResponder.insertTab(_:)):
             if argument != nil { return true }
             guard items.indices.contains(cursor) else { return true }
-            if let submenu = items[cursor].submenu {
-                enterScope(.menu(submenu))
-            } else if case .app(let match) = items[cursor], match.entry.template != nil {
+            if case .app(let match) = items[cursor], match.entry.template != nil {
                 enterArgument(for: cursor)
             } else if items[cursor].pluginAction?.entersScope == true {
                 launch(at: cursor)
@@ -810,36 +797,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             toasts.copy(result, position: preferences.toastPosition, on: panel.screen)
             hide()
 
-        case .generateUUID:
-            enterScope(.menu(.generateUUID))
-
         case .settings:
             hide()
             onOpenSettings?()
             recordUtilityUse(SearchResults.settingsHistoryID)
-
-        case .caffeinate:
-            enterScope(.menu(.caffeinate(active: caffeine.state.spotlite)))
-
-        case .menuItem(let item, _):
-            if let action = item.action {
-                if item.closesPanelOnAction { hide() }
-                let succeeded: Bool
-                switch action {
-                case .startCaffeinate(let duration):
-                    succeeded = toasts.startCaffeinate(caffeine, duration: duration,
-                                                       position: preferences.toastPosition, on: panel.screen)
-                case .stopCaffeinate:
-                    succeeded = toasts.stopCaffeinate(caffeine, position: preferences.toastPosition,
-                                                      on: panel.screen)
-                case .generateUUID(let version):
-                    succeeded = toasts.copy(UUIDGenerator.generate(version),
-                                            position: preferences.toastPosition, on: panel.screen)
-                }
-                if succeeded { recordUtilityUse(action.historyID) }
-            } else if let submenu = item.submenu {
-                enterScope(.menu(submenu))
-            }
 
         case .webSearch(let query, let engine):
             hide()
@@ -951,8 +912,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     private func updateScopeChip() {
         switch navigation.scope {
         case .root: bar.hideChip()
-        case .menu(let menu):
-            bar.showChip(title: menu.title, icon: ResultItem.symbol(menu.symbolName))
         case .argument(let link):
             let url = ResultItem.iconURL(for: link)
             bar.showChip(title: link.name, icon: url == nil ? ResultItem.linkIcon : nil, iconURL: url)
@@ -1526,17 +1485,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         refreshMatches()
     }
 
-    func caffeineStateDidChange() {
-        guard panel.isVisible else { return }
-        if case .menu = navigation.scope {
-            refreshMatches()
-            return
-        }
-        guard argument == nil, !preferences.hiddenUtilities.contains(.caffeinate),
-              SearchResults.offersCaffeinate(field.stringValue) else { return }
-        refreshMatches()
-    }
-
     // MARK: - Table
 
     func numberOfRows(in tableView: NSTableView) -> Int { items.count }
@@ -1781,18 +1729,6 @@ extension SpotliteController {
         try checkExternalFocus("calculation copied")
 
         show()
-        setQuery("caf")
-        updateMatches(for: "caf")
-        launch(at: items.firstIndex { $0.identity == "caffeinate" }!)
-        let wasCaffeinated = caffeine.state.spotlite
-        launch(at: 0)
-        try check(caffeine.state.spotlite != wasCaffeinated, "Caffeinate did not toggle")
-        _ = caffeine.toggle()
-        try? await Task.sleep(for: .milliseconds(200))
-        try check(!panel.isVisible, "Caffeinate did not dismiss search")
-        try checkExternalFocus("Caffeinate toggled")
-
-        show()
         let escapeEditor = field.currentEditor() as! NSTextView
         _ = control(field, textView: escapeEditor, doCommandBy: #selector(NSResponder.cancelOperation(_:)))
         try? await Task.sleep(for: .milliseconds(200))
@@ -1970,128 +1906,19 @@ extension SpotliteController {
         }
     }
 
-    /// Exercise scoped keyboard navigation through the real field editor and dump
-    /// frames after the glass animation settles. Only invoked by the dev hook.
-    func runDevMenuFrames() async {
+    /// SPOTLITE_DEV_NAVIGATION=1: leave a template link's argument with each back key
+    /// and back-query mode through the real field editor, dumping frames after the glass
+    /// animation settles.
+    func runDevNavigationChecks() async {
         let savedPreferences = preferences
-        let savedConfirmations = toasts.showConfirmationMessages
-        defer {
-            caffeine.stop()
-            preferencesDidChange(savedPreferences)
-            toasts.showConfirmationMessages = savedConfirmations
-        }
-        toasts.showConfirmationMessages = true
+        defer { preferencesDidChange(savedPreferences) }
         preferences.backNavigationBehavior = .restoreQuery
-        preferences.hiddenUtilities.remove(.caffeinate)
-        caffeine.stop()
         show()
-        setQuery("caf")
-        updateMatches(for: "caf")
-        guard let row = items.firstIndex(where: { $0.identity == "caffeinate" }),
-              var editor = field.currentEditor() as? NSTextView else {
-            preconditionFailure("Missing Caffeinate or field editor")
-        }
-        select(row, as: .navigated)
-        precondition(items[row].hints(modifiers: [], running: false) == [ResultItem.Hint(text: "Actions", key: "⇥")])
-        try? await Task.sleep(for: .milliseconds(400))
-        dumpFrames("menu-parent")
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
-        precondition(!caffeine.state.spotlite && items.count == 5 && cursor == 0 && items[0].identity == "caffeinate.0",
-                     "Inactive Caffeinate: active=\(caffeine.state.spotlite), cursor=\(cursor), items=\(items.map(\.identity))")
-        for state in [CaffeineState(), CaffeineState(external: true),
-                      CaffeineState(session: CaffeineSession(duration: .oneHour), external: true)] {
-            for item in SearchMenu.caffeinate(active: state.spotlite).items {
-                precondition(ResultItem.menuItem(item, state: state).hints(modifiers: [], running: false).isEmpty)
-            }
-        }
-        try? await Task.sleep(for: .milliseconds(400))
-        dumpFrames("submenu-durations")
-        try? await SettingsForm.captureWindow(panel, name: "caffeinate-durations")
-        for duration in CaffeineDuration.allCases {
-            let index = items.firstIndex { $0.identity == "caffeinate.\(duration.rawValue)" }!
-            select(index, as: .navigated)
-            let before = Date()
-            if duration == .fifteenMinutes {
-                _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
-            } else {
-                launch(at: index)
-            }
-            precondition(caffeine.state.spotlite && isDismissing)
-            if duration == .untilTurnedOff {
-                precondition(caffeine.state.session?.deadline == nil)
-            } else {
-                let remaining = caffeine.state.session!.deadline!.timeIntervalSince(before)
-                precondition(abs(remaining - Double(duration.rawValue)) < 1)
-            }
-            try? await Task.sleep(for: .milliseconds(300))
-            precondition(!panel.isVisible && !navigation.canGoBack)
-            toasts.checkDevMessage("Caffeinate enabled")
-
-            show()
-            setQuery("caf")
-            updateMatches(for: "caf")
-            select(items.firstIndex { $0.identity == "caffeinate" }!, as: .navigated)
-            editor = field.currentEditor() as! NSTextView
-            _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:)))
-            precondition(items.count == 6 && items.first?.identity == "caffeinate.stop"
-                         && items[1].identity == "caffeinate.0" && !isDismissing)
-            precondition(cursor == 0 && selection == .topHit)
-            precondition(items.allSatisfy { $0.hints(modifiers: [], running: false).isEmpty })
-            caffeineStateDidChange()
-            precondition(cursor == 0 && selection == .topHit)
-            try? await Task.sleep(for: .milliseconds(400))
-            dumpFrames("submenu-active-\(duration.rawValue)")
-            if duration == .fifteenMinutes || duration == .untilTurnedOff {
-                try? await SettingsForm.captureWindow(panel, name: "caffeinate-active-\(duration.rawValue)")
-            }
-        }
-        let savedRows = preferences.visibleRows
-        preferences.visibleRows = 4
-        leaveScope()
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
-        precondition(items[cursor].identity == "caffeinate.stop")
-        try? await Task.sleep(for: .milliseconds(400))
-        precondition(cursor == 0 && scroll.contentView.bounds.minY == 0)
-        precondition(viewport.firstRow(showing: cursor, offset: scroll.contentView.bounds.minY,
-                                      height: listHeight.constant) == nil)
-        precondition(DevViews.descendants(table).allSatisfy { !($0 is NSSwitch) })
-        dumpFrames("submenu-active-four-rows")
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
-        preferences.visibleRows = savedRows
-        precondition(!caffeine.state.spotlite && isDismissing)
-        try? await Task.sleep(for: .milliseconds(300))
-        toasts.checkDevMessage(ToastMessage.caffeine(succeeded: true, state: caffeine.state).text)
-        show()
-        setQuery("caf")
-        updateMatches(for: "caf")
-        select(items.firstIndex { $0.identity == "caffeinate" }!, as: .navigated)
-        editor = field.currentEditor() as! NSTextView
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:)))
-        setQuery("30")
-        updateMatches(for: "30")
-        precondition(items.count == 1 && items[0].identity == "caffeinate.1800")
-        dumpFrames("submenu-filtered")
-        setQuery("safari")
-        updateMatches(for: "safari")
-        precondition(items.isEmpty)
-        dumpFrames("submenu-no-match")
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertBacktab(_:)))
-        precondition(field.stringValue == "caf" && items[cursor].identity == "caffeinate" && selection == .navigated)
-        try? await Task.sleep(for: .milliseconds(400))
-        dumpFrames("submenu-backtab")
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:)))
-        precondition(items.count == 5 && !caffeine.state.spotlite)
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.deleteBackward(_:)))
-        precondition(field.stringValue == "caf" && items[cursor].identity == "caffeinate")
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.cancelOperation(_:)))
-        show()
-        precondition(!navigation.canGoBack && argument == nil)
-        print("DEV menu: duration order, plain rows, Turn Off first/default, four-row layout, replacement, filtering and navigation passed")
-        await runDevNestedMenuChecks(editor)
+        guard let editor = field.currentEditor() as? NSTextView else { preconditionFailure("Missing field editor") }
         await runDevBackNavigationChecks(editor)
     }
 
-    /// Real AppKit conversion and generation checks; preserve every clipboard representation.
+    /// Real AppKit conversion checks; preserve every clipboard representation.
     func runDevUtilityChecks() async throws {
         let savedPreferences = preferences
         let savedConfirmations = toasts.showConfirmationMessages
@@ -2122,35 +1949,9 @@ extension SpotliteController {
             try? await Task.sleep(for: .milliseconds(300))
             toasts.checkDevMessage("Copied to clipboard")
         }
-        for version in UUIDVersion.allCases {
-            show()
-            setQuery("uuid")
-            updateMatches(for: "uuid")
-            let rootRow = items.firstIndex { $0.identity == "generateUUID" }!
-            select(rootRow, as: .navigated)
-            let editor = field.currentEditor() as! NSTextView
-            _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:)))
-            try checkUtility(items.map(\.identity) == ["uuid.v4", "uuid.v7"])
-            _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertBacktab(_:)))
-            try checkUtility(field.stringValue == "uuid" && items[cursor].identity == "generateUUID")
-            _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
-            setQuery(version.rawValue)
-            updateMatches(for: version.rawValue)
-            try checkUtility(items.count == 1 && items[0].identity == "uuid." + version.rawValue)
-            try? await Task.sleep(for: .milliseconds(400))
-            dumpFrames("uuid-\(version.rawValue)")
-            _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
-            let generated = pasteboard.string(forType: .string)!
-            let parsed = UUID(uuidString: generated)!
-            try checkUtility(parsed.uuid.6 >> 4 == (version == .v4 ? 4 : 7))
-            try checkUtility(generated == generated.lowercased() && isDismissing)
-            toasts.checkDevMessage("Copied to clipboard")
-            try? await Task.sleep(for: .milliseconds(300))
-        }
         try await runDevSettingsChecks()
         try runDevUtilitySettingsChecks()
-        try runDevUtilityVisibilityChecks()
-        print("DEV utilities: conversion cards, exact copying, UUID navigation and generation passed")
+        print("DEV utilities: conversion cards and exact copying passed")
     }
 
     private func runDevSettingsChecks() async throws {
@@ -2251,10 +2052,11 @@ extension SpotliteController {
             picker.sendAction(picker.action, to: picker.target)
             page.layoutSubtreeIfNeeded()
         }
-        try checkUtility(picker.label(forSegment: 5) == "Utility" && table.numberOfRows == 5)
+        let utilities = SearchUtility.allCases.count
+        try checkUtility(picker.label(forSegment: 5) == "Utility" && table.numberOfRows == 1 + utilities)
         select(5)
-        try checkUtility(table.numberOfRows == 4)
-        for index in 0..<4 {
+        try checkUtility(table.numberOfRows == utilities)
+        for index in 0..<utilities {
             let row = table.view(atColumn: 0, row: index, makeIfNecessary: true) as! SettingsRowView
             let fields = DevViews.descendants(row).compactMap { $0 as? NSTextField }
             let alias = fields.first { $0.placeholderString == "alias" }!
@@ -2269,16 +2071,16 @@ extension SpotliteController {
             try checkUtility(!model.preferences.hiddenUtilities.contains(utility))
             print("DEV settings: Utility row=\(row.frame) name=\(name) aliasHidden=\(alias.isHidden)")
         }
-        try checkUtility(saves == 8 && model.preferences.hiddenBundleIDs.isEmpty && model.preferences.aliases.isEmpty)
+        try checkUtility(saves == 2 * utilities && model.preferences.hiddenBundleIDs.isEmpty && model.preferences.aliases.isEmpty)
         select(0)
-        try checkUtility(table.numberOfRows == 5)
+        try checkUtility(table.numberOfRows == 1 + utilities)
         select(1)
         try checkUtility(table.numberOfRows == 1)
         let appRow = table.view(atColumn: 0, row: 0, makeIfNecessary: true) as! SettingsRowView
         try checkUtility(!DevViews.descendants(appRow).compactMap { $0 as? NSTextField }
             .first { $0.placeholderString == "alias" }!.isHidden)
         select(5)
-        filter.stringValue = "UUID"
+        filter.stringValue = "Conv"
         filter.sendAction(filter.action, to: filter.target)
         try checkUtility(table.numberOfRows == 1)
         filter.stringValue = "nothing matches"
@@ -2289,109 +2091,8 @@ extension SpotliteController {
         print("DEV settings: Items page=\(page.frame) tabs=\(picker.frame) naturalTabsWidth=\(picker.intrinsicContentSize.width); Utility toggles, filtering, All and row reuse passed")
     }
 
-    private func runDevUtilityVisibilityChecks() throws {
-        let savedPreferences = preferences
-        let wasActive = caffeine.state.spotlite
-        defer {
-            if caffeine.state.spotlite != wasActive { caffeine.toggle() }
-            preferencesDidChange(savedPreferences)
-        }
-        for utility in [SearchUtility.caffeinate, .generateUUID] {
-            preferences.hiddenUtilities = []
-            show()
-            let query = utility == .caffeinate ? "caf" : "uuid"
-            setQuery(query)
-            updateMatches(for: query)
-            let index = items.firstIndex { $0.identity == utility.rawValue }!
-            launch(at: index)
-            try checkUtility(!items.isEmpty)
-            if utility == .caffeinate && !caffeine.state.spotlite { caffeine.toggle() }
-            var hidden = preferences
-            hidden.hiddenUtilities.insert(utility)
-            preferencesDidChange(hidden)
-            try checkUtility(items.isEmpty)
-            if utility == .caffeinate { try checkUtility(caffeine.state.spotlite) }
-            leaveScope()
-            try checkUtility(!items.contains { $0.identity == utility.rawValue })
-        }
-        print("DEV utilities: hiding open submenus removes their actions; active Caffeinate stays on")
-    }
-
     private func checkUtility(_ condition: @autoclosure () -> Bool, line: Int = #line) throws {
         guard condition() else { throw NSError(domain: "SpotliteDevChecks", code: line) }
-    }
-
-    private func runDevNestedMenuChecks(_ editor: NSTextView) async {
-        let fixture = SearchMenu(id: "dev.menu", title: "Menu fixture", items: [
-            SearchMenuItem(id: "dev.first", title: "First", action: .startCaffeinate(.untilTurnedOff),
-                           closesPanelOnAction: false),
-            SearchMenuItem(id: "dev.both", title: "Both", action: .startCaffeinate(.untilTurnedOff),
-                           closesPanelOnAction: false, submenu: .caffeinate),
-            SearchMenuItem(id: "dev.nested", title: "Nested", submenu: .caffeinate),
-        ])
-        preferences.visibleRows = max(preferences.visibleRows, fixture.items.count)
-        enterScope(.menu(fixture))
-        select(1, as: .navigated)
-        let originalState = caffeine.state.spotlite
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
-        guard case .menu(let current) = navigation.scope else { preconditionFailure("Expected fixture") }
-        precondition(current.id == fixture.id && caffeine.state.spotlite && cursor == 1)
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
-        precondition(caffeine.state.spotlite)
-        if !originalState { caffeine.stop() }
-        var updated = preferences
-        updated.backNavigationBehavior = .clearQuery
-        preferencesDidChange(updated)
-        precondition(cursor == 1 && selection == .navigated)
-        preferences.backNavigationBehavior = .restoreQuery
-
-        for style in [Selection.topHit, .dismissed, .navigated] {
-            select(0, as: style)
-            // The same dispatcher serves a mouse click and Cmd-digit on a nonselected row.
-            launch(at: 2)
-            _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertBacktab(_:)))
-            precondition(cursor == 0 && selection == style && items[0].identity == "dev.first")
-        }
-
-        select(1, as: .navigated)
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:)))
-        try? await Task.sleep(for: .milliseconds(400))
-        let childHeight = glassHeight.constant
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertBacktab(_:)))
-        precondition(Metrics.inputHeight + Metrics.listTopPadding + viewport.restingHeight
-                     + Metrics.listBottomPadding < childHeight)
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:)))
-        try? await Task.sleep(for: .milliseconds(400))
-        precondition(items.count == 5 && items[0].identity == "caffeinate.0"
-                     && glassHeight.constant == childHeight)
-        dumpFrames("nested-rapid-roundtrip")
-        _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertBacktab(_:)))
-
-        let backKeys = [#selector(NSResponder.insertBacktab(_:)), #selector(NSResponder.deleteBackward(_:))]
-        for behavior in BackNavigationBehavior.allCases {
-            preferences.backNavigationBehavior = behavior
-            for key in backKeys {
-                setQuery("bo")
-                updateMatches(for: "bo")
-                select(0, as: .navigated)
-                _ = control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:)))
-                precondition(items.count == 5 && items[0].identity == "caffeinate.0")
-                _ = control(field, textView: editor, doCommandBy: key)
-                switch behavior {
-                case .restoreQuery:
-                    precondition(field.stringValue == "bo" && items[cursor].identity == "dev.both"
-                                 && selection == .navigated)
-                case .clearQuery:
-                    precondition(field.stringValue.isEmpty && items.count == fixture.items.count
-                                 && cursor == 0 && selection == .topHit)
-                }
-            }
-        }
-        resetNavigation()
-        setQuery("")
-        updateMatches(for: "")
-        precondition(ResultItem.symbol("folder") === ResultItem.symbol("folder"))
-        print("DEV menu: nested navigation, direct action plus submenu, nonselected activation and rapid resize passed")
     }
 
     private func runDevBackNavigationChecks(_ editor: NSTextView) async {
@@ -2405,12 +2106,12 @@ extension SpotliteController {
         leaveScope()
         for behavior in BackNavigationBehavior.allCases {
             for key in backKeys {
-                for isArgument in [false, true] {
-                    setQuery("caf")
-                    updateMatches(for: "caf")
-                    let row = items.firstIndex(where: { $0.identity == "caffeinate" })!
+                do {
+                    setQuery("sett")
+                    updateMatches(for: "sett")
+                    let row = items.firstIndex(where: { $0.identity == "settings" })!
                     select(row, as: .navigated)
-                    enterScope(isArgument ? .argument(link) : .menu(.caffeinate))
+                    enterScope(.argument(link))
                     // Change the preference after entry: the next back action must use it.
                     var updated = preferences
                     updated.backNavigationBehavior = behavior
@@ -2424,7 +2125,7 @@ extension SpotliteController {
                     precondition(!navigation.canGoBack && argument == nil)
                     switch behavior {
                     case .restoreQuery:
-                        precondition(field.stringValue == "caf" && items[cursor].identity == "caffeinate"
+                        precondition(field.stringValue == "sett" && items[cursor].identity == "settings"
                                      && selection == .navigated)
                     case .clearQuery:
                         precondition(field.stringValue.isEmpty && items.isEmpty && cursor == 0 && selection == .topHit)
@@ -2434,7 +2135,7 @@ extension SpotliteController {
             try? await Task.sleep(for: .milliseconds(400))
             dumpFrames("back-\(behavior.rawValue)")
         }
-        print("DEV menu: both back-query modes and live changes passed for menus and arguments")
+        print("DEV navigation: both back-query modes and live changes passed for arguments")
 
         let settingsModel = SettingsModel(preferences: preferences, library: library)
         let settingsController = SearchSettingsViewController(model: settingsModel)
@@ -2448,9 +2149,38 @@ extension SpotliteController {
         print("DEV settings: Search page=\(page.frame) back-query picker=\(pickerFrame)")
     }
 
+    /// The UUID example: its fixed menu, then each version copied, with the clipboard restored.
+    private func runDevUUIDPluginChecks(pluginRow: (String) -> Int?, settle: (Int) async -> Void,
+                                        check: (@autoclosure () -> Bool, @autoclosure () -> String) throws -> Void) async throws {
+        let restoreClipboard = savedClipboard()
+        defer { restoreClipboard() }
+        for version in ["v4", "v7"] {
+            show()
+            guard let command = pluginRow("uuid") else { return try check(false, "No UUID command") }
+            try check(items[command].title == "Generate UUID", "Keyword found \(items[command].title)")
+            launch(at: command)
+            try check(items.map(\.title) == ["v4 — Random", "v7 — Time ordered"],
+                      "Unexpected UUID menu: \(items.map(\.title))")
+            setQuery(version)
+            updateMatches(for: version)
+            try check(items.count == 1, "Filter gave \(items.map(\.title))")
+            NSPasteboard.general.clearContents()
+            launch(at: 0)
+            try check(isDismissing, "A UUID run must close the panel")
+            await settle(800)
+            let copied = NSPasteboard.general.string(forType: .string) ?? ""
+            let versionNibble = UUID(uuidString: copied).map { $0.uuid.6 >> 4 }
+            try check(versionNibble == (version == "v4" ? 4 : 7) && copied == copied.lowercased(),
+                      "\(version) copied \(copied)")
+            toasts.checkDevMessage("Copied to clipboard")
+        }
+        print("DEV plugins: UUID menu, filtering and v4/v7 copies passed")
+    }
+
     /// SPOTLITE_DEV_PLUGINS=1 with SPOTLITE_DEV_PLUGINS_DIR=plugins: finds the
     /// example Caffeinate plugin by keyword, loads and filters its list, starts and stops a
-    /// session through it, and runs one GitHub search when the network answers.
+    /// session through it, copies a UUID from the UUID plugin, and runs one GitHub search
+    /// when the network answers.
     func runDevPluginChecks() async throws {
         func check(_ condition: @autoclosure () -> Bool, _ message: @autoclosure () -> String) throws {
             guard condition() else {
@@ -2548,6 +2278,7 @@ extension SpotliteController {
 
         try await runDevPluginRowChecks(pluginID: "caffeinate", check: check)
         resetNavigation()
+        try await runDevUUIDPluginChecks(pluginRow: pluginRow, settle: settle, check: check)
         show()
         guard let github = pluginRow("github") else { return try check(false, "No GitHub command") }
         launch(at: github)
