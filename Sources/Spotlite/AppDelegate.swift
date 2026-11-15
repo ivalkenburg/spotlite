@@ -59,103 +59,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         toasts.showConfirmationMessages = preferences.showConfirmationMessages
+        PluginHost.shared.keepPluginRunDiagnostics = preferences.keepPluginRunDiagnostics
         #if DEBUG
-        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_CONFIGURATION"] == "1" {
-            Task { @MainActor in
-                do {
-                    try await PluginConfigurationDevChecks.run(controller: self.controller, library: self.library,
-                                                               preferences: self.preferences)
-                    exit(0)
-                } catch {
-                    print("DEV configuration failed: \(error)")
-                    exit(1)
-                }
-            }
-            return
-        }
-        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_DIAGNOSTICS"] == "1" {
-            Task { @MainActor in
-                do {
-                    try await PluginDiagnosticsDevChecks.run(library: self.library, preferences: self.preferences)
-                    exit(0)
-                } catch {
-                    print("DEV diagnostics failed: \(error)")
-                    exit(1)
-                }
-            }
-            return
-        }
-        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_STREAM"] == "1" {
-            Task { @MainActor in
-                do {
-                    try await self.controller.runDevStreamChecks()
-                    exit(0)
-                } catch {
-                    print("DEV stream failed: \(error)")
-                    exit(1)
-                }
-            }
-            return
-        }
-        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_INSTALL"] == "1" {
-            Task { @MainActor in
-                do {
-                    try await PluginInstallDevChecks.run(library: self.library, preferences: self.preferences)
-                    exit(0)
-                } catch {
-                    print("DEV install failed: \(error)")
-                    exit(1)
-                }
-            }
-            return
-        }
-        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_GALLERY"] == "1" {
-            Task { @MainActor in
-                do {
-                    try await PluginGalleryDevChecks.run(library: self.library, preferences: self.preferences)
-                    exit(0)
-                } catch {
-                    print("DEV gallery failed: \(error)")
-                    exit(1)
-                }
-            }
-            return
-        }
-        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_REGRESSIONS"] == "1" {
-            Task { @MainActor in
-                do {
-                    try await self.controller.runDevRegressionChecks()
-                    exit(0)
-                } catch {
-                    print("DEV regressions failed: \(error)")
-                    exit(1)
-                }
-            }
-            return
-        }
-        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_ACTIONS"] == "1" {
-            Task { @MainActor in
-                do {
-                    try await self.controller.runDevPluginActionChecks()
-                    exit(0)
-                } catch {
-                    print("DEV actions failed: \(error)")
-                    exit(1)
-                }
-            }
-            return
-        }
-        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_FOCUS"] == "1" {
-            let previousApplication = NSWorkspace.shared.frontmostApplication
-            Task { @MainActor in
-                do {
-                    try await self.controller.runDevFocusChecks(previousApplication: previousApplication)
-                    exit(0)
-                } catch {
-                    print("DEV focus failed: \(error)")
-                    exit(1)
-                }
-            }
+        // Checks that run instead of the app: no hotkey, status item or first-run Settings.
+        let previousApplication = NSWorkspace.shared.frontmostApplication
+        if runDevCheck("CONFIGURATION", {
+            try await PluginConfigurationDevChecks.run(controller: self.controller, library: self.library,
+                                                       preferences: self.preferences)
+        }) || runDevCheck("DIAGNOSTICS", {
+            try await PluginDiagnosticsDevChecks.run(library: self.library, preferences: self.preferences)
+        }) || runDevCheck("STREAM", { try await self.controller.runDevStreamChecks() })
+            || runDevCheck("INSTALL", {
+                try await PluginInstallDevChecks.run(library: self.library, preferences: self.preferences)
+            }) || runDevCheck("GALLERY", {
+                try await PluginGalleryDevChecks.run(library: self.library, preferences: self.preferences)
+            }) || runDevCheck("REGRESSIONS", { try await self.controller.runDevRegressionChecks() })
+            || runDevCheck("ACTIONS", { try await self.controller.runDevPluginActionChecks() })
+            || runDevCheck("FOCUS", {
+                try await self.controller.runDevFocusChecks(previousApplication: previousApplication)
+            }) {
             return
         }
         #endif
@@ -208,28 +130,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if ProcessInfo.processInfo.environment["SPOTLITE_DEV_SEQUENCE"] == "1" {
             Task { @MainActor in self.controller.runDevSequence() }
         }
-        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_UTILITIES"] == "1" {
-            Task { @MainActor in
-                do {
-                    try await self.controller.runDevUtilityChecks()
-                    exit(0)
-                } catch {
-                    print("DEV utilities failed: \(error)")
-                    exit(1)
-                }
-            }
-        }
-        if ProcessInfo.processInfo.environment["SPOTLITE_DEV_PLUGINS"] == "1" {
-            Task { @MainActor in
-                do {
-                    try await self.controller.runDevPluginChecks()
-                    exit(0)
-                } catch {
-                    print("DEV plugins failed: \(error.localizedDescription)")
-                    exit(1)
-                }
-            }
-        }
+        _ = runDevCheck("UTILITIES", { try await self.controller.runDevUtilityChecks() })
+        _ = runDevCheck("PLUGINS", { try await self.controller.runDevPluginChecks() })
         if ProcessInfo.processInfo.environment["SPOTLITE_DEV_COMPLETION"] == "1" {
             Task { @MainActor in
                 await self.controller.runDevCompletionChecks()
@@ -267,6 +169,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         #endif
     }
+
+    #if DEBUG
+    /// Runs the check `SPOTLITE_DEV_<name>=1` asks for, then exits: 0 when it passes,
+    /// 1 when it throws. False when the variable is not set.
+    private func runDevCheck(_ name: String, _ check: @escaping @MainActor () async throws -> Void) -> Bool {
+        guard ProcessInfo.processInfo.environment["SPOTLITE_DEV_" + name] == "1" else { return false }
+        Task { @MainActor in
+            do {
+                try await check()
+                exit(0)
+            } catch {
+                print("DEV \(name.lowercased()) failed: \(error)")
+                exit(1)
+            }
+        }
+        return true
+    }
+    #endif
 
     func applicationWillTerminate(_ notification: Notification) {
         stopCaffeineRefreshTimer()
@@ -467,6 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             || preferences.disabledPlugins != prefs.disabledPlugins
         preferences = prefs
         toasts.showConfirmationMessages = prefs.showConfirmationMessages
+        PluginHost.shared.keepPluginRunDiagnostics = prefs.keepPluginRunDiagnostics
         if directoriesChanged { libraryInstance?.setDirectories(prefs.applicationDirectories) }
         if extrasChanged { library.extras = extraEntries }
         applyTheme()

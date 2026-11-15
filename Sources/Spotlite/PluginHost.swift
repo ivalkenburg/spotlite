@@ -23,6 +23,11 @@ final class PluginHost {
     /// Each plugin's most recent run, for Settings. Memory only: diagnostics never
     /// touch the disk, and a relaunch starts clean.
     private var lastRuns: [String: PluginRunRecord] = [:]
+    /// Follows the preference of the same name. Off, no run is recorded and a streamed
+    /// run keeps none of its raw output; the debug runner still shows what it ran.
+    var keepPluginRunDiagnostics = false {
+        didSet { if !keepPluginRunDiagnostics { lastRuns = [:] } }
+    }
     /// Settings listens while it is open, so a run it shows never needs polling.
     var onRunRecorded: ((String) -> Void)?
 
@@ -235,12 +240,9 @@ final class PluginHost {
 
     func apply(_ changes: [PluginCommandUpdate], from plugin: InstalledPlugin) {
         guard !changes.isEmpty, let declared = plugin.manifest?.commands, !declared.isEmpty else { return }
-        // A temporary index pays off for large batches. Small responses keep the
-        // linear path, without allocating a set or adding a persistent cache.
-        let commandIDs = changes.count >= 128 && declared.count >= 128 && changes.count >= declared.count / 2
-            ? Set(declared.map(\.id)) : nil
+        let commandIDs = Set(declared.map(\.id))
         for change in changes {
-            guard commandIDs?.contains(change.command) ?? declared.contains(where: { $0.id == change.command }) else { continue }
+            guard commandIDs.contains(change.command) else { continue }
             updates[plugin.entryID(forCommandID: change.command)] = change.isReset ? nil : change
         }
     }
@@ -275,23 +277,35 @@ final class PluginHost {
     func debugRun(_ plugin: InstalledPlugin, command: PluginCommand, query: String,
                   completion: @escaping @MainActor (PluginRunReport) -> Void) -> PluginRun? {
         guard let action = PluginRunAction(command.action) else { return nil }
+        var query = query
         var arguments: [String]
         var streams = false
         switch command.action {
         case .run(let args, _): arguments = args
         case .list(let args, let options): arguments = args; streams = options.streams
-        case .search(let args, _, _, let options): arguments = args + [query]; streams = options.streams
+        case .search(let args, _, _, let options):
+            // The query a search level would send for the same text.
+            query = Self.searchQuery(query)
+            arguments = args + [query]; streams = options.streams
         case .open, .copy, .menu: return nil
         }
         return start(plugin, arguments: arguments, query: query, command: command.id, action: action,
-                     streams: streams, completion: completion)
+                     streams: streams, keepsOutput: true, completion: completion)
     }
 
     func lastRun(for id: String) -> PluginRunRecord? { lastRuns[id] }
 
+    /// What a search level sends for the text typed: trimmed, and bounded so a pasted
+    /// page never becomes an argument.
+    static func searchQuery(_ text: String) -> String {
+        String(text.trimmingCharacters(in: .whitespaces).prefix(512))
+    }
+
     /// `streams` decodes the output line by line; `rows` also shows them as they come.
+    /// `keepsOutput` defaults to the diagnostics preference.
     private func start(_ plugin: InstalledPlugin, arguments: [String], query: String, command: String,
-                       action: PluginRunAction, streams: Bool = false, rows: (@MainActor ([PluginItem]) -> Void)? = nil,
+                       action: PluginRunAction, streams: Bool = false, keepsOutput: Bool? = nil,
+                       rows: (@MainActor ([PluginItem]) -> Void)? = nil,
                        completion: @escaping @MainActor (PluginRunReport) -> Void) -> PluginRun? {
         loadIfNeeded()
         let finish: @MainActor (PluginRunReport) -> Void = { [weak self] report in
@@ -320,13 +334,16 @@ final class PluginHost {
         }
         return PluginRun.startReporting(executable: executable, arguments: arguments, environment: environment,
                                         directory: plugin.directory, timeout: manifest.timeout,
-                                        stream: streams || rows != nil, rows: delivery) { report in
+                                        stream: streams || rows != nil,
+                                        keepsOutput: keepsOutput ?? keepPluginRunDiagnostics,
+                                        rows: delivery) { report in
             Task { @MainActor in finish(report) }
         }
     }
 
     private func record(_ report: PluginRunReport, for plugin: InstalledPlugin, command: String,
                         action: PluginRunAction, arguments: [String]) {
+        guard keepPluginRunDiagnostics else { return }
         lastRuns[plugin.id] = PluginRunRecord(report: report, commandID: command, action: action, arguments: arguments)
         onRunRecorded?(plugin.id)
     }

@@ -64,8 +64,7 @@ public struct PluginStreamDecoder {
 
     private mutating func decode(_ bytes: Data) {
         line += 1
-        var bytes = bytes
-        if bytes.last == 0x0D { bytes.removeLast() }
+        // A CRLF line's CR is JSON whitespace, so it needs no stripping.
         guard !bytes.allSatisfy({ $0 == 0x20 || $0 == 0x09 || $0 == 0x0D }) else { return }
         // Past the cap rows are still told apart from response lines, but not built.
         decoder.userInfo[StreamLine.remainingRows] = PluginItem.maxItems - items.count

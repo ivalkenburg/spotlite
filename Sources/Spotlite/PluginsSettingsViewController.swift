@@ -15,6 +15,8 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
     /// The selected plugin's actions on a right click, beside the ones the buttons show.
     private let rowMenu = NSMenu()
     private let emptyLabel = SettingsForm.hint("No plugins installed.")
+    private let keepDiagnostics = NSButton(checkboxWithTitle: "Keep each plugin’s last run for diagnostics",
+                                           target: nil, action: nil)
     private let lastRunTitle = NSTextField(labelWithString: "Last run")
     private let lastRun = NSTextView.scrollableTextView()
     private let sourceLabel = NSTextField(labelWithString: "")
@@ -117,6 +119,10 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
         sourceLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         sourceLabel.setAccessibilityLabel("Source")
 
+        keepDiagnostics.target = self
+        keepDiagnostics.action = #selector(keepDiagnosticsChanged)
+        keepDiagnostics.toolTip = "Its exit status, the end of its standard error and the start of its output, in memory only. Run Command… shows output either way."
+
         lastRunTitle.font = .systemFont(ofSize: 11, weight: .semibold)
         lastRunTitle.textColor = .secondaryLabelColor
         lastRunTitle.lineBreakMode = .byTruncatingTail
@@ -135,16 +141,17 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
             "Plugins add commands to search. A plugin is a program that runs with your permissions when you use it: install only ones you trust.")
         caption.preferredMaxLayoutWidth = SettingsForm.width - 40
 
-        let stack = NSStackView(views: [scroll, buttons, sourceLabel, lastRunTitle, lastRun, caption])
+        let stack = NSStackView(views: [scroll, buttons, sourceLabel, keepDiagnostics, lastRunTitle, lastRun, caption])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
         stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
         stack.setCustomSpacing(6, after: buttons)
         stack.setCustomSpacing(16, after: sourceLabel)
+        stack.setCustomSpacing(8, after: keepDiagnostics)
         stack.setCustomSpacing(4, after: lastRunTitle)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        for fullWidth in [scroll, buttons, sourceLabel, lastRunTitle, lastRun, caption] as [NSView] {
+        for fullWidth in [scroll, buttons, sourceLabel, keepDiagnostics, lastRunTitle, lastRun, caption] as [NSView] {
             fullWidth.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
         }
         NSLayoutConstraint.activate([
@@ -188,11 +195,17 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
     /// Shows what the host has now. The host itself is read again only on request.
     func reload() {
         guard isViewLoaded else { return }
+        // A reload follows any preference change; the selected plugin stays selected.
+        let selectedID = selectedPlugin?.id
         plugins = PluginHost.shared.plugins
         let store = PluginHost.shared.sources
         sources = Dictionary(plugins.compactMap { plugin in store.load(for: plugin.id).map { (plugin.id, $0) } },
                              uniquingKeysWith: { first, _ in first })
+        keepDiagnostics.state = model.preferences.keepPluginRunDiagnostics ? .on : .off
         table.reloadData()
+        if let selectedID, let row = plugins.firstIndex(where: { $0.id == selectedID }), row != table.selectedRow {
+            table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
         emptyLabel.isHidden = !plugins.isEmpty
         updateRemoveButton()
     }
@@ -258,6 +271,14 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
     /// The selected plugin's last run since launch, from the host's memory.
     private func showLastRun() {
         let text = lastRun.documentView as! NSTextView
+        // Nothing is kept while the option is off, so there is nothing to show.
+        let keeps = model.preferences.keepPluginRunDiagnostics
+        lastRunTitle.isHidden = !keeps
+        lastRun.isHidden = !keeps
+        guard keeps else {
+            text.string = ""
+            return
+        }
         guard let plugin = selectedPlugin else {
             lastRunTitle.stringValue = "Last run"
             lastRunTitle.textColor = .secondaryLabelColor
@@ -275,6 +296,12 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
         lastRunTitle.textColor = record.failed ? .systemRed : .secondaryLabelColor
         text.string = record.details
         text.scrollToBeginningOfDocument(nil)
+    }
+
+    @objc private func keepDiagnosticsChanged() {
+        // The host follows the preference as it is adopted, dropping records when off.
+        model.set(\.keepPluginRunDiagnostics, keepDiagnostics.state == .on)
+        showLastRun()
     }
 
     private func runRecorded(_ id: String) {

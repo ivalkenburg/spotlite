@@ -22,6 +22,8 @@ final class PluginInstallWindowController: NSWindowController {
     private var checkedPlugins: [InstalledPlugin] = []
     private let addressField = NSTextField(string: "")
     private let progress = NSProgressIndicator()
+    /// The working page's status line, which download progress rewrites.
+    private weak var status: NSTextField?
     /// The sheet then matches the Settings window.
     private let width: CGFloat = SettingsForm.width - 40
     /// After a successful install, with the installed plugin.
@@ -75,7 +77,7 @@ final class PluginInstallWindowController: NSWindowController {
         progress.maxValue = 1
         progress.startAnimation(nil)
         let status = hint(text)
-        status.identifier = NSUserInterfaceItemIdentifier("installStatus")
+        self.status = status
         var views: [NSView] = [title(window?.title ?? "Install"), progress, status]
         if allowsCancel { views.append(buttons([("Cancel", #selector(cancelClicked), "\u{1b}")])) }
         show(views, focus: nil)
@@ -192,7 +194,7 @@ final class PluginInstallWindowController: NSWindowController {
     }
 
     private func progressed(_ step: PluginInstallProgress) {
-        guard task != nil, let status = window?.contentView.flatMap({ Self.find("installStatus", in: $0) }) as? NSTextField else { return }
+        guard task != nil, let status else { return }
         switch step {
         case .downloading(let received, let expected):
             let done = ByteCountFormatter.string(fromByteCount: received, countStyle: .file)
@@ -355,11 +357,5 @@ final class PluginInstallWindowController: NSWindowController {
         case .github: "GitHub"
         case .archive(let url), .git(let url, _): url.host ?? url.absoluteString
         }
-    }
-
-    private static func find(_ identifier: String, in view: NSView) -> NSView? {
-        if view.identifier?.rawValue == identifier { return view }
-        for child in view.subviews { if let found = find(identifier, in: child) { return found } }
-        return nil
     }
 }

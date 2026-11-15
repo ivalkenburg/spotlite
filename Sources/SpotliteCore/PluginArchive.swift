@@ -266,14 +266,14 @@ public enum PluginArchive {
         guard begin + Int(entry.compressedSize) <= data.count else {
             throw .archive("The zip archive is damaged at \(entry.path).")
         }
-        let allowed = min(entry.size, limit)
         guard entry.size <= limit else { throw .archive("The archive expands to more than allowed.") }
-        let input = data.subdata(in: (data.startIndex + begin)..<(data.startIndex + begin + Int(entry.compressedSize)))
+        // A slice of the mapped archive: the compressed bytes are not copied.
+        let input = data[(data.startIndex + begin)..<(data.startIndex + begin + Int(entry.compressedSize))]
         var crc = CRC32()
         var produced: Int64 = 0
         func emit(_ chunk: Data) throws(PluginInstallError) {
             produced += Int64(chunk.count)
-            guard produced <= allowed else { throw .archive("\(entry.path) is larger than the archive says.") }
+            guard produced <= entry.size else { throw .archive("\(entry.path) is larger than the archive says.") }
             crc.update(chunk)
             try sink(chunk)
         }

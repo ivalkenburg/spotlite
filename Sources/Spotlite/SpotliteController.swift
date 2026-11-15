@@ -1249,7 +1249,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         pluginLoaded = pluginLoaded && pluginList.items.isEmpty && pluginStatus == nil
         pluginList = .empty
         pluginStatus = nil
-        let query = String(field.stringValue.trimmingCharacters(in: .whitespaces).prefix(Self.maxPluginQuery))
+        let query = PluginHost.searchQuery(field.stringValue)
         guard query.count >= minimum else {
             // The plugin's text shows below the minimum, and can stay while the first answer loads.
             pluginLoaded = options.emptyText != nil
@@ -1268,7 +1268,6 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(debounce), execute: work)
     }
 
-    private static let maxPluginQuery = 512
     private static let pluginLoadingDelay = DispatchTimeInterval.milliseconds(300)
 
     private func fetchPluginItems(_ scope: PluginScope, arguments: [String], query: String) {
@@ -2464,6 +2463,9 @@ extension SpotliteController {
         preferences.hiddenBundleIDs = []
         preferences.backNavigationBehavior = .restoreQuery
         library.extras = savedPreferences.extraEntries + plugins.entries(disabled: [])
+        // These checks read last-run records, which are opt-in.
+        plugins.keepPluginRunDiagnostics = true
+        defer { plugins.keepPluginRunDiagnostics = false }
 
         show()
         // The keyword is an alias: it finds a command whose title does not contain it.
@@ -2856,6 +2858,9 @@ extension SpotliteController {
         guard let fixture = plugins.plugin(id: "stream") else {
             return try check(false, "Set SPOTLITE_DEV_PLUGINS_DIR to Tests/Fixtures/Plugins")
         }
+        // These checks read last-run records, which are opt-in.
+        plugins.keepPluginRunDiagnostics = true
+        defer { plugins.keepPluginRunDiagnostics = false }
         let savedPreferences = preferences
         defer {
             resetNavigation()

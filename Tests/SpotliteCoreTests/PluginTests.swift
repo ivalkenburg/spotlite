@@ -482,6 +482,13 @@ struct PluginStoreTests {
         #expect(decoded.disabledPlugins == ["demo"])
         #expect(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).disabledPlugins.isEmpty)
     }
+
+    @Test func runDiagnosticsAreOffUntilTurnedOn() throws {
+        #expect(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).keepPluginRunDiagnostics == false)
+        let preferences = Preferences(keepPluginRunDiagnostics: true)
+        let decoded = try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(preferences))
+        #expect(decoded.keepPluginRunDiagnostics)
+    }
 }
 
 @Suite("Plugin runs")
@@ -658,15 +665,41 @@ struct PluginStreamRunTests {
         func finish(_ value: PluginRunReport) { lock.withLock { report = value } }
     }
 
-    private func start(_ script: String, timeout: TimeInterval = 10, deliveries: Deliveries,
-                       fixture: PluginFixture) throws -> (PluginRun, URL) {
+    private func start(_ script: String, timeout: TimeInterval = 10, keepsOutput: Bool = true,
+                       deliveries: Deliveries, fixture: PluginFixture) throws -> (PluginRun, URL) {
         let plugin = PluginStore.load(try fixture.plugin("demo", manifest: PluginFixture.manifest(), script: script))
         let queue = DispatchQueue(label: "rows")
         let run = PluginRun.startReporting(executable: plugin.executableURL!, arguments: [],
                                            environment: ["PATH": "/usr/bin:/bin"], directory: plugin.directory,
-                                           timeout: timeout, stream: true, rows: { deliveries.add($0) },
+                                           timeout: timeout, stream: true, keepsOutput: keepsOutput,
+                                           rows: { deliveries.add($0) },
                                            rowsQueue: queue) { deliveries.finish($0) }
         return (run, plugin.directory)
+    }
+
+    @Test func aStreamNeedNotKeepItsOutput() async throws {
+        let fixture = try PluginFixture()
+        let deliveries = Deliveries()
+        _ = try start(#"printf '{"title":"one"}\n{"title":"two"}\n'"#, keepsOutput: false,
+                      deliveries: deliveries, fixture: fixture)
+        for _ in 0..<500 where deliveries.finished == nil { try await Task.sleep(for: .milliseconds(10)) }
+        let report = try #require(deliveries.finished)
+        #expect(report.output.isEmpty)
+        #expect(try report.result.get().items?.map(\.title) == ["one", "two"])
+    }
+
+    @Test func anUnkeptStreamStillHasAnOutputLimit() async throws {
+        let fixture = try PluginFixture()
+        let deliveries = Deliveries()
+        // Past 4 MB of lines that are not rows, so nothing but the limit stops it.
+        _ = try start("yes '{}' | head -c 5000000", keepsOutput: false, deliveries: deliveries, fixture: fixture)
+        for _ in 0..<1000 where deliveries.finished == nil { try await Task.sleep(for: .milliseconds(10)) }
+        let report = try #require(deliveries.finished)
+        #expect(report.output.isEmpty)
+        guard case .failure(.outputTooLarge) = report.result else {
+            Issue.record("Expected outputTooLarge, got \(report.result)")
+            return
+        }
     }
 
     @Test func rowsArriveBeforeTheProgramExits() async throws {

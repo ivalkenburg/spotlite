@@ -50,6 +50,11 @@ public final class PluginRun: @unchecked Sendable {
     private var processGroup: pid_t?
     private let completion: ReportCompletion
     private var output = Data()
+    /// Bytes read from standard output, kept or not: the limit covers the whole run.
+    private var outputBytes = 0
+    /// False for a streamed run whose raw output nobody will read: rows are decoded
+    /// line by line, so the bytes need not stay in memory.
+    private let keepsOutput: Bool
     private var errorOutput = TailBuffer(limit: PluginRun.maxErrorOutput)
     private var started = DispatchTime.now()
     private var outputChannel: DispatchIO?
@@ -80,12 +85,16 @@ public final class PluginRun: @unchecked Sendable {
     /// and `rows` receives every row so far on `rowsQueue` as lines arrive. Deliveries
     /// are coalesced: at most one waits on the queue, and it carries the latest rows, so
     /// a burst of lines costs one delivery. The report repeats them all.
+    ///
+    /// Without `keepsOutput` a streamed run's report has no `output`. A run that is not
+    /// streamed always buffers its output, which it decodes at the end.
     @discardableResult
     public static func startReporting(executable: URL, arguments: [String], environment: [String: String],
                                       directory: URL, timeout: TimeInterval, stream: Bool = false,
+                                      keepsOutput: Bool = true,
                                       rows: Rows? = nil, rowsQueue: DispatchQueue = .main,
                                       report: @escaping ReportCompletion) -> PluginRun {
-        let run = PluginRun(completion: report, stream: stream,
+        let run = PluginRun(completion: report, stream: stream, keepsOutput: keepsOutput || !stream,
                             rows: stream ? rows.map { RowMailbox(queue: rowsQueue, deliver: $0) } : nil)
         run.queue.async {
             run.launch(executable: executable, arguments: arguments, environment: environment,
@@ -94,8 +103,9 @@ public final class PluginRun: @unchecked Sendable {
         return run
     }
 
-    private init(completion: @escaping ReportCompletion, stream: Bool, rows: RowMailbox?) {
+    private init(completion: @escaping ReportCompletion, stream: Bool, keepsOutput: Bool, rows: RowMailbox?) {
         self.completion = completion
+        self.keepsOutput = keepsOutput
         self.stream = stream ? PluginStreamDecoder() : nil
         self.rows = rows
     }
@@ -151,8 +161,9 @@ public final class PluginRun: @unchecked Sendable {
         outputChannel = read(outputPipe) { [self] chunk, ended in
             // A stopped run reports no output, so what still arrives is not kept.
             if stopReason == nil {
-                let remaining = PluginRun.maxOutput - output.count
-                output.append(chunk.prefix(remaining))
+                let remaining = PluginRun.maxOutput - outputBytes
+                outputBytes += min(chunk.count, remaining)
+                if keepsOutput { output.append(chunk.prefix(remaining)) }
                 if chunk.count > remaining { stop(.outputTooLarge) }
                 else if stream?.feed(chunk) == true, let items = stream?.items { rows?.post(items) }
             }

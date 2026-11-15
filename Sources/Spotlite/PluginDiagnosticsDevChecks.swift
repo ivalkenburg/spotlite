@@ -14,6 +14,11 @@ enum PluginDiagnosticsDevChecks {
             }
         }
         let host = PluginHost.shared
+        // Last-run records are opt-in; these checks read them.
+        var preferences = preferences
+        preferences.keepPluginRunDiagnostics = true
+        host.keepPluginRunDiagnostics = true
+        defer { host.keepPluginRunDiagnostics = false }
         guard let plugin = host.plugin(id: "diagnostics") else {
             return try check(false, "Set SPOTLITE_DEV_PLUGINS_DIR to Tests/Fixtures/Plugins")
         }
@@ -42,6 +47,15 @@ enum PluginDiagnosticsDevChecks {
             return try check(false, "Invalid output gave \(invalid)")
         }
         print("DEV diagnostics: stderr tail, last error line and invalid JSON detail passed")
+
+        // Off, the records go and nothing new is kept.
+        host.keepPluginRunDiagnostics = false
+        try check(host.lastRun(for: plugin.id) == nil, "Turning diagnostics off kept a record")
+        _ = await invoke(host, plugin, ["env"], command: "env", action: .run)
+        try check(host.lastRun(for: plugin.id) == nil, "A run was recorded with diagnostics off")
+        host.keepPluginRunDiagnostics = true
+        _ = await invoke(host, plugin, ["invalid"], command: "invalid", action: .list)
+        print("DEV diagnostics: records kept only while the option is on passed")
 
         let selectedTab = UserDefaults.standard.object(forKey: "SettingsSelectedTab")
         let settings = SettingsWindowController(preferences: preferences, library: library)
@@ -83,6 +97,21 @@ enum PluginDiagnosticsDevChecks {
         DevViews.dumpFrames(pane.view, tag: "plugins-pane")
         if let window = settingsWindow { try await SettingsForm.captureWindow(window, name: "plugins-pane") }
         print("DEV diagnostics: Settings actions and last run passed")
+
+        // With the option off the last run area is hidden and the list takes its room.
+        var off = preferences
+        off.keepPluginRunDiagnostics = false
+        let selected = table.selectedRow
+        settings.preferencesDidChange(off)
+        try check(table.selectedRow == selected, "A preference change lost the selected plugin")
+        pane.view.layoutSubtreeIfNeeded()
+        try check(lastRun.enclosingScrollView?.isHidden == true && title?.isHidden == true,
+                  "The last run area shows with the option off")
+        DevViews.dumpFrames(pane.view, tag: "plugins-pane-off")
+        settings.preferencesDidChange(preferences)
+        pane.view.layoutSubtreeIfNeeded()
+        try check(lastRun.enclosingScrollView?.isHidden == false, "The last run area stayed hidden")
+        print("DEV diagnostics: last run area hidden while the option is off passed")
 
         // The debug runner shows raw output and applies nothing.
         pasteboard.clearContents()

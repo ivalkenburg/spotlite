@@ -306,6 +306,7 @@ printing nothing is fine.
 
 `icon` is an SF Symbol name, an image file (`icon.png`, relative to the plugin's folder
 unless absolute), or any other path, whose Finder icon is shown (`/Applications/Safari.app`).
+An image is scaled to fit the row's icon without stretching.
 
 ### Streaming
 
@@ -349,12 +350,15 @@ before any row replaces the list with the error, as without streaming.
 ## Debugging
 
 In Settings → Plugins, the ⋯ button and a right click on a plugin hold its less frequent
-actions. Select a plugin to see its last run since Spotlite started: the
+actions. With "Keep each plugin's last run for diagnostics" on (it is off by default),
+select a plugin to see its last run since the option was turned on: the
 command, action and arguments, the exit status or error, how long it took, the last
 16 KB of standard error, the start of standard output and, for a streamed run, how many
-rows came and which lines were skipped. It is kept in memory only.
+rows came and which lines were skipped. It is kept in memory only, and turning the option
+off drops it. While it is off, a streamed run also keeps none of its raw output: its
+rows are decoded as lines arrive, and the 4 MB limit still counts every byte.
 
-Run Command… starts one of the plugin's `run`, `list` or `search` commands the same way search
+Run Command…, which works with the option on or off, starts one of the plugin's `run`, `list` or `search` commands the same way search
 does, with the same environment and configuration. The query field is `SPOTLITE_QUERY`
 and, for `search`, the last argument. The sheet shows standard output (indented when it
 is JSON) with what Spotlite understood from it, standard error, the exit status and the

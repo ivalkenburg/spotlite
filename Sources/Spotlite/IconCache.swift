@@ -56,7 +56,7 @@ final class IconCache {
             let path = (key as NSString).resolvingSymlinksInPath
             // A plugin's image file is the icon itself; anything else shows its Finder icon.
             let image = PluginIcon.imageExtensions.contains((path as NSString).pathExtension.lowercased())
-                ? NSImage(contentsOfFile: path) : nil
+                ? IconCache.imageFile(at: path, pixels: Int(Metrics.iconSize * 2)) : nil
             let icon = image ?? NSWorkspace.shared.icon(forFile: path)
             let flattened = IconCache.rasterize(icon, to: Metrics.iconSize)
             Task { @MainActor in
@@ -73,7 +73,21 @@ final class IconCache {
         rasterize(NSWorkspace.shared.icon(for: .applicationBundle), to: Metrics.iconSize)
     }()
 
-    /// Draws the icon into a bitmap once, at display size.
+    /// An image file decoded at icon size: a large photo found by a plugin is never
+    /// decoded in full. ImageIO can't read PDF or SVG, which NSImage draws as vectors.
+    nonisolated private static func imageFile(at path: String, pixels: Int) -> NSImage? {
+        let options = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                       kCGImageSourceCreateThumbnailWithTransform: true,
+                       kCGImageSourceThumbnailMaxPixelSize: pixels] as CFDictionary
+        if let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+           let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options) {
+            return NSImage(cgImage: thumbnail, size: .zero)
+        }
+        return NSImage(contentsOfFile: path)
+    }
+
+    /// Draws the icon into a bitmap once, at display size, fitted without stretching:
+    /// an app icon is square, a plugin's image need not be.
     ///
     /// `NSImage(size:flipped:drawingHandler:)` looks like it does this but does not: it
     /// retains the drawing block — and through it the full multi-representation source
@@ -92,7 +106,11 @@ final class IconCache {
 
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-        image.draw(in: NSRect(origin: .zero, size: size))
+        let source = image.size
+        let scale = source.width > 0 && source.height > 0 ? min(points / source.width, points / source.height) : 1
+        let fitted = NSSize(width: source.width * scale, height: source.height * scale)
+        image.draw(in: NSRect(x: (points - fitted.width) / 2, y: (points - fitted.height) / 2,
+                              width: fitted.width, height: fitted.height))
         NSGraphicsContext.restoreGraphicsState()
 
         let flattened = NSImage(size: size)
