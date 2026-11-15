@@ -7,6 +7,8 @@ final class SearchField: NSTextField {
     var onCommandDigit: ((Int) -> Void)?
     /// Return with Command and any other modifiers; false lets the event go on.
     var onCommandReturn: ((NSEvent.ModifierFlags) -> Bool)?
+    /// Return with Control and Option, which the text system would type as a space.
+    var onControlOptionReturn: ((NSEvent.ModifierFlags) -> Void)?
     /// Command-K; false lets the event go on.
     var onCommandK: (() -> Bool)?
     var onCommandQ: (() -> Void)?
@@ -42,6 +44,11 @@ final class SearchField: NSTextField {
         let isReturn = event.keyCode == UInt16(kVK_Return) || event.keyCode == UInt16(kVK_ANSI_KeypadEnter)
         // A plugin can bind Command with other modifiers to Return.
         if isReturn, modifiers.contains(.command), onCommandReturn?(modifiers) == true { return true }
+        // Unlike ⌃↩ and ⌥↩, this chord names no command: the field editor inserts it as text.
+        if isReturn, !modifiers.contains(.command), modifiers.isSuperset(of: [.control, .option]) {
+            onControlOptionReturn?(modifiers)
+            return true
+        }
         guard modifiers == .command else { return super.performKeyEquivalent(with: event) }
 
         if isReturn { return true }

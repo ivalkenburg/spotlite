@@ -74,6 +74,9 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
     /// Only the latest action in the same navigation session may replace its rows.
     private var pluginActionGeneration = 0
     private var pluginDebounce: DispatchWorkItem?
+    /// The query a search level's rows answer, or that its run or pause is fetching.
+    /// Cleared with that work and by a failure, which may be worth asking again.
+    private var pluginSearchQuery: String?
     /// The generation whose stream has shown rows, so its failure keeps them.
     private var pluginStreamedGeneration = -1
     /// The row to return to once a parent level's list has loaded again.
@@ -157,6 +160,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         field.delegate = self
         field.onCommandDigit = { [weak self] index in self?.launch(at: index) }
         field.onCommandReturn = { [weak self] modifiers in self?.commandReturn(modifiers) ?? false }
+        field.onControlOptionReturn = { [weak self] modifiers in self?.copyPath(modifiers) }
         field.onCommandK = { [weak self] in self?.togglePluginActions() ?? false }
         field.onCommandQ = { [weak self] in self?.quitApp() }
         field.onUndoHide = { [weak self] in self?.undoHide() ?? false }
@@ -717,13 +721,14 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
             // A Return still held from the row that asked must not answer the question.
             if case .confirm = pluginOverlay?.kind, NSApp.currentEvent?.isARepeat == true { return true }
             if argument != nil { openArgument(); return true }
-            // Shift and Control run Return's action unless a plugin row binds them.
+            // Shift runs Return's action unless a plugin row binds it. Control never
+            // arrives here: ⌃↩ and ⌃⇧↩ are insertLineBreak.
             let modifiers = returnModifiers
             if modifiers.isEmpty || !performPluginShortcut(modifiers) { launch(at: cursor) }
             return true
         case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
-            // Option-Return arrives as this, not as insertNewline.
-            if !performPluginShortcut(returnModifiers.union(.option)) { copyPath() }
+            // Option-Return arrives as this, not as insertNewline, and so does ⌥⇧↩.
+            copyPath(returnModifiers.union(.option))
             return true
         case #selector(NSResponder.insertLineBreak(_:)):
             // Control-Return arrives as this. Only a plugin gives it a meaning.
@@ -1236,11 +1241,16 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         pluginRun?.cancel()
         pluginRun = nil
         pluginPendingSelection = nil
+        pluginSearchQuery = nil
     }
 
     /// Asks a search level for rows once typing pauses. One-shot: nothing repeats.
     private func searchPlugin(immediately: Bool) {
         guard let scope = pluginScope, case .search(let args, let debounce, let minimum, let options) = scope.source else { return }
+        let query = PluginHost.searchQuery(field.stringValue)
+        // A space typed before or after the words asks the same question: the rows on
+        // screen, or the run or pause fetching them, already answer it.
+        if !immediately, query == pluginSearchQuery { return }
         cancelPluginWork()
         // Search rows answer one particular query. Keeping the previous answer
         // actionable during debounce could run it when Return follows new typing.
@@ -1249,12 +1259,12 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         pluginLoaded = pluginLoaded && pluginList.items.isEmpty && pluginStatus == nil
         pluginList = .empty
         pluginStatus = nil
-        let query = PluginHost.searchQuery(field.stringValue)
         guard query.count >= minimum else {
             // The plugin's text shows below the minimum, and can stay while the first answer loads.
             pluginLoaded = options.emptyText != nil
             return
         }
+        pluginSearchQuery = query
         guard !immediately, debounce > 0 else {
             fetchPluginItems(scope, arguments: args + [query], query: query)
             return
@@ -1299,10 +1309,12 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                 self.applyPluginResponse(response, from: plugin, on: self.panel.screen)
                 self.showPluginItems(response.items ?? [], extending: self.pluginStreamedGeneration == generation)
             case .failure(let error) where self.pluginStreamedGeneration == generation:
+                self.pluginSearchQuery = nil
                 // Rows a stream printed before failing stay usable; the toast says why it stopped.
                 self.toasts.show(.pluginFailure(error), position: self.preferences.toastPosition, on: self.panel.screen)
                 self.showPluginItems(self.pluginList.items, extending: true)
             case .failure(let error):
+                self.pluginSearchQuery = nil
                 self.pluginList = .empty
                 self.pluginStatus = PluginItem(title: error.message, icon: "exclamationmark.triangle")
                 self.refreshPluginRows()
@@ -1417,11 +1429,13 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         NSWorkspace.shared.activateFileViewerSelecting([match.entry.url])
     }
 
-    private func copyPath() {
+    /// `modifiers` are the ones held with Return, ⌥ among them.
+    private func copyPath(_ modifiers: NSEvent.ModifierFlags = .option) {
         let url: URL
         // A plugin row copies what ⌥↩ is bound to: its address unless it says otherwise.
+        // Only the exact chord counts, so ⌥⇧↩ never falls back to ⌥↩'s action.
         if pluginTarget(at: cursor) != nil {
-            if !performPluginShortcut(.option) { NSSound.beep() }
+            if !performPluginShortcut(modifiers) { NSSound.beep() }
             return
         }
         if argument != nil {
@@ -2769,9 +2783,17 @@ extension SpotliteController {
         try await press(escape.0, escape.1)
         // The list was loaded, so returning does not run the plugin again.
         try check(pluginRun == nil && items.map(\.title) == ["alpha", "beta"], "Returning reloaded the level")
+        // ⌥⇧↩ that the row does not bind must not fall back to ⌥↩'s Copy Link, and ⌃⌥↩,
+        // which the text system would type as a space, must not edit the query.
+        pasteboard.clearContents()
+        select(0, as: .navigated)
+        try await press(returnKey.0, returnKey.1, [.option, .shift])
+        try await press(returnKey.0, returnKey.1, [.option, .control])
+        try check(pasteboard.string(forType: .string) == nil && !closed && field.stringValue.isEmpty,
+                  "An unbound ⌥ chord ran Copy Link or typed \(field.stringValue.unicodeScalars.map(\.value))")
         leaveScope()
         try check(pluginScope == nil && cursor == row, "Back from the level did not return to the command")
-        print("DEV actions: command confirmation, a secondary's level, row actions and ⌃↩ passed")
+        print("DEV actions: command confirmation, a secondary's level, row actions, ⌃↩ and unbound ⌥ chords passed")
 
         // A completed debounced search has no pending work. Returning from its
         // actions restores the saved rows without starting another process.
@@ -2951,6 +2973,11 @@ extension SpotliteController {
             try check(!titles.isEmpty && titles.allSatisfy { $0.hasPrefix("new ") }, "Superseded search leaked rows: \(titles)")
         }
         try check(oldPID > 0 && kill(oldPID, 0) == -1, "The superseded stream kept running")
+        // A space around the words asks the same question: the answer stays, with no new run.
+        let (answered, answering, generation) = (titles, pluginRun, pluginGeneration)
+        type(" new ")
+        try check(titles == answered && pluginRun === answering && pluginGeneration == generation,
+                  "Adding spaces ran the same search again: \(titles)")
         // Leaving the level cancels its stream too.
         type("leave")
         await settle(150)

@@ -550,6 +550,10 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
             if enabled { self.model.preferences.disabledPlugins.remove(plugin.id) }
             else { self.model.preferences.disabledPlugins.insert(plugin.id) }
             self.model.persist()
+            // The name dims with the switch; Settings' own changes do not reload the list.
+            if let row = self.plugins.firstIndex(where: { $0.id == plugin.id }) {
+                self.table.reloadData(forRowIndexes: IndexSet(integer: row), columnIndexes: IndexSet(integer: 0))
+            }
         }
         return view
     }

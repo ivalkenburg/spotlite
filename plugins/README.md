@@ -158,7 +158,8 @@ A command and every row carry one action, which is what Return does.
 | `{"type":"run","args":[…],"keepOpen":false}` | Closes the panel at once and runs in the background, then applies the response; with `keepOpen` the panel stays and the list reloads | once |
 
 A `search` runs once typing has paused for `debounce` milliseconds (0 to 2000, default
-200), and only when the query has at least `minQuery` characters (default 1).
+200), and only when the query has at least `minQuery` characters (default 1). The query
+is trimmed, so a space typed before or after it keeps the rows rather than asking again.
 
 Tab also enters `menu`, `list` and `search`. Backspace on an empty query or Shift-Tab goes
 back. ⌥↩ on a row whose action is `open` copies its address, unless the row binds ⌥ itself
