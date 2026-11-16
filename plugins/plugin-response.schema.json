@@ -54,8 +54,29 @@
       "properties": {
         "command": { "description": "A command id from the manifest.", "type": "string" },
         "icon": { "$ref": "plugin.schema.json#/$defs/icon" },
-        "subtitle": { "type": "string" },
-        "expires": { "description": "Seconds since 1970.", "type": "number" }
+        "subtitle": { "description": "{expires} shows the deadline in the user's time format.", "type": "string" },
+        "expires": { "description": "Seconds since 1970.", "type": "number", "minimum": -100000000000, "maximum": 100000000000 },
+        "pid": { "description": "A process of the same user. The look ends when it exits.", "type": "integer", "minimum": 2, "maximum": 2147483647 },
+        "menuBar": { "$ref": "#/$defs/menuBar" }
+      },
+      "additionalProperties": false
+    },
+
+    "menuBar": {
+      "description": "Also shows the look as a menu-bar item while it lasts: the icon, the subtitle as tooltip and first line of its menu, then these actions.",
+      "type": "object",
+      "properties": {
+        "actions": {
+          "description": "Only open, copy, run and list actions; others are dropped, then at most 8 are kept. A list opens the panel at that level.",
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "allOf": [
+              { "$ref": "plugin.schema.json#/$defs/secondaryAction" },
+              { "properties": { "action": { "properties": { "type": { "enum": ["open", "copy", "run", "list"] } } } } }
+            ]
+          }
+        }
       },
       "additionalProperties": false
     },

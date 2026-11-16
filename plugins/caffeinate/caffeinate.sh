@@ -1,5 +1,6 @@
 #!/bin/sh
-# Keeps the display awake with /usr/bin/caffeinate, which outlives this script.
+# Keeps the display awake with /usr/bin/caffeinate, which outlives this script but not
+# Spotlite: -w ends it when Spotlite quits, as Spotlite's old built-in Caffeinate did.
 #   (no arguments)   list the durations, with Turn Off first while a session runs
 #   start <seconds>  start or replace a session; 0 lasts until turned off
 #   stop             end the session
@@ -21,13 +22,18 @@ stop() {
   rm -f "$state"
 }
 
-# The command's look in root results while a session runs.
+# The command's look in root results and the menu bar while a session runs. The pid
+# ends the look when caffeinate exits, however that happens. Spotlite that sets
+# SPOTLITE_PID writes {expires} in the user's time format; older Spotlite gets the time.
 look() {
+  menu='"menuBar":{"actions":[{"title":"Turn Off","icon":"cup.and.saucer","action":{"type":"run","args":["stop"]}},{"title":"Change Duration…","icon":"clock","action":{"type":"list"}}]}'
   if [ "$deadline" -gt 0 ]; then
-    printf '{"command":"caffeinate","icon":"cup.and.saucer.fill","subtitle":"Active until %s","expires":%s}' \
-      "$(date -r "$deadline" +%H:%M)" "$deadline"
+    if [ -n "$SPOTLITE_PID" ]; then until='{expires}'; else until=$(date -r "$deadline" +%H:%M); fi
+    printf '{"command":"caffeinate","icon":"cup.and.saucer.fill","subtitle":"Active until %s","expires":%s,"pid":%s,%s}' \
+      "$until" "$deadline" "$pid" "$menu"
   else
-    printf '{"command":"caffeinate","icon":"cup.and.saucer.fill","subtitle":"Active until turned off"}'
+    printf '{"command":"caffeinate","icon":"cup.and.saucer.fill","subtitle":"Active until turned off","pid":%s,%s}' \
+      "$pid" "$menu"
   fi
 }
 
@@ -41,14 +47,17 @@ case "$1" in
   start)
     seconds="${2:-0}"
     stop
+    # Older Spotlite sets no SPOTLITE_PID. It started this script, so it is $PPID.
+    owner="${SPOTLITE_PID:-$PPID}"
     if [ "$seconds" -gt 0 ]; then
-      nohup /usr/bin/caffeinate -d -t "$seconds" >/dev/null 2>&1 &
+      nohup /usr/bin/caffeinate -d -t "$seconds" -w "$owner" >/dev/null 2>&1 &
       deadline=$(( $(date +%s) + seconds ))
     else
-      nohup /usr/bin/caffeinate -d >/dev/null 2>&1 &
+      nohup /usr/bin/caffeinate -d -w "$owner" >/dev/null 2>&1 &
       deadline=0
     fi
-    echo "$! $deadline" > "$state"
+    pid=$!
+    echo "$pid $deadline" > "$state"
     printf '{"toast":{"text":"Caffeinate enabled","symbol":"cup.and.saucer.fill"},"update":[%s]}\n' "$(look)"
     ;;
   stop)

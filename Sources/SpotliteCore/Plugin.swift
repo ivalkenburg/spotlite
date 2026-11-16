@@ -299,17 +299,106 @@ public struct PluginToast: Sendable, Equatable, Decodable {
 
 /// Changes how one of the plugin's commands looks in root results, until `expires` or
 /// the next update. An update naming only the command restores the manifest's look.
+///
+/// `pid` ties the look to a process: it ends when that process exits. `menuBar` also
+/// shows the look as an item in the menu bar for as long as it lasts.
 public struct PluginCommandUpdate: Sendable, Equatable, Decodable {
     public let command: String
     public let icon: String?
     public let subtitle: String?
-    /// Seconds since 1970. Checked when the row is drawn, so nothing is scheduled.
+    /// Seconds since 1970. Checked when the row is drawn, and by one timer while a look
+    /// with `menuBar` has a deadline.
     public let expires: TimeInterval?
+    /// A process of the same user that the look describes. Spotlite watches it for its
+    /// exit, which costs nothing until then.
+    public let pid: Int32?
+    public let menuBar: PluginMenuBar?
 
-    public var isReset: Bool { icon == nil && subtitle == nil }
+    private enum CodingKeys: String, CodingKey { case command, icon, subtitle, expires, pid, menuBar }
+
+    public init(command: String, icon: String? = nil, subtitle: String? = nil, expires: TimeInterval? = nil,
+                pid: Int32? = nil, menuBar: PluginMenuBar? = nil) {
+        self.command = command
+        self.icon = icon
+        self.subtitle = subtitle
+        self.expires = expires
+        self.pid = pid
+        self.menuBar = menuBar
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        var pid: Int32?
+        if let raw = try c.decodeIfPresent(Int.self, forKey: .pid) {
+            // 0 and negatives name process groups to kill(2); such a look would never end.
+            guard raw > 1, raw <= Int(Int32.max) else {
+                throw DecodingError.dataCorruptedError(forKey: .pid, in: c, debugDescription: "Invalid pid \(raw)")
+            }
+            pid = Int32(raw)
+        }
+        let expires = try c.decodeIfPresent(TimeInterval.self, forKey: .expires)
+        // A deadline past year 5000 is a mistake, and too large for a timer.
+        if let expires, !(expires.isFinite && abs(expires) <= Self.maxExpires) {
+            throw DecodingError.dataCorruptedError(forKey: .expires, in: c, debugDescription: "Invalid expires \(expires)")
+        }
+        self.init(command: try c.decode(String.self, forKey: .command),
+                  icon: try c.decodeIfPresent(String.self, forKey: .icon),
+                  subtitle: try c.decodeIfPresent(String.self, forKey: .subtitle),
+                  expires: expires,
+                  pid: pid,
+                  menuBar: try c.decodeIfPresent(PluginMenuBar.self, forKey: .menuBar))
+    }
+
+    public var isReset: Bool { icon == nil && subtitle == nil && menuBar == nil }
 
     public func hasExpired(at now: Date) -> Bool {
         expires.map { now.timeIntervalSince1970 >= $0 } ?? false
+    }
+
+    /// The subtitle with each `{expires}` as the deadline in the user's short time style,
+    /// with the date when it is not today. Without `expires` the placeholder is removed.
+    public func displaySubtitle(now: Date = Date(), calendar: Calendar = .current) -> String? {
+        guard let subtitle, subtitle.contains(Self.expiresPlaceholder) else { return subtitle }
+        let time = expires.map { seconds -> String in
+            let deadline = Date(timeIntervalSince1970: seconds)
+            let date: Date.FormatStyle.DateStyle = calendar.isDate(deadline, inSameDayAs: now) ? .omitted : .abbreviated
+            return deadline.formatted(Date.FormatStyle(date: date, time: .shortened, locale: calendar.locale ?? .current,
+                                                       calendar: calendar, timeZone: calendar.timeZone))
+        } ?? ""
+        return subtitle.replacingOccurrences(of: Self.expiresPlaceholder, with: time)
+    }
+
+    static let expiresPlaceholder = "{expires}"
+    static let maxExpires: TimeInterval = 100_000_000_000
+}
+
+/// A command's look shown in the menu bar: its icon, its subtitle as the tooltip and
+/// first line of the menu, then these actions.
+public struct PluginMenuBar: Sendable, Equatable, Decodable {
+    public let actions: [PluginSecondaryAction]
+
+    /// A menu-bar menu is read at a glance. Up to `PluginSecondaryAction.maxCount` are
+    /// read; this many are kept of those the menu bar allows.
+    public static let maxActions = 8
+
+    private enum CodingKeys: String, CodingKey { case actions }
+
+    public init(actions: [PluginSecondaryAction] = []) {
+        self.actions = Array(actions.lazy.filter { PluginMenuBar.allows($0.action) }.prefix(PluginMenuBar.maxActions))
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(actions: PluginSecondaryAction.decodeList(from: c, forKey: .actions))
+    }
+
+    /// A menu can finish an action or open the panel at a list. A search or a fixed
+    /// menu would need typing the menu bar cannot give.
+    static func allows(_ action: PluginAction) -> Bool {
+        switch action {
+        case .open, .copy, .run, .list: true
+        case .search, .menu: false
+        }
     }
 }
 

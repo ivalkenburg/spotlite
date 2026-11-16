@@ -7,7 +7,7 @@ macOS 26 app launcher (Swift package, AppKit, no Xcode project). Goal #1: fast a
 - `Sources/SpotliteCore`: pure Swift, no AppKit. Matcher, calculator, result assembly, index, preferences. Tested headless in `Tests/SpotliteCoreTests`.
 - `Sources/Spotlite`: AppKit layer (panel, settings, hotkey, launching).
 - Keep logic in Core where possible so it stays testable.
-- Plugins: manifest, store, installer (`PluginInstaller`, `PluginArchive`, `PluginSource`), gallery index (`PluginGallery`) and process runner in Core (`Plugin*.swift`); `PluginHost`, the Settings tab, the install sheet and the gallery sheet in the AppKit layer. API in `plugins/README.md`, examples in `plugins`.
+- Plugins: manifest, store, installer (`PluginInstaller`, `PluginArchive`, `PluginSource`), gallery index (`PluginGallery`), command looks (`PluginLooks`) and process runner in Core (`Plugin*.swift`); `PluginHost`, menu-bar items (`PluginMenuBarItems`), the Settings tab, the install sheet and the gallery sheet in the AppKit layer. API in `plugins/README.md`, examples in `plugins`.
 - `plugins/index.json`: the plugin gallery index the app reads from `main` (schema in `plugins/plugin-index.schema.json`). Keep its versions in step with the examples' manifests; a test checks.
 
 ## Commands
@@ -31,7 +31,8 @@ make dmg      # build/Spotlite-<version>.dmg
 - Keep memory to a minimum. Idle is ~32 MB (45 MB with menu bar icon); ~88 MB after first panel open, mostly `NSGlassEffectView`.
 - Matching runs synchronously on the main thread (~6.5 µs per keystroke, ranking included). Don't move it to a queue.
 - Icons load on a background queue (~670 µs each), only for visible rows.
-- Plugins run nothing while idle: a child process per use, read through dispatch I/O, no helper process, timer or folder watcher. Keep the root keystroke path free of plugin work.
+- Plugins run nothing while idle: a child process per use, read through dispatch I/O, no helper process, timer or folder watcher (except the look watchers below). Keep the root keystroke path free of plugin work.
+- A look's `pid` is watched with a kqueue exit source. One one-shot wall-clock timer and a wake observer exist only while a look with `menuBar` (hidden or not) has a deadline. A menu-bar item exists only while its look lasts, and its menu is built on click.
 - Streamed plugin rows are decoded on the run's queue and reach the main actor at most once per frame, each delivery preparing only the new rows (`PluginList.appending`).
 - Hotkey uses Carbon `RegisterEventHotKey`: no Accessibility permission, no per-keystroke wakeups.
 - Measure with `--bench` before and after touching the matcher or ranking.
@@ -56,7 +57,7 @@ make dmg      # build/Spotlite-<version>.dmg
 | `SPOTLITE_DEV_NAVIGATION=1` | Exercise leaving a link argument with each back key and back-query mode; dump frames and exit |
 | `SPOTLITE_DEV_COMPLETION=1` | Exercise app completion modes, caret and Backspace; dump search and settings frames and exit |
 | `SPOTLITE_DEV_UTILITIES=1` | Exercise conversion cards and Utility settings; preserve clipboard, dump frames and exit |
-| `SPOTLITE_DEV_PLUGINS=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/plugins`: exercise the Caffeinate, UUID and GitHub examples, row accessories, empty text and `sort: false`; dump row frames (starts and stops a real `caffeinate`, needs network); exit |
+| `SPOTLITE_DEV_PLUGINS=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/plugins`: exercise the Caffeinate, UUID and GitHub examples, Caffeinate's menu-bar item (its menu, `-w`, Stop when switched off, hiding, an external kill), row accessories, empty text and `sort: false`; dump row frames (starts and stops a real `caffeinate`, needs network); exit |
 | `SPOTLITE_DEV_DIAGNOSTICS=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/Tests/Fixtures/Plugins`: exercise run context env, last-run records, Settings → Plugins buttons and the debug runner; dump frames and exit |
 | `SPOTLITE_DEV_STREAM=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/Tests/Fixtures/Plugins`: exercise streamed rows (before exit, selection while appending, Loading…, empty text, failure keeps rows, a keepOpen run replacing them, superseded and abandoned searches, debug runner); time keystrokes on 500 streamed rows; dump frames; exit |
 | `SPOTLITE_DEV_ACTIONS=1` | With `SPOTLITE_DEV_PLUGINS_DIR=$PWD/Tests/Fixtures/Plugins` and `SPOTLITE_DEV_PIN=1`: exercise modifier titles, the ⌘K action list, confirmations and closing runs with posted key events; dump frames and exit |

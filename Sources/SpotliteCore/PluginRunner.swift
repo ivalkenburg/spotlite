@@ -49,6 +49,10 @@ public final class PluginRun: @unchecked Sendable {
     private let process = Process()
     private var processGroup: pid_t?
     private let completion: ReportCompletion
+    /// Called instead of `completion` when a cancel stops the run, so a caller always
+    /// hears that it ended exactly once. Called on the run's queue. Spotlite cancels no
+    /// `run` action today; this keeps one that is cancelled from being counted forever.
+    private let cancelled: (@Sendable () -> Void)?
     private var output = Data()
     /// Bytes read from standard output, kept or not: the limit covers the whole run.
     private var outputBytes = 0
@@ -93,8 +97,9 @@ public final class PluginRun: @unchecked Sendable {
                                       directory: URL, timeout: TimeInterval, stream: Bool = false,
                                       keepsOutput: Bool = true,
                                       rows: Rows? = nil, rowsQueue: DispatchQueue = .main,
+                                      cancelled: (@Sendable () -> Void)? = nil,
                                       report: @escaping ReportCompletion) -> PluginRun {
-        let run = PluginRun(completion: report, stream: stream, keepsOutput: keepsOutput || !stream,
+        let run = PluginRun(completion: report, cancelled: cancelled, stream: stream, keepsOutput: keepsOutput || !stream,
                             rows: stream ? rows.map { RowMailbox(queue: rowsQueue, deliver: $0) } : nil)
         run.queue.async {
             run.launch(executable: executable, arguments: arguments, environment: environment,
@@ -103,14 +108,16 @@ public final class PluginRun: @unchecked Sendable {
         return run
     }
 
-    private init(completion: @escaping ReportCompletion, stream: Bool, keepsOutput: Bool, rows: RowMailbox?) {
+    private init(completion: @escaping ReportCompletion, cancelled: (@Sendable () -> Void)?, stream: Bool,
+                 keepsOutput: Bool, rows: RowMailbox?) {
         self.completion = completion
+        self.cancelled = cancelled
         self.keepsOutput = keepsOutput
         self.stream = stream ? PluginStreamDecoder() : nil
         self.rows = rows
     }
 
-    /// Stops the program; the completion is not called.
+    /// Stops the program; the completion is not called, `cancelled` is.
     public func cancel() {
         queue.async { self.stop(.cancelled) }
     }
@@ -221,6 +228,7 @@ public final class PluginRun: @unchecked Sendable {
         if reason == .cancelled {
             rows?.drop()
             finish()
+            cancelled?()
         }
     }
 
@@ -327,7 +335,8 @@ public enum PluginEnvironment {
                             dataDirectory: URL? = nil, configurationJSON: String = "{}",
                             configurationVariables: [String: String] = [:],
                             command: String? = nil, action: PluginRunAction? = nil,
-                            appearance: String? = nil, version: String? = nil) -> [String: String] {
+                            appearance: String? = nil, version: String? = nil,
+                            spotlitePID: Int32 = ProcessInfo.processInfo.processIdentifier) -> [String: String] {
         // Per-field values come only from this plugin's settings, never from whatever
         // Spotlite itself happened to inherit.
         var environment = base.filter { !$0.key.hasPrefix(configurationPrefix) }
@@ -343,6 +352,8 @@ public enum PluginEnvironment {
         if let action { environment["SPOTLITE_ACTION"] = action.rawValue }
         if let appearance { environment["SPOTLITE_APPEARANCE"] = appearance }
         if let version { environment["SPOTLITE_VERSION"] = version }
+        // Lets a background process end with Spotlite, as `caffeinate -w` does.
+        environment["SPOTLITE_PID"] = String(spotlitePID)
         return environment
     }
 

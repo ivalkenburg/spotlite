@@ -483,6 +483,13 @@ struct PluginStoreTests {
         #expect(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).disabledPlugins.isEmpty)
     }
 
+    @Test func menuBarHiddenPluginsSurviveASave() throws {
+        let preferences = Preferences(menuBarHiddenPlugins: ["caffeinate"])
+        let decoded = try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(preferences))
+        #expect(decoded.menuBarHiddenPlugins == ["caffeinate"])
+        #expect(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).menuBarHiddenPlugins.isEmpty)
+    }
+
     @Test func runDiagnosticsAreOffUntilTurnedOn() throws {
         #expect(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).keepPluginRunDiagnostics == false)
         let preferences = Preferences(keepPluginRunDiagnostics: true)
@@ -591,6 +598,37 @@ struct PluginRunTests {
         run.cancel()
         try await Task.sleep(for: .milliseconds(1_500))
         #expect(!called.value)
+    }
+
+    @Test func cancelCallsCancelledOnceAndNeverTheCompletion() async throws {
+        let fixture = try PluginFixture()
+        let plugin = PluginStore.load(try fixture.plugin("demo", manifest: PluginFixture.manifest(),
+                                                         script: "sleep 1; echo '{}'"))
+        let completed = Counter(), cancelled = Counter()
+        let run = PluginRun.startReporting(executable: plugin.executableURL!, arguments: [], environment: [:],
+                                           directory: plugin.directory, timeout: 5,
+                                           cancelled: { cancelled.add() }) { _ in completed.add() }
+        run.cancel()
+        run.cancel()
+        try await Task.sleep(for: .milliseconds(1_500))
+        #expect(cancelled.value == 1 && completed.value == 0)
+    }
+
+    @Test func cancelAfterAnEndCallsNothingMore() async throws {
+        let fixture = try PluginFixture()
+        for (script, timeout) in [("echo '{}'", 5.0), ("sleep 30", 0.3)] {
+            let plugin = PluginStore.load(try fixture.plugin("demo\(Int(timeout * 10))", manifest: PluginFixture.manifest(),
+                                                             script: script))
+            let completed = Counter(), cancelled = Counter()
+            let run = PluginRun.startReporting(executable: plugin.executableURL!, arguments: [], environment: [:],
+                                               directory: plugin.directory, timeout: timeout,
+                                               cancelled: { cancelled.add() }) { _ in completed.add() }
+            while completed.value == 0 { try await Task.sleep(for: .milliseconds(20)) }
+            run.cancel()
+            try await Task.sleep(for: .milliseconds(200))
+            // A finished or timed-out run reported once; the cancel adds nothing.
+            #expect(completed.value == 1 && cancelled.value == 0, "\(script)")
+        }
     }
 
     @Test func missingExecutableFailsToLaunch() async throws {
@@ -795,6 +833,13 @@ private final class RecordedPluginResult: @unchecked Sendable {
     private var result: Result<PluginResponse, PluginRunError>?
     var value: Result<PluginResponse, PluginRunError>? { lock.withLock { result } }
     func record(_ value: Result<PluginResponse, PluginRunError>) { lock.withLock { result = value } }
+}
+
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int { lock.withLock { count } }
+    func add() { lock.withLock { count += 1 } }
 }
 
 private final class Called: @unchecked Sendable {

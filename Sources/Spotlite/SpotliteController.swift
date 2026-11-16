@@ -937,7 +937,10 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     /// Runs one of a target's actions, asking first when it says to. `confirmed` is the
     /// answer to that question.
-    private func performPlugin(_ entry: PluginActionEntry?, on target: PluginTarget, confirmed: Bool = false) {
+    /// `fromMenuBar`: the panel is not where it started, so a run gets no query and
+    /// toasts show on the main screen.
+    private func performPlugin(_ entry: PluginActionEntry?, on target: PluginTarget, confirmed: Bool = false,
+                               fromMenuBar: Bool = false) {
         // A row without an action only informs.
         guard let entry else { return }
         let plugin = target.plugin
@@ -945,7 +948,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         let icon = entry.levelIcon
         let commandID = target.commandID
         guard !plugins.needsSetup(plugin.id) else {
-            hide()
+            if !fromMenuBar { hide() }
             onConfigurePlugin?(plugin.id)
             return
         }
@@ -958,7 +961,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
         if let historyID = target.historyID { recordUtilityUse(historyID) }
         switch entry.action {
         case .open(let target):
-            hide()
+            if !fromMenuBar { hide() }
             guard let url = PluginAction.url(for: target) else {
                 NSSound.beep()
                 return
@@ -968,15 +971,32 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                 Task { @MainActor in NSSound.beep() }
             }
         case .copy(let text):
-            toasts.copy(text, position: preferences.toastPosition, on: panel.screen)
-            hide()
+            toasts.copy(text, position: preferences.toastPosition, on: fromMenuBar ? NSScreen.main : panel.screen)
+            // From the menu bar, a panel the user has open is none of this action's business.
+            if !fromMenuBar { hide() }
         case .run(let args, let keepOpen):
-            runPlugin(plugin, arguments: args, keepOpen: keepOpen, commandID: commandID)
+            runPlugin(plugin, arguments: args, keepOpen: keepOpen, commandID: commandID, fromMenuBar: fromMenuBar)
         case .list, .search, .menu:
             guard let source = PluginSource(entry.action) else { return }
             enterScope(.plugin(PluginScope(pluginID: plugin.id, title: title, icon: icon, source: source,
                                            commandID: commandID)))
         }
+    }
+
+    /// An action picked in a plugin's menu-bar menu, already confirmed there. A `list`
+    /// opens the panel at that level; the others run as from the panel, which stays closed.
+    func performMenuBarAction(_ action: PluginSecondaryAction, plugin: InstalledPlugin, commandID: String) {
+        guard let command = plugin.manifest?.commands.first(where: { $0.id == commandID }) else { return }
+        let target = PluginTarget(plugin: plugin, actions: PluginActionSet(command), historyID: nil, commandID: commandID)
+        if action.action.entersScope { show() }
+        performPlugin(PluginActionEntry(action, rowIcon: command.icon), on: target, confirmed: true,
+                      fromMenuBar: !action.action.entersScope)
+    }
+
+    /// A plugin changed how a command looks: an expiry, an exit or a finished run.
+    func pluginLooksDidChange() {
+        guard panel.isVisible, !isDismissing, case .root = navigation.scope else { return }
+        refreshMatches()
     }
 
     // MARK: - Plugin actions
@@ -1132,12 +1152,14 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
 
     /// Runs a plugin's action and applies what it answers: a copy, an address to open,
     /// a toast, new looks for its commands, or rows for the level that stayed open.
-    private func runPlugin(_ plugin: InstalledPlugin, arguments: [String], keepOpen: Bool, commandID: String) {
-        let query = field.stringValue
-        let screen = panel.screen
-        let scope = pluginScope
-        if !keepOpen { hide() }
-        pluginActionGeneration &+= 1
+    private func runPlugin(_ plugin: InstalledPlugin, arguments: [String], keepOpen: Bool, commandID: String,
+                           fromMenuBar: Bool = false) {
+        let query = fromMenuBar ? "" : field.stringValue
+        let screen = fromMenuBar ? NSScreen.main : panel.screen
+        // A run from the menu bar never touches the panel's level or its own runs.
+        let scope = fromMenuBar ? nil : pluginScope
+        if !keepOpen, !fromMenuBar { hide() }
+        if !fromMenuBar { pluginActionGeneration &+= 1 }
         let generation = pluginActionGeneration
         plugins.run(plugin, arguments: arguments, query: query, command: commandID) { [weak self] result in
             guard let self else { return }
@@ -1147,7 +1169,7 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                 self.toasts.show(.pluginFailure(error), position: position, on: screen)
             case .success(let response):
                 self.applyPluginResponse(response, from: plugin, on: screen)
-                guard self.panel.isVisible, !self.isDismissing else { return }
+                guard !fromMenuBar, self.panel.isVisible, !self.isDismissing else { return }
                 if keepOpen, self.pluginActionGeneration == generation, let scope, scope == self.pluginScope {
                     if let items = response.items, !scope.source.isSearch {
                         // The level's own list may still be loading or streaming; its rows are older.
@@ -1158,15 +1180,16 @@ final class SpotliteController: NSObject, NSTextFieldDelegate, NSTableViewDataSo
                         self.loadPluginScope(keepingRows: true)
                     }
                 }
-                // A command's new look shows without waiting for the next keystroke.
-                self.refreshMatches()
+                // A command's new look already showed through `pluginLooksDidChange`; a
+                // level that stayed open shows its rows again.
+                if self.pluginScope != nil { self.refreshMatches() }
             }
         }
     }
 
     private func applyPluginResponse(_ response: PluginResponse, from plugin: InstalledPlugin, on screen: NSScreen?) {
         let position = preferences.toastPosition
-        plugins.apply(response.update, from: plugin)
+        // PluginHost has applied the response's `update`, in the order runs started.
         if let text = response.copy { toasts.copy(text, position: position, on: screen) }
         if let target = response.open, let url = PluginAction.url(for: target) {
             NSWorkspace.shared.open(url)
@@ -2177,11 +2200,94 @@ extension SpotliteController {
         print("DEV plugins: UUID menu, filtering and v4/v7 copies passed")
     }
 
+    /// Starts Caffeinate twice: the first session is stopped from the menu of a switched-off
+    /// plugin, the second by killing its `caffeinate` from outside. Each time the menu-bar
+    /// item and the root look must go without anything polling.
+    private func runDevMenuBarChecks(menuBar: PluginMenuBarItems, pluginRow: (String) -> Int?,
+                                     settle: (Int) async -> Void,
+                                     check: (@autoclosure () -> Bool, @autoclosure () -> String) throws -> Void) async throws {
+        func start() async throws -> (entryID: String, pid: Int32) {
+            show()
+            guard let row = pluginRow("caffeine"), case .app(let match) = items[row] else {
+                try check(false, "Command vanished")
+                return ("", 0)
+            }
+            launch(at: row)
+            await settle(500)
+            setQuery("15")
+            updateMatches(for: "15")
+            launch(at: 0)
+            await settle(800)
+            let pid = plugins.looks.looks[match.entry.id]?.process?.pid ?? 0
+            try check(pid > 0, "The look names no process")
+            return (match.entry.id, pid)
+        }
+        func arguments(of pid: Int32) -> String {
+            let ps = Process()
+            let pipe = Pipe()
+            ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+            ps.arguments = ["-o", "args=", "-p", String(pid)]
+            ps.standardOutput = pipe
+            try? ps.run()
+            ps.waitUntilExit()
+            return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        }
+
+        let first = try await start()
+        try check(arguments(of: first.pid).contains("-w \(ProcessInfo.processInfo.processIdentifier)"),
+                  "caffeinate is not tied to Spotlite: \(arguments(of: first.pid))")
+        guard let item = menuBar.devItem(forEntryID: first.entryID), let menu = item.menu else {
+            return try check(false, "No menu-bar item for the active session")
+        }
+        let tip = item.button?.toolTip ?? ""
+        try check(tip.hasPrefix("Active until") && !tip.contains("{"), "Item tooltip: \(tip)")
+        menuBar.menuNeedsUpdate(menu)
+        try check(menu.items.map(\.title) == [tip, "", "Turn Off", "Change Duration…"],
+                  "Item menu: \(menu.items.map(\.title))")
+
+        // Restarting the session ends the old caffeinate before the run reports the new
+        // one. The exit waits for that run, so the item stays where it is.
+        let restarted = try await start()
+        try check(restarted.pid != first.pid, "The restart kept the old process")
+        try check(menuBar.devItem(forEntryID: restarted.entryID) === item && menuBar.devItemCount == 1,
+                  "Restarting the session replaced the menu-bar item")
+
+        // Switched off, the plugin's actions grey out and Stop ends the verified process.
+        menuBar.refresh(hidden: [], disabled: ["caffeinate"])
+        menuBar.menuNeedsUpdate(menu)
+        try check(menu.items.map(\.title).contains("Caffeinate is switched off")
+                  && menu.items.first { $0.title == "Turn Off" }?.isEnabled == false
+                  && menu.items.last?.title == "Stop", "Disabled menu: \(menu.items.map(\.title))")
+        plugins.stopProcess(forEntryID: restarted.entryID)
+        await settle(500)
+        try check(menuBar.devItemCount == 0, "Stop left the item")
+        menuBar.refresh(hidden: preferences.menuBarHiddenPlugins, disabled: [])
+
+        // Hidden, the session runs without an item.
+        let second = try await start()
+        menuBar.refresh(hidden: ["caffeinate"], disabled: [])
+        try check(menuBar.devItemCount == 0, "A hidden plugin kept its item")
+        menuBar.refresh(hidden: [], disabled: [])
+        try check(menuBar.devItem(forEntryID: second.entryID) != nil, "Showing again drew no item")
+
+        // Killed from outside: the kernel's exit event clears both looks.
+        kill(second.pid, SIGTERM)
+        await settle(500)
+        try check(menuBar.devItemCount == 0 && plugins.looks.looks[second.entryID] == nil,
+                  "An external kill left the look")
+        show()
+        guard let row = pluginRow("caffeine") else { return try check(false, "Command vanished") }
+        try check(items[row].hints(modifiers: [], running: false).first?.text == "Caffeinate",
+                  "Root kept the look of an exited process")
+        menuBar.refresh(hidden: preferences.menuBarHiddenPlugins, disabled: preferences.disabledPlugins)
+        print("DEV plugins: menu-bar item, its menu, -w, a restart keeping the item, Stop when switched off, hiding and external exit passed")
+    }
+
     /// SPOTLITE_DEV_PLUGINS=1 with SPOTLITE_DEV_PLUGINS_DIR=plugins: finds the
     /// example Caffeinate plugin by keyword, loads and filters its list, starts and stops a
     /// session through it, copies a UUID from the UUID plugin, and runs one GitHub search
     /// when the network answers.
-    func runDevPluginChecks() async throws {
+    func runDevPluginChecks(menuBar: PluginMenuBarItems) async throws {
         func check(_ condition: @autoclosure () -> Bool, _ message: @autoclosure () -> String) throws {
             guard condition() else {
                 throw NSError(domain: "SpotlitePluginChecks", code: 1,
@@ -2268,6 +2374,7 @@ extension SpotliteController {
         try check(items[stopped].hints(modifiers: [], running: false).first?.text == "Caffeinate",
                   "Command kept its active look")
         print("DEV plugins: run actions, toasts and command looks passed")
+        try await runDevMenuBarChecks(menuBar: menuBar, pluginRow: pluginRow, settle: settle, check: check)
 
         // Back navigation returns to the root query with the command selected.
         launch(at: stopped)

@@ -2,8 +2,10 @@ import AppKit
 import SpotliteCore
 
 /// The installed plugins, as the panel and Settings see them. Reading the folder is
-/// deferred to first use, and nothing here runs between uses: a plugin costs a manifest
-/// in memory until one of its commands is picked.
+/// deferred to first use, and no plugin runs between uses: a plugin costs a manifest
+/// in memory until one of its commands is picked. While a look names a process, a kqueue
+/// exit source waits on it; while a menu-bar look has a deadline, one one-shot timer and
+/// a wake observer do. Neither wakes Spotlite before its event.
 @MainActor
 final class PluginHost {
     static let shared = PluginHost()
@@ -14,7 +16,17 @@ final class PluginHost {
     private var commands: [String: (plugin: InstalledPlugin, command: PluginCommand)] = [:]
     /// Looks a plugin gave its commands at run time, by entry id. Kept in memory only:
     /// a plugin reports its state again the next time it runs.
-    private var updates: [String: PluginCommandUpdate] = [:]
+    private(set) var looks = PluginLooks()
+    /// Numbers runs as they start, so a late answer cannot replace a newer one.
+    private var runSequence: UInt64 = 0
+    /// One exit source per process a look describes. kqueue wakes nothing until it exits.
+    private var processWatchers: [ProcessIdentity: DispatchSourceProcess] = [:]
+    /// Armed only while a menu-bar look has a deadline.
+    private var expiryTimer: DispatchSourceTimer?
+    private var expiryDeadline: TimeInterval?
+    private var wakeObserver: NSObjectProtocol?
+    /// Told whenever a look changes: a run's update, an expiry, an exit, a reload.
+    var onLooksChanged: (() -> Void)?
     /// Each command's keyword, by entry id, for commands the user gave no alias.
     private var keywords: [String: String] = [:]
     private var configurations: [String: PluginConfiguration] = [:]
@@ -149,8 +161,12 @@ final class PluginHost {
                 }
             }
         }
-        updates = updates.filter { commands[$0.key] != nil }
+        // A look whose command went away stays while its process runs: the menu bar
+        // still shows what keeps running, and offers to stop it.
+        let looksChanged = looks.retain(commands: { self.commands[$0] != nil }, orphans: { $0.process?.isRunning == true })
         lastRuns = lastRuns.filter { byID[$0.key] != nil }
+        // Last: the callback reaches the panel, which may read the host again.
+        if looksChanged { looksDidChange() }
     }
 
     /// Search entries of every enabled plugin.
@@ -171,12 +187,7 @@ final class PluginHost {
     // MARK: - Looks
 
     private func update(forEntryID id: String) -> PluginCommandUpdate? {
-        guard let update = updates[id] else { return nil }
-        guard !update.hasExpired(at: Date()) else {
-            updates[id] = nil
-            return nil
-        }
-        return update
+        looks.look(for: id, at: Date())?.update
     }
 
     func icon(forEntryID id: String) -> PluginIcon {
@@ -189,7 +200,7 @@ final class PluginHost {
     func subtitle(forEntryID id: String) -> String {
         guard let (plugin, command) = command(forEntryID: id) else { return "" }
         if needsSetup(plugin.id) { return "Setup required" }
-        return update(forEntryID: id)?.subtitle ?? command.subtitle ?? plugin.name
+        return update(forEntryID: id)?.displaySubtitle() ?? command.subtitle ?? plugin.name
     }
 
     // MARK: - Configuration
@@ -238,12 +249,106 @@ final class PluginHost {
         raw.map { PluginIcon($0, directory: plugin.directory) } ?? .symbol(fallbackSymbol)
     }
 
-    func apply(_ changes: [PluginCommandUpdate], from plugin: InstalledPlugin) {
-        guard !changes.isEmpty, let declared = plugin.manifest?.commands, !declared.isEmpty else { return }
-        let commandIDs = Set(declared.map(\.id))
-        for change in changes {
-            guard commandIDs.contains(change.command) else { continue }
-            updates[plugin.entryID(forCommandID: change.command)] = change.isReset ? nil : change
+    /// Applies a run's updates. `sequence` is the run's, taken when it started.
+    private func apply(_ changes: [PluginCommandUpdate], from plugin: InstalledPlugin, sequence: UInt64,
+                       fromRun: Bool = false) {
+        guard !changes.isEmpty else { return }
+        // A run that ends after its plugin was removed or switched commands applies only
+        // to what still exists, unless its process still runs.
+        let installed: (String) -> Bool = { [commands] in commands[$0]?.plugin.directory == plugin.directory }
+        if looks.apply(changes, from: plugin, installed: installed, sequence: sequence, fromRun: fromRun) { looksDidChange() }
+    }
+
+    #if DEBUG
+    /// Dev checks apply updates as from a run newer than every other.
+    func devApply(_ changes: [PluginCommandUpdate], from plugin: InstalledPlugin) {
+        apply(changes, from: plugin, sequence: nextRunSequence())
+    }
+    #endif
+
+    private func nextRunSequence() -> UInt64 {
+        runSequence &+= 1
+        return runSequence
+    }
+
+    /// Ends the process a look describes, after checking it is still the same one.
+    /// Offered only for a look whose plugin is switched off or removed.
+    func stopProcess(forEntryID id: String) {
+        guard let process = looks.looks[id]?.process, process.isRunning else { return }
+        kill(process.pid, SIGTERM)
+    }
+
+    /// Watches each look's process and deadline, then tells the menu bar. Nothing is
+    /// armed while no look needs it.
+    private func looksDidChange() {
+        // A root row's look past its deadline would otherwise wait for its process.
+        looks.removeExpired(at: Date())
+        let needed = looks.processes
+        for (process, source) in processWatchers where !needed.contains(process) {
+            source.cancel()
+            processWatchers[process] = nil
+        }
+        for process in needed where processWatchers[process] == nil {
+            // Fires at once for a process that already exited, so none is missed.
+            let source = DispatchSource.makeProcessSource(identifier: process.pid, eventMask: .exit, queue: .main)
+            source.setEventHandler { [weak self] in
+                MainActor.assumeIsolated { self?.processExited(process) }
+            }
+            processWatchers[process] = source
+            source.resume()
+        }
+        scheduleExpiry()
+        onLooksChanged?()
+    }
+
+    private func processExited(_ process: ProcessIdentity) {
+        processWatchers.removeValue(forKey: process)?.cancel()
+        if looks.processExited(process) { looksDidChange() }
+    }
+
+    private func runEnded(_ pluginID: String) {
+        if looks.runEnded(pluginID: pluginID) { looksDidChange() }
+    }
+
+    private func scheduleExpiry() {
+        let deadline = looks.nextMenuBarDeadline
+        guard deadline != expiryDeadline else { return }
+        expiryTimer?.cancel()
+        expiryTimer = nil
+        expiryDeadline = deadline
+        guard let deadline else {
+            if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
+            wakeObserver = nil
+            return
+        }
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        let whole = floor(deadline)
+        // Wall time keeps counting while the Mac sleeps, as the deadline does.
+        timer.schedule(wallDeadline: DispatchWallTime(timespec: timespec(tv_sec: Int(min(whole, 1e11)),
+                                                                          tv_nsec: Int((deadline - whole) * 1e9))),
+                       leeway: .milliseconds(100))
+        timer.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.expireLooks() }
+        }
+        expiryTimer = timer
+        timer.resume()
+        if wakeObserver == nil {
+            wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.expireLooks() }
+            }
+        }
+    }
+
+    /// Also called when a menu finds a look's deadline passed before the timer or the
+    /// wake caught it.
+    func expireLooks() {
+        if looks.removeExpired(at: Date()) {
+            looksDidChange()
+        } else {
+            // Early delivery or a clock change: arm again for the same deadline.
+            expiryDeadline = nil
+            scheduleExpiry()
         }
     }
 
@@ -290,7 +395,7 @@ final class PluginHost {
         case .open, .copy, .menu: return nil
         }
         return start(plugin, arguments: arguments, query: query, command: command.id, action: action,
-                     streams: streams, keepsOutput: true, completion: completion)
+                     streams: streams, keepsOutput: true, applies: false, completion: completion)
     }
 
     func lastRun(for id: String) -> PluginRunRecord? { lastRuns[id] }
@@ -304,12 +409,19 @@ final class PluginHost {
     /// `streams` decodes the output line by line; `rows` also shows them as they come.
     /// `keepsOutput` defaults to the diagnostics preference.
     private func start(_ plugin: InstalledPlugin, arguments: [String], query: String, command: String,
-                       action: PluginRunAction, streams: Bool = false, keepsOutput: Bool? = nil,
+                       action: PluginRunAction, streams: Bool = false, keepsOutput: Bool? = nil, applies: Bool = true,
                        rows: (@MainActor ([PluginItem]) -> Void)? = nil,
                        completion: @escaping @MainActor (PluginRunReport) -> Void) -> PluginRun? {
         loadIfNeeded()
+        let sequence = nextRunSequence()
+        // Only a `run` restarts what a look describes. The debug runner applies nothing.
+        let counted = action == .run && applies
         let finish: @MainActor (PluginRunReport) -> Void = { [weak self] report in
             self?.record(report, for: plugin, command: command, action: action, arguments: arguments)
+            // Applied here, in run order, rather than by each caller.
+            if applies, case .success(let response) = report.result {
+                self?.apply(response.update, from: plugin, sequence: sequence, fromRun: counted)
+            }
             completion(report)
         }
         guard !needsSetup(plugin.id), let json = configurationJSON[plugin.id] else {
@@ -327,6 +439,12 @@ final class PluginHost {
             for: plugin, query: query, dataDirectory: data, configurationJSON: json,
             configurationVariables: configurations[plugin.id]?.variables ?? [:], command: command, action: action,
             appearance: dark ? "dark" : "light", version: Self.appVersion)
+        var cancelled: (@Sendable () -> Void)?
+        if counted {
+            looks.runStarted(pluginID: plugin.id)
+            let pluginID = plugin.id
+            cancelled = { Task { @MainActor [weak self] in self?.runEnded(pluginID) } }
+        }
         var delivery: PluginRun.Rows?
         if let rows {
             // Delivered on the main queue, which is the main actor's.
@@ -336,8 +454,11 @@ final class PluginHost {
                                         directory: plugin.directory, timeout: manifest.timeout,
                                         stream: streams || rows != nil,
                                         keepsOutput: keepsOutput ?? keepPluginRunDiagnostics,
-                                        rows: delivery) { report in
-            Task { @MainActor in finish(report) }
+                                        rows: delivery, cancelled: cancelled) { [weak self] report in
+            Task { @MainActor in
+                finish(report)
+                if counted { self?.runEnded(plugin.id) }
+            }
         }
     }
 

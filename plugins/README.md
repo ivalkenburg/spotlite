@@ -16,7 +16,7 @@ Working examples are in this folder:
 | --- | --- |
 | [`kubectx`](kubectx) | A `list` of kubectl contexts and a `run` action that switches one |
 | [`github`](github) | A `search` with settings, a secret, row accessories and extra row actions |
-| [`caffeinate`](caffeinate) | Durations in a `list` with `sort: false`, a background process and a command `update` |
+| [`caffeinate`](caffeinate) | Durations in a `list` with `sort: false`, a background process, and an `update` tied to it that shows in the menu bar |
 | [`findfiles`](findfiles) | A streamed `search` |
 | [`uuid`](uuid) | A fixed `menu` in the manifest whose rows `run` the script and `copy` its answer |
 
@@ -273,6 +273,7 @@ The environment is Spotlite's own, with these additions:
 | `SPOTLITE_ACTION` | `run`, `list` or `search`: the kind of action that started this run. |
 | `SPOTLITE_APPEARANCE` | `light` or `dark`: Spotlite's appearance when the run started. |
 | `SPOTLITE_VERSION` | Spotlite's version, such as `1.1.3`. `0.0.0` when it runs outside its app bundle. |
+| `SPOTLITE_PID` | Spotlite's process id. `caffeinate -w "$SPOTLITE_PID"` ends when Spotlite quits. |
 | `PATH` | Spotlite's, plus `/opt/homebrew/bin`, `/opt/homebrew/sbin` and `/usr/local/bin`. |
 
 `SPOTLITE_CONFIG_<ID>` takes the setting's id in upper case. Every character other than `A`
@@ -368,6 +369,50 @@ them out of local matching to bound memory use.
 or until the next update. An update that names only the `command` restores the manifest's
 look. Updates live in memory, so a `list` should report the state again each time it runs.
 The Caffeinate example does this.
+
+Runs can finish out of order. Spotlite applies an update only if no run that started
+later has already updated the same command. A slow `list` cannot bring back a state that
+a newer action replaced.
+
+An update that gives none of `icon`, `subtitle` and `menuBar` is a reset, even with a
+`pid` or `expires`.
+
+An update can also say how long it lasts and show in the menu bar:
+
+```json
+{ "command": "caffeinate", "icon": "cup.and.saucer.fill",
+  "subtitle": "Active until {expires}", "expires": 1794601717, "pid": 4321,
+  "menuBar": { "actions": [
+    { "title": "Turn Off", "action": { "type": "run", "args": ["stop"] } },
+    { "title": "Change Duration…", "action": { "type": "list" } } ] } }
+```
+
+| Key | Meaning |
+| --- | --- |
+| `pid` | A process of the same user that the look describes, such as one the plugin started in the background. The look ends when the process exits, however that happens. Spotlite asks the kernel to report the exit and does not poll. If the process is already gone, belongs to another user or is Spotlite, the update ends the look of that process, unless another `run` of the plugin is in progress and will report what replaced it. While a `run` of the plugin is in progress, an exit waits for its update, so restarting a session keeps the menu-bar item in place. |
+| `menuBar` | Shows the look as an item in the menu bar while it lasts. The item uses the update's icon (or the command's). The subtitle is its tooltip and the first line of its menu. The `actions` follow, at most 8. They take `open`, `copy`, `run` and `list` actions; others are skipped before the 8 are counted. A `list` opens the panel at that level. A `confirm` asks in an alert. |
+| `expires` | Must be a number within ±100,000,000,000; otherwise the update is skipped. |
+| `{expires}` in `subtitle` | Replaced by the deadline in the user's time format, such as `14:30` or `2:30 PM`, with the date when it is not today. Without `expires` it is removed. Older Spotlite shows it as written; it sets no `SPOTLITE_PID`, which a script can test. |
+
+The tooltip is drawn when the update arrives, and the menu when it opens. Past
+midnight, a tooltip may still show the date of a deadline that is now today.
+
+An answer that arrives after its plugin was removed, or after the command left its
+manifest, changes a look only when it names a process that still runs.
+
+A `run`, `open` or `copy` from the menu works like one from the panel, but leaves an open
+panel as it is. Its toast,
+copy, open and update apply. Users can hide a plugin's menu-bar item with Settings →
+Plugins → ⋯ → Show in Menu Bar.
+
+If the user switches the plugin off or removes it while its process still runs, the
+item stays. Its menu says why, greys out the plugin's actions and offers Stop. Stop sends
+SIGTERM to the process, after checking that it is still the process the plugin reported.
+Without a `pid` there is nothing to stop, and the item goes away.
+
+A background process can end with Spotlite: start it with `-w "$SPOTLITE_PID"` (as
+`caffeinate` does) or watch that pid yourself. Spotlite then never shows a look for a
+process that outlived it, because looks do not survive a restart.
 
 ### Icons
 

@@ -190,7 +190,7 @@ enum PluginConfigurationDevChecks {
         var batch: [[String: Any]] = (0..<500).map { ["command": "c\($0)", "subtitle": "Batch \($0)", "icon": "star"] }
         batch += [["command": "new-command", "subtitle": "Unknown"], ["command": "c5", "subtitle": "Last duplicate"],
                   ["command": "c6"], ["command": "c7", "subtitle": "Expired", "expires": 0]]
-        host.apply(try changes(batch), from: original)
+        host.devApply(try changes(batch), from: original)
         for index in 0..<500 {
             let expected = index == 5 ? "Last duplicate" : ([6, 7].contains(index) ? "Original \(index)" : "Batch \(index)")
             try expect(host.subtitle(forEntryID: original.entryID(forCommandID: "c\(index)")) == expected,
@@ -208,12 +208,12 @@ enum PluginConfigurationDevChecks {
         try expect(host.subtitle(forEntryID: newID) == "Original new", "Unknown update survived a later manifest reload")
         var captured: [[String: Any]] = (0..<500).map { ["command": "c\($0)", "subtitle": "Captured \($0)"] }
         captured.append(["command": "new-command", "subtitle": "Wrong manifest"])
-        host.apply(try changes(captured), from: original)
+        host.devApply(try changes(captured), from: original)
         try expect(host.subtitle(forEntryID: newID) == "Original new", "Batch lookup used the new manifest for an old response")
         try expect(host.subtitle(forEntryID: original.entryID(forCommandID: "c1")) == "Captured 1", "Captured manifest updates were lost")
-        host.apply(try changes([["command": "c1"]]), from: original)
+        host.devApply(try changes([["command": "c1"]]), from: original)
         try expect(host.subtitle(forEntryID: original.entryID(forCommandID: "c1")) == "Original 1", "Single-update reset changed behavior")
-        host.apply(try changes([["command": "c2", "subtitle": "First"], ["command": "c2", "subtitle": "Second"]]), from: original)
+        host.devApply(try changes([["command": "c2", "subtitle": "First"], ["command": "c2", "subtitle": "Second"]]), from: original)
         try expect(host.subtitle(forEntryID: original.entryID(forCommandID: "c2")) == "Second", "Small-batch duplicate ordering changed")
         print("DEV configuration: single/batch command updates preserve unknown, duplicate, reset, expiry and captured-manifest behavior")
     }

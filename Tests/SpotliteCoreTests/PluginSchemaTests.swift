@@ -119,6 +119,30 @@ import Testing
         let response = try Self.defs(try Self.schema("plugin-response.schema.json"))
         let items = (response["response"]?["properties"] as? [String: [String: Any]])?["items"]
         #expect(items?["maxItems"] as? Int == PluginItem.maxItems)
+
+        let update = response["commandUpdate"]?["properties"] as? [String: [String: Any]]
+        #expect(update?["pid"]?["minimum"] as? Int == 2)
+        #expect(update?["pid"]?["maximum"] as? Int == Int(Int32.max))
+        let menuActions = (response["menuBar"]?["properties"] as? [String: [String: Any]])?["actions"]
+        #expect(menuActions?["maxItems"] as? Int == PluginMenuBar.maxActions)
+        let constraint = ((menuActions?["items"] as? [String: Any])?["allOf"] as? [[String: Any]])?.last
+        let actionType = ((constraint?["properties"] as? [String: Any])?["action"] as? [String: Any])?["properties"]
+        let kinds = Set(try #require(((actionType as? [String: Any])?["type"] as? [String: Any])?["enum"] as? [String]))
+        let decoder = Set(PluginAction.Kind.allCases.filter { kind in
+            PluginMenuBar.allows(Self.sampleAction(kind))
+        }.map(\.rawValue))
+        #expect(kinds == decoder)
+    }
+
+    static func sampleAction(_ kind: PluginAction.Kind) -> PluginAction {
+        switch kind {
+        case .open: .open("https://example.com")
+        case .copy: .copy("x")
+        case .run: .run(args: [], keepOpen: false)
+        case .list: .list(args: [])
+        case .search: .search(args: [], debounce: 0, minimumQuery: 0)
+        case .menu: .menu([])
+        }
     }
 
     /// The response schema borrows the row and icon from the manifest schema.

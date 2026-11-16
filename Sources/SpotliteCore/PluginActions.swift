@@ -171,6 +171,16 @@ public struct PluginActionEntry: Sendable, Equatable {
     public var keyText: String? { shortcut?.keyText }
 }
 
+extension PluginActionEntry {
+    /// One of a row's or command's other actions. `rowIcon` stands in for the chip's
+    /// icon when the action has none of its own.
+    public init(_ secondary: PluginSecondaryAction, rowIcon: String?, shortcut: PluginShortcut? = nil) {
+        self.init(title: secondary.title, icon: secondary.icon ?? secondary.action.symbol, shortcut: shortcut,
+                  action: secondary.action, confirm: secondary.confirm, levelTitle: secondary.title,
+                  levelIcon: secondary.icon ?? rowIcon)
+    }
+}
+
 /// Everything Return does on a row or command, with and without modifiers.
 public struct PluginActionSet: Sendable, Equatable {
     /// Return's action first, then the plugin's in its order, then ⌥↩'s built-in copy.
@@ -193,9 +203,7 @@ public struct PluginActionSet: Sendable, Equatable {
         var taken: Set<PluginShortcut> = []
         for secondary in secondaries.prefix(PluginSecondaryAction.maxCount) {
             let shortcut = secondary.shortcut.flatMap { taken.insert($0).inserted ? $0 : nil }
-            entries.append(PluginActionEntry(title: secondary.title, icon: secondary.icon ?? secondary.action.symbol,
-                                             shortcut: shortcut, action: secondary.action, confirm: secondary.confirm,
-                                             levelTitle: secondary.title, levelIcon: secondary.icon ?? icon))
+            entries.append(PluginActionEntry(secondary, rowIcon: icon, shortcut: shortcut))
         }
         // ⌥↩ copies an address unless the plugin gave the chord a meaning of its own.
         if case .open(let target) = primary, !taken.contains(.option) {

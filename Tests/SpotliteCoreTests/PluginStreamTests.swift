@@ -94,6 +94,16 @@ struct PluginStreamTests {
         #expect(decode(["{}\n"]).skipped == 0)
     }
 
+    @Test func responseLinesKeepPidAndMenuBar() {
+        let decoder = decode([
+            #"{"title":"row"}"# + "\n",
+            #"{"update":[{"command":"c","subtitle":"On","pid":4321,"menuBar":{"actions":[{"title":"Off","action":{"type":"run","args":["stop"]}}]}}]}"#,
+        ])
+        let update = decoder.response.update.first
+        #expect(update?.pid == 4321)
+        #expect(update?.menuBar?.actions.map(\.title) == ["Off"])
+    }
+
     @Test func rowsStopAtTheCapWhileResponseLinesStillApply() {
         var lines = (0..<600).map { #"{"title":"row \#($0)"}"# + "\n" }
         lines.insert(#"{"items":[{"title":"late"}]}"# + "\n", at: 550)

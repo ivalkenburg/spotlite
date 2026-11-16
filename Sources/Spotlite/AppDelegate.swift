@@ -47,12 +47,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var hotKey: HotKey?
     private var statusItem: NSStatusItem?
+    /// Plugin looks shown in the menu bar. Holds no item while no look asks for one.
+    private let pluginMenuBar = PluginMenuBarItems()
     private var settings: SettingsWindowController?
     private var preferences = Storage.loadPreferences()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         toasts.showConfirmationMessages = preferences.showConfirmationMessages
         PluginHost.shared.keepPluginRunDiagnostics = preferences.keepPluginRunDiagnostics
+        // Looks change on a run, an expiry or a process exit; nothing polls for them.
+        PluginHost.shared.onLooksChanged = { [weak self] in
+            guard let self else { return }
+            self.pluginMenuBar.refresh()
+            self.controllerInstance?.pluginLooksDidChange()
+        }
+        pluginMenuBar.refresh(hidden: preferences.menuBarHiddenPlugins, disabled: preferences.disabledPlugins)
+        pluginMenuBar.onPerform = { [weak self] action, plugin, commandID in
+            self?.controller.performMenuBarAction(action, plugin: plugin, commandID: commandID)
+        }
         #if DEBUG
         // Checks that run instead of the app: no hotkey, status item or first-run Settings.
         let previousApplication = NSWorkspace.shared.frontmostApplication
@@ -111,7 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in self.controller.runDevSequence() }
         }
         _ = runDevCheck("UTILITIES", { try await self.controller.runDevUtilityChecks() })
-        _ = runDevCheck("PLUGINS", { try await self.controller.runDevPluginChecks() })
+        _ = runDevCheck("PLUGINS", { try await self.controller.runDevPluginChecks(menuBar: self.pluginMenuBar) })
         if ProcessInfo.processInfo.environment["SPOTLITE_DEV_COMPLETION"] == "1" {
             Task { @MainActor in
                 await self.controller.runDevCompletionChecks()
@@ -284,5 +296,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyTheme()
         forward(prefs)
         refreshStatusItem()
+        pluginMenuBar.refresh(hidden: prefs.menuBarHiddenPlugins, disabled: prefs.disabledPlugins)
     }
 }
