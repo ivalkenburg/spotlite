@@ -2253,7 +2253,7 @@ extension SpotliteController {
                   "Restarting the session replaced the menu-bar item")
 
         // Switched off, the plugin's actions grey out and Stop ends the verified process.
-        menuBar.refresh(hidden: [], disabled: ["caffeinate"])
+        menuBar.refresh(disabled: ["caffeinate"])
         menuBar.menuNeedsUpdate(menu)
         try check(menu.items.map(\.title).contains("Caffeinate is switched off")
                   && menu.items.first { $0.title == "Turn Off" }?.isEnabled == false
@@ -2261,14 +2261,10 @@ extension SpotliteController {
         plugins.stopProcess(forEntryID: restarted.entryID)
         await settle(500)
         try check(menuBar.devItemCount == 0, "Stop left the item")
-        menuBar.refresh(hidden: preferences.menuBarHiddenPlugins, disabled: [])
+        menuBar.refresh(disabled: [])
 
-        // Hidden, the session runs without an item.
         let second = try await start()
-        menuBar.refresh(hidden: ["caffeinate"], disabled: [])
-        try check(menuBar.devItemCount == 0, "A hidden plugin kept its item")
-        menuBar.refresh(hidden: [], disabled: [])
-        try check(menuBar.devItem(forEntryID: second.entryID) != nil, "Showing again drew no item")
+        try check(menuBar.devItem(forEntryID: second.entryID) != nil, "A new session drew no item")
 
         // Killed from outside: the kernel's exit event clears both looks.
         kill(second.pid, SIGTERM)
@@ -2279,8 +2275,8 @@ extension SpotliteController {
         guard let row = pluginRow("caffeine") else { return try check(false, "Command vanished") }
         try check(items[row].hints(modifiers: [], running: false).first?.text == "Caffeinate",
                   "Root kept the look of an exited process")
-        menuBar.refresh(hidden: preferences.menuBarHiddenPlugins, disabled: preferences.disabledPlugins)
-        print("DEV plugins: menu-bar item, its menu, -w, a restart keeping the item, Stop when switched off, hiding and external exit passed")
+        menuBar.refresh(disabled: preferences.disabledPlugins)
+        print("DEV plugins: menu-bar item, its menu, -w, a restart keeping the item, Stop when switched off and external exit passed")
     }
 
     /// SPOTLITE_DEV_PLUGINS=1 with SPOTLITE_DEV_PLUGINS_DIR=plugins: finds the

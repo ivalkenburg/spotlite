@@ -483,13 +483,6 @@ struct PluginStoreTests {
         #expect(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).disabledPlugins.isEmpty)
     }
 
-    @Test func menuBarHiddenPluginsSurviveASave() throws {
-        let preferences = Preferences(menuBarHiddenPlugins: ["caffeinate"])
-        let decoded = try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(preferences))
-        #expect(decoded.menuBarHiddenPlugins == ["caffeinate"])
-        #expect(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).menuBarHiddenPlugins.isEmpty)
-    }
-
     @Test func runDiagnosticsAreOffUntilTurnedOn() throws {
         #expect(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).keepPluginRunDiagnostics == false)
         let preferences = Preferences(keepPluginRunDiagnostics: true)

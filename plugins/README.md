@@ -16,7 +16,7 @@ Working examples are in this folder:
 | --- | --- |
 | [`kubectx`](kubectx) | A `list` of kubectl contexts and a `run` action that switches one |
 | [`github`](github) | A `search` with settings, a secret, row accessories and extra row actions |
-| [`caffeinate`](caffeinate) | Durations in a `list` with `sort: false`, a background process, and an `update` tied to it that shows in the menu bar |
+| [`caffeinate`](caffeinate) | Durations in a `list` with `sort: false`, a background process, and an `update` tied to it that shows in the menu bar unless a setting turns that off |
 | [`findfiles`](findfiles) | A streamed `search` |
 | [`uuid`](uuid) | A fixed `menu` in the manifest whose rows `run` the script and `copy` its answer |
 
@@ -402,8 +402,9 @@ manifest, changes a look only when it names a process that still runs.
 
 A `run`, `open` or `copy` from the menu works like one from the panel, but leaves an open
 panel as it is. Its toast,
-copy, open and update apply. Users can hide a plugin's menu-bar item with Settings →
-Plugins → ⋯ → Show in Menu Bar.
+copy, open and update apply. To let users hide the item, declare a `boolean` setting and
+leave `menuBar` out of the update when it is off, as the Caffeinate example does. The item
+changes on the plugin's next update.
 
 If the user switches the plugin off or removes it while its process still runs, the
 item stays. Its menu says why, greys out the plugin's actions and offers Stop. Stop sends

@@ -22,17 +22,19 @@ stop() {
   rm -f "$state"
 }
 
-# The command's look in root results and the menu bar while a session runs. The pid
-# ends the look when caffeinate exits, however that happens. Spotlite that sets
-# SPOTLITE_PID writes {expires} in the user's time format; older Spotlite gets the time.
+# The command's look in root results and, unless the menuBar setting is off, the menu
+# bar while a session runs. The pid ends the look when caffeinate exits, however that
+# happens. Spotlite that sets SPOTLITE_PID writes {expires} in the user's time format;
+# older Spotlite gets the time.
 look() {
-  menu='"menuBar":{"actions":[{"title":"Turn Off","icon":"cup.and.saucer","action":{"type":"run","args":["stop"]}},{"title":"Change Duration…","icon":"clock","action":{"type":"list"}}]}'
+  menu=',"menuBar":{"actions":[{"title":"Turn Off","icon":"cup.and.saucer","action":{"type":"run","args":["stop"]}},{"title":"Change Duration…","icon":"clock","action":{"type":"list"}}]}'
+  [ "$SPOTLITE_CONFIG_MENUBAR" = false ] && menu=''
   if [ "$deadline" -gt 0 ]; then
     if [ -n "$SPOTLITE_PID" ]; then until='{expires}'; else until=$(date -r "$deadline" +%H:%M); fi
-    printf '{"command":"caffeinate","icon":"cup.and.saucer.fill","subtitle":"Active until %s","expires":%s,"pid":%s,%s}' \
+    printf '{"command":"caffeinate","icon":"cup.and.saucer.fill","subtitle":"Active until %s","expires":%s,"pid":%s%s}' \
       "$until" "$deadline" "$pid" "$menu"
   else
-    printf '{"command":"caffeinate","icon":"cup.and.saucer.fill","subtitle":"Active until turned off","pid":%s,%s}' \
+    printf '{"command":"caffeinate","icon":"cup.and.saucer.fill","subtitle":"Active until turned off","pid":%s%s}' \
       "$pid" "$menu"
   fi
 }

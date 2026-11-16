@@ -2,9 +2,18 @@
   "$schema": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/plugins/plugin.schema.json",
   "id": "caffeinate",
   "name": "Caffeinate",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Keep the display awake for a while, or until turned off.",
   "executable": "caffeinate.sh",
+  "settings": [
+    {
+      "id": "menuBar",
+      "label": "Show in menu bar",
+      "type": "boolean",
+      "default": true,
+      "description": "A cup in the menu bar while the display is kept awake. Takes effect the next time you open Caffeinate or start a session."
+    }
+  ],
   "commands": [
     {
       "id": "caffeinate",

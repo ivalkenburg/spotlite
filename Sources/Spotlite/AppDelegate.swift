@@ -61,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.pluginMenuBar.refresh()
             self.controllerInstance?.pluginLooksDidChange()
         }
-        pluginMenuBar.refresh(hidden: preferences.menuBarHiddenPlugins, disabled: preferences.disabledPlugins)
+        pluginMenuBar.refresh(disabled: preferences.disabledPlugins)
         pluginMenuBar.onPerform = { [weak self] action, plugin, commandID in
             self?.controller.performMenuBarAction(action, plugin: plugin, commandID: commandID)
         }
@@ -296,6 +296,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyTheme()
         forward(prefs)
         refreshStatusItem()
-        pluginMenuBar.refresh(hidden: prefs.menuBarHiddenPlugins, disabled: prefs.disabledPlugins)
+        pluginMenuBar.refresh(disabled: prefs.disabledPlugins)
     }
 }

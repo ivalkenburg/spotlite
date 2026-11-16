@@ -90,8 +90,6 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
             item("Run Command…", #selector(runClicked), tip: "Run a command and see its raw output, without applying it"),
             item("Reveal in Finder", #selector(revealClicked), tip: "Show the plugin’s folder in Finder"),
             item("Open Data Folder", #selector(openDataClicked), tip: "Open the folder where the plugin keeps its own data"),
-            item("Show in Menu Bar", #selector(menuBarClicked),
-                 tip: "Let the plugin show an item in the menu bar while it reports one, such as Caffeinate’s cup"),
             .separator(),
             item("Check for Updates", #selector(checkUpdatesClicked),
                  tip: "Ask each plugin’s source for a newer version. Spotlite never checks on its own."),
@@ -103,7 +101,7 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
         configureButton.bezelStyle = .rounded
         for menuItem in [item("Configure…", #selector(configureClicked)), item("Run Command…", #selector(runClicked)),
                          item("Reveal in Finder", #selector(revealClicked)), item("Open Data Folder", #selector(openDataClicked)),
-                         item("Show in Menu Bar", #selector(menuBarClicked)), .separator(), item("Remove…", #selector(removeClicked))] {
+                         .separator(), item("Remove…", #selector(removeClicked))] {
             rowMenu.addItem(menuItem)
         }
         rowMenu.delegate = self
@@ -237,9 +235,6 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
                 && selected?.manifest?.commands.contains { PluginRunAction($0.action) != nil } == true
         case #selector(revealClicked), #selector(removeClicked): return selected != nil
         case #selector(openDataClicked): return selected?.isUsable == true
-        case #selector(menuBarClicked):
-            menuItem.state = selected.map { model.preferences.menuBarHiddenPlugins.contains($0.id) } == true ? .off : .on
-            return selected != nil
         case #selector(checkUpdatesClicked): return !sources.isEmpty
         default: return true
         }
@@ -350,14 +345,6 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
         let directory = PluginStore.dataDirectory(for: plugin.id)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         NSWorkspace.shared.open(directory)
-    }
-
-    @objc private func menuBarClicked() {
-        guard let plugin = selectedPlugin else { return }
-        if model.preferences.menuBarHiddenPlugins.remove(plugin.id) == nil {
-            model.preferences.menuBarHiddenPlugins.insert(plugin.id)
-        }
-        model.persist()
     }
 
     @objc private func configureClicked() {
@@ -515,8 +502,7 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
                 PluginHost.shared.sources.remove(for: plugin.id)
                 self.availableUpdates[plugin.id] = nil
             }
-            let hidden = gone && self.model.preferences.menuBarHiddenPlugins.remove(plugin.id) != nil
-            if gone, self.model.preferences.disabledPlugins.remove(plugin.id) != nil || hidden {
+            if gone, self.model.preferences.disabledPlugins.remove(plugin.id) != nil {
                 // Search takes the change with the preferences.
                 self.model.persist()
             } else {

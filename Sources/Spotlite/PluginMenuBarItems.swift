@@ -9,7 +9,6 @@ final class PluginMenuBarItems: NSObject, NSMenuDelegate {
     private var items: [String: NSStatusItem] = [:]
     /// What each item was last drawn from, so a refresh redraws only what changed.
     private var drawn: [String: PluginLooks.Look] = [:]
-    private var hidden: Set<String> = []
     private var disabled: Set<String> = []
 
     /// An action picked in a menu, after any confirmation.
@@ -21,12 +20,11 @@ final class PluginMenuBarItems: NSObject, NSMenuDelegate {
         self.host = host
     }
 
-    /// Draws the items for the host's looks. `hidden` are plugins kept out of the menu
-    /// bar; `disabled` are switched off, whose items stay while their process runs.
-    func refresh(hidden: Set<String>, disabled: Set<String>) {
-        // Called on every preference change; most leave these alone.
-        guard hidden != self.hidden || disabled != self.disabled else { return }
-        self.hidden = hidden
+    /// Draws the items for the host's looks. `disabled` are plugins switched off, whose
+    /// items stay while their process runs.
+    func refresh(disabled: Set<String>) {
+        // Called on every preference change; most leave this alone.
+        guard disabled != self.disabled else { return }
         self.disabled = disabled
         refresh()
     }
@@ -34,7 +32,7 @@ final class PluginMenuBarItems: NSObject, NSMenuDelegate {
     func refresh() {
         let now = Date()
         var wanted: [String: PluginLooks.Look] = [:]
-        for (id, look) in host.looks.looks where look.update.menuBar != nil && !hidden.contains(look.pluginID) {
+        for (id, look) in host.looks.looks where look.update.menuBar != nil {
             guard !look.update.hasExpired(at: now) else { continue }
             // A switched-off plugin's look stays only while there is a process to stop.
             if !isAvailable(look, entryID: id), look.process == nil { continue }

@@ -34,7 +34,6 @@ public struct Preferences: Codable, Sendable, Equatable {
         case showSystemCommands, showRecentApps, showRunningIndicator, showWebSearch, webSearchEngine, links
         case visibleRows, applicationDirectories, appNameCompletion, hiddenUtilities, toastPosition
         case webSearchMode, showConfirmationMessages, disabledPlugins, keepPluginRunDiagnostics
-        case menuBarHiddenPlugins
     }
 
     /// Ordered search roots. Empty means no application locations; panes remain independent.
@@ -46,8 +45,6 @@ public struct Preferences: Codable, Sendable, Equatable {
     /// Ids of installed plugins that are switched off. Their commands leave search;
     /// the plugin stays installed.
     public var disabledPlugins: Set<String>
-    /// Ids of plugins whose looks stay out of the menu bar.
-    public var menuBarHiddenPlugins: Set<String>
     /// Whether each plugin's last run (its exit, stderr tail and start of stdout) is kept
     /// in memory for Settings. Off, a run keeps nothing once it has been applied.
     public var keepPluginRunDiagnostics: Bool
@@ -119,7 +116,6 @@ public struct Preferences: Codable, Sendable, Equatable {
                                                       forKey: .hiddenUtilities))?.compactMap(\.value) ?? [])
         hiddenBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .hiddenBundleIDs) ?? []
         disabledPlugins = (try? c.decodeIfPresent(Set<String>.self, forKey: .disabledPlugins)) ?? []
-        menuBarHiddenPlugins = (try? c.decodeIfPresent(Set<String>.self, forKey: .menuBarHiddenPlugins)) ?? []
         keepPluginRunDiagnostics = (try? c.decodeIfPresent(Bool.self, forKey: .keepPluginRunDiagnostics)) ?? false
         aliases = try c.decodeIfPresent([String: String].self, forKey: .aliases) ?? [:]
         panelScreen = try c.decodeIfPresent(PanelScreen.self, forKey: .panelScreen) ?? .followPointer
@@ -168,7 +164,6 @@ public struct Preferences: Codable, Sendable, Equatable {
         try c.encode(hiddenUtilities, forKey: .hiddenUtilities)
         try c.encode(hiddenBundleIDs, forKey: .hiddenBundleIDs)
         try c.encode(disabledPlugins, forKey: .disabledPlugins)
-        try c.encode(menuBarHiddenPlugins, forKey: .menuBarHiddenPlugins)
         try c.encode(keepPluginRunDiagnostics, forKey: .keepPluginRunDiagnostics)
         try c.encode(aliases, forKey: .aliases)
         try c.encode(panelScreen, forKey: .panelScreen)
@@ -201,7 +196,6 @@ public struct Preferences: Codable, Sendable, Equatable {
         hiddenBundleIDs: Set<String> = [],
         hiddenUtilities: Set<SearchUtility> = [],
         disabledPlugins: Set<String> = [],
-        menuBarHiddenPlugins: Set<String> = [],
         keepPluginRunDiagnostics: Bool = false,
         aliases: [String: String] = [:],
         panelScreen: PanelScreen = .followPointer,
@@ -230,7 +224,6 @@ public struct Preferences: Codable, Sendable, Equatable {
         self.hiddenBundleIDs = hiddenBundleIDs
         self.hiddenUtilities = hiddenUtilities
         self.disabledPlugins = disabledPlugins
-        self.menuBarHiddenPlugins = menuBarHiddenPlugins
         self.keepPluginRunDiagnostics = keepPluginRunDiagnostics
         self.aliases = aliases
         self.panelScreen = panelScreen

@@ -7,7 +7,7 @@
       "name": "Caffeinate",
       "description": "Keep the display awake for a while, or until turned off.",
       "author": "Spotlite",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "source": "https://github.com/ivalkenburg/spotlite/tree/main/plugins/caffeinate",
       "homepage": "https://github.com/ivalkenburg/spotlite/tree/main/plugins/caffeinate",
       "icon": "cup.and.saucer",

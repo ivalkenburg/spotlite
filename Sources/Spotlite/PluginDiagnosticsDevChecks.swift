@@ -85,7 +85,7 @@ enum PluginDiagnosticsDevChecks {
         let row = PluginHost.shared.plugins.firstIndex { $0.id == plugin.id }!
         table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         try check(items().allSatisfy(\.isEnabled), "Plugin actions disabled with a selection")
-        try check(table.menu?.items.map(\.title) == ["Configure…", "Run Command…", "Reveal in Finder", "Open Data Folder", "Show in Menu Bar", "", "Remove…"],
+        try check(table.menu?.items.map(\.title) == ["Configure…", "Run Command…", "Reveal in Finder", "Open Data Folder", "", "Remove…"],
                   "Row menu: \(table.menu?.items.map(\.title) ?? [])")
         let lastRun = views.compactMap { $0 as? NSTextView }.first { $0.enclosingScrollView?.accessibilityLabel() == "Last run" }!
         let title = views.compactMap { $0 as? NSTextField }.first { $0.stringValue.hasPrefix("Last error ·") }
