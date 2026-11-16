@@ -174,7 +174,7 @@ enum PluginDiagnosticsDevChecks {
         try check(pid > 0 && kill(pid, 0) == -1, "Stop left the plugin running")
         try check(status.stringValue == "Stopped." && runButton.title == "Run", "Stop status: \(status.stringValue)")
 
-        weak var released: NSWindowController? = sheet.windowController
+        weak let released: NSWindowController? = sheet.windowController
         pid = try await slowRun()
         controls.compactMap { $0 as? NSButton }.first { $0.title == "Close" }!.performClick(nil)
         try await Task.sleep(for: .milliseconds(1_500))

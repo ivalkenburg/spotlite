@@ -443,7 +443,7 @@ final class PluginHost {
         if counted {
             looks.runStarted(pluginID: plugin.id)
             let pluginID = plugin.id
-            cancelled = { Task { @MainActor [weak self] in self?.runEnded(pluginID) } }
+            cancelled = { [weak self] in Task { @MainActor in self?.runEnded(pluginID) } }
         }
         var delivery: PluginRun.Rows?
         if let rows {
