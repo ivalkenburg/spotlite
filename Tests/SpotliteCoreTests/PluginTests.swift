@@ -44,6 +44,17 @@ struct PluginModelTests {
         try JSONDecoder().decode(type, from: Data(json.utf8))
     }
 
+    @Test func ignoresOptionsBelongingToOtherActionKinds() throws {
+        #expect(try decode(PluginAction.self, #"{"type":"copy","text":"x","args":false,"stream":"unused","sort":null}"#) == .copy("x"))
+        #expect(try decode(PluginAction.self, #"{"type":"search","sort":"unused"}"#)
+            == .search(args: [], debounce: 200, minimumQuery: 1))
+        #expect(try decode(PluginAction.self, #"{"type":"menu","items":[],"stream":"unused","args":false}"#)
+            == .menu([]))
+        #expect(throws: DecodingError.self) {
+            try decode(PluginAction.self, #"{"type":"list","stream":"invalid"}"#)
+        }
+    }
+
     @Test func decodesEveryAction() throws {
         #expect(try decode(PluginAction.self, #"{"type":"open","url":"https://example.com"}"#) == .open("https://example.com"))
         #expect(try decode(PluginAction.self, #"{"type":"copy","text":"x"}"#) == .copy("x"))

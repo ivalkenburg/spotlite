@@ -305,7 +305,7 @@ final class PluginsSettingsViewController: SettingsPaneController, NSTableViewDa
     }
 
     private func runRecorded(_ id: String) {
-        guard isViewLoaded, selectedPlugin?.id == id else { return }
+        guard isViewLoaded, view.window?.isVisible == true, selectedPlugin?.id == id else { return }
         showLastRun()
     }
 

@@ -90,11 +90,13 @@ public enum PluginArchive {
         guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys, options: []) else {
             throw .archive("Couldn’t read the plugin folder.")
         }
+        let resourceKeys = Set(keys)
         var total: Int64 = 0
         var count = 0
         for case let url as URL in walker {
+            if Task.isCancelled { throw .cancelled }
             count += 1
-            guard let values = try? url.resourceValues(forKeys: Set(keys)) else {
+            guard let values = try? url.resourceValues(forKeys: resourceKeys) else {
                 throw .archive("Couldn’t read \(url.lastPathComponent).")
             }
             let name = String(url.path.dropFirst(root.path.count + 1))
@@ -179,15 +181,19 @@ public enum PluginArchive {
         guard count != 0xFFFF, size != 0xFFFF_FFFF, start != 0xFFFF_FFFF else {
             throw .archive("ZIP64 archives are not supported.")
         }
+        guard Int(data.uint16(at: end + 8)) == count else {
+            throw .archive("Multi-part zip archives are not supported.")
+        }
         guard count <= limits.entries else { throw .archive("The archive has more than \(limits.entries) items.") }
         guard start + size <= end else { throw .archive("The zip archive is damaged.") }
 
+        let directoryEnd = start + size
         var entries: [Entry] = []
         var seen = Set<String>()
         var declared: Int64 = 0
         var offset = start
         for _ in 0..<count {
-            guard offset + 46 <= end, data.uint32(at: offset) == 0x0201_4B50 else {
+            guard offset + 46 <= directoryEnd, data.uint32(at: offset) == 0x0201_4B50 else {
                 throw .archive("The zip archive is damaged.")
             }
             let madeBy = data.uint16(at: offset + 4)
@@ -201,7 +207,12 @@ public enum PluginArchive {
             let commentLength = Int(data.uint16(at: offset + 32))
             let external = data.uint32(at: offset + 38)
             let header = Int(data.uint32(at: offset + 42))
-            guard offset + 46 + nameLength <= end else { throw .archive("The zip archive is damaged.") }
+            guard offset + 46 + nameLength + extraLength + commentLength <= directoryEnd else {
+                throw .archive("The zip archive is damaged.")
+            }
+            guard data.uint16(at: offset + 34) == 0 else {
+                throw .archive("Multi-part zip archives are not supported.")
+            }
             let nameBytes = data.subdata(in: (data.startIndex + offset + 46)..<(data.startIndex + offset + 46 + nameLength))
             offset += 46 + nameLength + extraLength + commentLength
 
@@ -240,6 +251,7 @@ public enum PluginArchive {
             entries.append(Entry(path: path, kind: kind, method: method, crc: crc, compressedSize: compressed,
                                  size: uncompressed, headerOffset: header))
         }
+        guard offset == directoryEnd else { throw .archive("The zip archive is damaged.") }
         return entries
     }
 
@@ -272,6 +284,7 @@ public enum PluginArchive {
         var crc = CRC32()
         var produced: Int64 = 0
         func emit(_ chunk: Data) throws(PluginInstallError) {
+            if Task.isCancelled { throw .cancelled }
             produced += Int64(chunk.count)
             guard produced <= entry.size else { throw .archive("\(entry.path) is larger than the archive says.") }
             crc.update(chunk)

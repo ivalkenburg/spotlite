@@ -69,27 +69,27 @@ extension PluginAction: Decodable {
             throw DecodingError.dataCorruptedError(forKey: .type, in: c,
                                                    debugDescription: "Unknown action type \(type)")
         }
-        let args = try c.decodeIfPresent([String].self, forKey: .args) ?? []
-        let emptyText = try c.decodeIfPresent(String.self, forKey: .emptyText)
-        // Read only where Spotlite filters: a search's rows already answer the query.
-        let filtered = PluginListOptions(sorts: try c.decodeIfPresent(Bool.self, forKey: .sort) ?? true,
-                                         emptyText: emptyText)
-        // Only an executable's output can stream; a menu's rows are already here.
-        let streams = try c.decodeIfPresent(Bool.self, forKey: .stream) ?? false
+        func arguments() throws -> [String] { try c.decodeIfPresent([String].self, forKey: .args) ?? [] }
+        func options(filtered: Bool, streaming: Bool) throws -> PluginListOptions {
+            PluginListOptions(
+                sorts: filtered ? try c.decodeIfPresent(Bool.self, forKey: .sort) ?? true : true,
+                emptyText: try c.decodeIfPresent(String.self, forKey: .emptyText),
+                streams: streaming ? try c.decodeIfPresent(Bool.self, forKey: .stream) ?? false : false)
+        }
         switch kind {
         case .open: self = .open(try c.decode(String.self, forKey: .url))
         case .copy: self = .copy(try c.decode(String.self, forKey: .text))
-        case .run: self = .run(args: args, keepOpen: try c.decodeIfPresent(Bool.self, forKey: .keepOpen) ?? false)
-        case .list: self = .list(args: args, options: filtered.streaming(streams))
+        case .run: self = .run(args: try arguments(), keepOpen: try c.decodeIfPresent(Bool.self, forKey: .keepOpen) ?? false)
+        case .list: self = .list(args: try arguments(), options: try options(filtered: true, streaming: true))
         case .search:
             let debounce = try c.decodeIfPresent(Int.self, forKey: .debounce) ?? PluginAction.defaultDebounce
             let range = PluginAction.debounceRange
-            self = .search(args: args,
+            self = .search(args: try arguments(),
                            debounce: min(max(debounce, range.lowerBound), range.upperBound),
                            minimumQuery: max(0, try c.decodeIfPresent(Int.self, forKey: .minQuery) ?? 1),
-                           options: PluginListOptions(emptyText: emptyText, streams: streams))
+                           options: try options(filtered: false, streaming: true))
         case .menu:
-            self = .menu(PluginItem.decodeList(from: c, forKey: .items), options: filtered)
+            self = .menu(PluginItem.decodeList(from: c, forKey: .items), options: try options(filtered: true, streaming: false))
         }
     }
 }
@@ -108,12 +108,6 @@ public struct PluginListOptions: Sendable, Equatable {
         self.sorts = sorts
         self.emptyText = emptyText.flatMap { $0.allSatisfy(\.isWhitespace) ? nil : $0 }
         self.streams = streams
-    }
-
-    func streaming(_ streams: Bool) -> PluginListOptions {
-        var options = self
-        options.streams = streams
-        return options
     }
 }
 

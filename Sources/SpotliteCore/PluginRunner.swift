@@ -348,10 +348,10 @@ public enum PluginEnvironment {
         environment["SPOTLITE_QUERY"] = query
         environment["SPOTLITE_CONFIG"] = configurationJSON
         environment.merge(configurationVariables) { _, field in field }
-        if let command { environment["SPOTLITE_COMMAND"] = command }
-        if let action { environment["SPOTLITE_ACTION"] = action.rawValue }
-        if let appearance { environment["SPOTLITE_APPEARANCE"] = appearance }
-        if let version { environment["SPOTLITE_VERSION"] = version }
+        environment["SPOTLITE_COMMAND"] = command
+        environment["SPOTLITE_ACTION"] = action?.rawValue
+        environment["SPOTLITE_APPEARANCE"] = appearance
+        environment["SPOTLITE_VERSION"] = version
         // Lets a background process end with Spotlite, as `caffeinate -w` does.
         environment["SPOTLITE_PID"] = String(spotlitePID)
         return environment

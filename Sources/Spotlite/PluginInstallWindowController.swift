@@ -151,7 +151,12 @@ final class PluginInstallWindowController: NSWindowController {
         }
         if rows.isEmpty { rows.append(hint("No plugin was installed from an address, so there is nothing to check.")) }
         let available = checks.filter { if case .available = $0.status { true } else { false } }.count
-        let summary = available == 0 ? "Every plugin is up to date." : available == 1 ? "1 update available." : "\(available) updates available."
+        let failed = checks.filter { if case .failed = $0.status { true } else { false } }.count
+        var summary = available == 0 ? "No updates available." : available == 1 ? "1 update available." : "\(available) updates available."
+        if failed > 0 {
+            summary = available == 0 ? "" : summary + " "
+            summary += failed == 1 ? "1 update check failed." : "\(failed) update checks failed."
+        }
         show([title("Plugin Updates"), hint(rows.count == checks.count && !checks.isEmpty ? summary : "")]
              + rows + [buttons([("Done", #selector(cancelClicked), "\r")])], focus: nil)
     }

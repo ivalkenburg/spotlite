@@ -378,6 +378,24 @@ final class PluginInstallerTests {
         let central = try #require(good.range(of: Data([0x50, 0x4B, 0x01, 0x02]))).lowerBound
         let end = try #require(good.range(of: Data([0x50, 0x4B, 0x05, 0x06]))).lowerBound
 
+        // The declared directory must contain complete entries, including their
+        // extra fields and comments, and agree with the disk entry count.
+        var truncatedDirectory = good
+        truncatedDirectory[end + 12] -= 1
+        #expect(failure(truncatedDirectory) != nil)
+        var oversizedExtra = good
+        oversizedExtra[central + 30] = 1
+        #expect(failure(oversizedExtra) != nil)
+        var oversizedComment = good
+        oversizedComment[central + 32] = 1
+        #expect(failure(oversizedComment) != nil)
+        var wrongDiskCount = good
+        wrongDiskCount[end + 8] = 0
+        #expect(failure(wrongDiskCount) != nil)
+        var entryOnAnotherDisk = good
+        entryOnAnotherDisk[central + 34] = 1
+        #expect(failure(entryOnAnotherDisk) != nil)
+
         var encrypted = good
         encrypted[central + 8] |= 1
         #expect(failure(encrypted)?.contains("Encrypted") == true)

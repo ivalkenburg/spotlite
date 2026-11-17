@@ -153,6 +153,15 @@ struct PluginDiagnosticsTests {
         #expect(environment["SPOTLITE_VERSION"] == "1.2.3")
     }
 
+    @Test func omittedRunContextDoesNotLeakInheritedValues() throws {
+        let plugin = try plugin("true")
+        defer { try? FileManager.default.removeItem(at: plugin.directory) }
+        let keys = ["SPOTLITE_COMMAND", "SPOTLITE_ACTION", "SPOTLITE_APPEARANCE", "SPOTLITE_VERSION"]
+        let base = Dictionary(uniqueKeysWithValues: keys.map { ($0, "stale") })
+        let environment = PluginEnvironment.make(for: plugin, query: "", base: base)
+        for key in keys { #expect(environment[key] == nil) }
+    }
+
     @Test func passesPerFieldValuesToTheProgram() async throws {
         let plugin = try plugin("true")
         defer { try? FileManager.default.removeItem(at: plugin.directory) }

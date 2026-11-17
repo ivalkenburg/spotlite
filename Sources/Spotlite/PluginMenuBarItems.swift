@@ -138,11 +138,11 @@ final class PluginMenuBarItems: NSObject, NSMenuDelegate {
                 menu.addItem(entry)
             }
         }
-        if !available, look.process != nil {
+        if !available, let process = look.process {
             menu.addItem(.separator())
             let stop = NSMenuItem(title: "Stop", action: #selector(stopProcess(_:)), keyEquivalent: "")
             stop.target = self
-            stop.representedObject = id
+            stop.representedObject = process
             menu.addItem(stop)
         }
     }
@@ -155,9 +155,13 @@ final class PluginMenuBarItems: NSObject, NSMenuDelegate {
 
     @objc private func performAction(_ sender: NSMenuItem) {
         guard let picked = sender.representedObject as? MenuAction,
-              let (plugin, command) = host.command(forEntryID: picked.entryID) else { return }
+              let (plugin, command) = host.command(forEntryID: picked.entryID),
+              !disabled.contains(plugin.id) else { return }
         let action = picked.action
         if let confirm = action.confirm, !ask(confirm) { return }
+        // A modal confirmation lets reloads and preference changes run.
+        guard !disabled.contains(plugin.id),
+              host.command(forEntryID: picked.entryID)?.plugin == plugin else { return }
         onPerform?(action, plugin, command.id)
     }
 
@@ -171,8 +175,9 @@ final class PluginMenuBarItems: NSObject, NSMenuDelegate {
     }
 
     @objc private func stopProcess(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String else { return }
-        host.stopProcess(forEntryID: id)
+        guard let process = sender.representedObject as? ProcessIdentity, process.isRunning else { return }
+        // Stop the process shown when the menu opened, even if its look was replaced.
+        kill(process.pid, SIGTERM)
     }
 
     /// The panel's in-place question needs the panel; the menu bar asks with an alert.
