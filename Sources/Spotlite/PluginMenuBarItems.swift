@@ -66,7 +66,7 @@ final class PluginMenuBarItems: NSObject, NSMenuDelegate {
     private func draw(_ item: NSStatusItem, look: PluginLooks.Look, entryID: String) {
         guard let button = item.button else { return }
         let description = summary(of: look)
-        button.image = image(for: look, entryID: entryID, description: description)
+        button.image = image(for: look, entryID: entryID, description: description, item: item)
         button.imagePosition = .imageOnly
         button.toolTip = description
         item.menu?.identifier = NSUserInterfaceItemIdentifier(entryID)
@@ -77,7 +77,7 @@ final class PluginMenuBarItems: NSObject, NSMenuDelegate {
         look.update.displaySubtitle() ?? look.commandTitle
     }
 
-    private func image(for look: PluginLooks.Look, entryID: String, description: String) -> NSImage? {
+    private func image(for look: PluginLooks.Look, entryID: String, description: String, item: NSStatusItem) -> NSImage? {
         let raw = look.update.icon ?? host.command(forEntryID: entryID)?.command.icon
         let icon = raw.map { PluginIcon($0, directory: look.directory) } ?? .symbol(PluginHost.fallbackSymbol)
         switch icon {
@@ -89,12 +89,24 @@ final class PluginMenuBarItems: NSObject, NSMenuDelegate {
             image?.isTemplate = true
             return image
         case .file(let url):
-            let image = PluginIcon.imageExtensions.contains(url.pathExtension.lowercased())
-                ? NSImage(contentsOf: url) : NSWorkspace.shared.icon(forFile: url.path)
-            image?.size = NSSize(width: 18, height: 18)
-            image?.accessibilityDescription = description
-            return image
+            // A one-use loader avoids both app-index invalidation cancelling this
+            // delivery and caching an old image when a look replaces the same file.
+            // The queued load retains it only until delivery.
+            IconCache().load(for: url) { [weak self, weak item] image in
+                guard let self, let item, self.items[entryID] === item,
+                      self.drawn[entryID] == look else { return }
+                item.button?.image = Self.menuImage(image, description: description)
+            }
+            return Self.menuImage(IconCache.placeholder, description: description)
         }
+    }
+
+    /// Copy before resizing: the same cached bitmap also serves launcher rows.
+    private static func menuImage(_ source: NSImage, description: String) -> NSImage {
+        let image = source.copy() as! NSImage
+        image.size = NSSize(width: 18, height: 18)
+        image.accessibilityDescription = description
+        return image
     }
 
     /// Whether the look's plugin is installed, switched on and still has its command.

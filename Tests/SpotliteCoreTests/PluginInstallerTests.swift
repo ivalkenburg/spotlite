@@ -225,6 +225,13 @@ final class PluginInstallerTests {
         #expect(V.compare(installed: nil, remote: nil) == .same)
     }
 
+    @Test func comparesVersionsBeyondMachineIntegerRange() {
+        let large = String(repeating: "9", count: 40)
+        #expect(PluginVersion.compare(installed: large, remote: large + "0") == .newer)
+        #expect(PluginVersion.compare(installed: "1." + large, remote: "2.0") == .newer)
+        #expect(PluginVersion.compare(installed: large, remote: large + ".0") == .same)
+    }
+
     // MARK: - Source records
 
     @Test func sourceRecordsRoundTrip() throws {

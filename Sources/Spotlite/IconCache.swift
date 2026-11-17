@@ -19,7 +19,7 @@ final class IconCache {
     /// Results from an older generation must not refill the cleared cache.
     private var generation = 0
 
-    private init() {
+    init() {
         // Sized to hold the whole index rather than a screenful. Scrolling the Settings
         // list past 64 apps would otherwise evict entries and re-rasterise them on the
         // way back. At 45pt @2x an entry is 90x90x4 bytes, so 256, room for about 200

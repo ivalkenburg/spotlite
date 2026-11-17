@@ -218,7 +218,7 @@ public enum PluginVersion {
     }
 
     private struct Parsed {
-        let numbers: [Int]
+        let numbers: [Substring]
         let prerelease: [String]
 
         init?(_ text: String) {
@@ -233,10 +233,10 @@ public enum PluginVersion {
             }
             let parts = text.split(separator: ".", omittingEmptySubsequences: false)
             guard !parts.isEmpty, parts.count <= 4 else { return nil }
-            var numbers: [Int] = []
+            var numbers: [Substring] = []
             for part in parts {
-                guard !part.isEmpty, part.allSatisfy(\.isASCII), let number = Int(part), number >= 0 else { return nil }
-                numbers.append(number)
+                guard !part.isEmpty, part.utf8.allSatisfy({ (48...57).contains($0) }) else { return nil }
+                numbers.append(part.drop { $0 == "0" })
             }
             self.numbers = numbers
             self.prerelease = pre
@@ -244,8 +244,10 @@ public enum PluginVersion {
 
         func compare(to other: Parsed) -> ComparisonResult {
             for index in 0..<max(numbers.count, other.numbers.count) {
-                let a = index < numbers.count ? numbers[index] : 0
-                let b = index < other.numbers.count ? other.numbers[index] : 0
+                // Compare normalized digits without imposing a machine-integer limit.
+                let a = index < numbers.count ? numbers[index] : ""
+                let b = index < other.numbers.count ? other.numbers[index] : ""
+                if a.count != b.count { return a.count < b.count ? .orderedAscending : .orderedDescending }
                 if a != b { return a < b ? .orderedAscending : .orderedDescending }
             }
             // A prerelease precedes its release.

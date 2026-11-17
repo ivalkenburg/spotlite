@@ -26,7 +26,7 @@ public struct Frecency: Codable, Sendable {
 
     public mutating func recordLaunch(_ id: String, now: Date = Date()) {
         var record = records[id] ?? Record(count: 0, lastLaunch: now)
-        record.count += 1
+        record.count = record.count == Int.max ? Int.max : max(0, record.count) + 1
         record.lastLaunch = now
         records[id] = record
     }
@@ -44,7 +44,7 @@ public struct Frecency: Codable, Sendable {
 
     /// Multiplier in [1.0, 1.35] for a candidate's textual score.
     public func multiplier(for id: String, now: Date = Date()) -> Double {
-        guard let record = records[id] else { return 1.0 }
+        guard let record = records[id], record.count > 0 else { return 1.0 }
 
         // Diminishing returns on count: the 20th launch matters far less than the 2nd.
         let frequency = min(1.0, log2(Double(record.count) + 1) / log2(21))

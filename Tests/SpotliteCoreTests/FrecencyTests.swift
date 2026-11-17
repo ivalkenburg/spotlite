@@ -5,6 +5,24 @@ import Testing
 @Suite("Frecency")
 struct FrecencyTests {
 
+    @Test func invalidPersistedCountsDoNotPenalizeMatches() {
+        let now = Date()
+        let history = Frecency(records: ["a": .init(count: -1, lastLaunch: now)])
+        #expect(history.multiplier(for: "a", now: now) == 1)
+    }
+
+    @Test func recordingLaunchRepairsNegativeCountsAndSaturatesOverflow() {
+        let now = Date()
+        var history = Frecency(records: [
+            "negative": .init(count: -20, lastLaunch: now),
+            "maximum": .init(count: Int.max, lastLaunch: now),
+        ])
+        history.recordLaunch("negative", now: now)
+        #expect(history.records["negative"]?.count == 1)
+        history.recordLaunch("maximum", now: now)
+        #expect(history.records["maximum"]?.count == Int.max)
+    }
+
     @Test func unknownAppGetsNoBoost() {
         #expect(Frecency().multiplier(for: "never.launched") == 1.0)
     }
