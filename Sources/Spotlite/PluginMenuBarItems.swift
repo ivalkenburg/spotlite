@@ -10,6 +10,10 @@ final class PluginMenuBarItems: NSObject, NSMenuDelegate {
     /// What each item was last drawn from, so a refresh redraws only what changed.
     private var drawn: [String: PluginLooks.Look] = [:]
     private var disabled: Set<String> = []
+    private var imageRequests: [String: UUID] = [:]
+    #if DEBUG
+    private var devLoadImage: ((URL, @escaping (NSImage) -> Void) -> Void)?
+    #endif
 
     /// An action picked in a menu, after any confirmation.
     var onPerform: ((PluginSecondaryAction, InstalledPlugin, String) -> Void)?
@@ -42,6 +46,7 @@ final class PluginMenuBarItems: NSObject, NSMenuDelegate {
             // Dropping the reference is not enough; the item must be removed explicitly.
             if let item = items.removeValue(forKey: id) { NSStatusBar.system.removeStatusItem(item) }
             drawn[id] = nil
+            imageRequests[id] = nil
         }
         // In key order, so items added together keep one order across launches.
         for (id, look) in wanted.sorted(by: { $0.key < $1.key }) where drawn[id] != look {
@@ -65,6 +70,7 @@ final class PluginMenuBarItems: NSObject, NSMenuDelegate {
 
     private func draw(_ item: NSStatusItem, look: PluginLooks.Look, entryID: String) {
         guard let button = item.button else { return }
+        imageRequests[entryID] = UUID()
         let description = summary(of: look)
         button.image = image(for: look, entryID: entryID, description: description, item: item)
         button.imagePosition = .imageOnly
@@ -92,11 +98,18 @@ final class PluginMenuBarItems: NSObject, NSMenuDelegate {
             // A one-use loader avoids both app-index invalidation cancelling this
             // delivery and caching an old image when a look replaces the same file.
             // The queued load retains it only until delivery.
-            IconCache().load(for: url) { [weak self, weak item] image in
+            let request = imageRequests[entryID]
+            let deliver: (NSImage) -> Void = { [weak self, weak item] image in
                 guard let self, let item, self.items[entryID] === item,
-                      self.drawn[entryID] == look else { return }
+                      self.imageRequests[entryID] == request else { return }
                 item.button?.image = Self.menuImage(image, description: description)
             }
+            #if DEBUG
+            if let devLoadImage { devLoadImage(url, deliver) }
+            else { IconCache().load(for: url, completion: deliver) }
+            #else
+            IconCache().load(for: url, completion: deliver)
+            #endif
             return Self.menuImage(IconCache.placeholder, description: description)
         }
     }
@@ -211,6 +224,56 @@ final class PluginMenuBarItems: NSObject, NSMenuDelegate {
     }
 
     #if DEBUG
+    /// Offline regression: independently queued A → B → A loads can finish in any order.
+    static func runDevIconChecks() async throws {
+        let menu = PluginMenuBarItems()
+        let id = "icon-regression"
+        let item = menu.makeItem(entryID: id)
+        menu.items[id] = item
+        defer { NSStatusBar.system.removeStatusItem(item) }
+        var deliveries: [(NSImage) -> Void] = []
+        menu.devLoadImage = { _, deliver in deliveries.append(deliver) }
+        func look(_ subtitle: String) -> PluginLooks.Look {
+            .init(update: .init(command: "test", icon: "./icon.png", subtitle: subtitle),
+                  pluginID: "test", pluginName: "Test", directory: URL(fileURLWithPath: NSTemporaryDirectory()),
+                  commandTitle: "Test")
+        }
+        for value in [look("A"), look("B"), look("A")] {
+            menu.draw(item, look: value, entryID: id)
+            menu.drawn[id] = value
+        }
+        precondition(deliveries.count == 3)
+        let newest = NSImage(size: NSSize(width: 45, height: 45))
+        deliveries[2](newest)
+        let displayed = item.button!.image!
+        deliveries[0](NSImage(size: NSSize(width: 45, height: 45)))
+        deliveries[1](NSImage(size: NSSize(width: 45, height: 45)))
+        precondition(item.button!.image === displayed, "Old icon overwrote the newest A look")
+        precondition(newest.size.width == 45 && displayed.size.width == 18)
+        menu.items[id] = nil
+        deliveries[2](newest)
+        precondition(item.button!.image === displayed, "Removed item received an icon")
+        let file = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".png")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 200, pixelsHigh: 100,
+                                      bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                      isPlanar: false, colorSpaceName: .deviceRGB,
+                                      bytesPerRow: 0, bitsPerPixel: 0)!
+        for y in 0..<100 {
+            for x in 0..<200 { bitmap.setColor(NSColor(deviceRed: 1, green: 0, blue: 0, alpha: 1), atX: x, y: y) }
+        }
+        try bitmap.representation(using: .png, properties: [:])!.write(to: file)
+        let loaded = await withCheckedContinuation { continuation in
+            IconCache().load(for: file) { continuation.resume(returning: $0) }
+        }
+        let raster = loaded.representations.first as! NSBitmapImageRep
+        precondition(raster.pixelsWide == 90 && raster.pixelsHigh == 90)
+        precondition(raster.colorAt(x: 45, y: 45)!.alphaComponent > 0.9)
+        precondition(raster.colorAt(x: 45, y: 0)!.alphaComponent < 0.1,
+                     "Wide icon must retain transparent padding instead of stretching")
+        print("DEV menu icons: reordered A/B/A deliveries, removal, copied dimensions and file aspect ratio passed")
+    }
+
     /// Dev checks read what an item shows.
     func devItem(forEntryID id: String) -> NSStatusItem? { items[id] }
     var devItemCount: Int { items.count }

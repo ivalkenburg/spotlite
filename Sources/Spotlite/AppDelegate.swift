@@ -68,7 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if DEBUG
         // Checks that run instead of the app: no hotkey, status item or first-run Settings.
         let previousApplication = NSWorkspace.shared.frontmostApplication
-        if runDevCheck("CONFIGURATION", {
+        if runDevCheck("MENU_ICONS", { try await PluginMenuBarItems.runDevIconChecks() }) || runDevCheck("CONFIGURATION", {
             try await PluginConfigurationDevChecks.run(controller: self.controller, library: self.library,
                                                        preferences: self.preferences)
         }) || runDevCheck("DIAGNOSTICS", {

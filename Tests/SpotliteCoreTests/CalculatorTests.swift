@@ -175,6 +175,19 @@ struct CalculatorFunctionTests {
         #expect(Calculator.evaluate("0x1ffffffffffffffff+0") == nil)
     }
 
+    @Test func invalidIntermediateValuesCannotBecomeValidResults() {
+        for input in ["sqrt(-1)^0", "1^sqrt(-1)", "atan(ln(0))", "1/(10^400)", "1/exp(1000)",
+                      "(√-1)^0", "1/((10^308)*10)", "1/((10^308)+(10^308))"] {
+            #expect(Calculator.evaluate(input) == nil, "\(input) must preserve the intermediate error")
+        }
+    }
+
+    @Test func nonfinitePreviousResultsAreRejected() {
+        #expect(Calculator.evaluate("ans^0", previous: .infinity) == nil)
+        #expect(Calculator.evaluate("ans^0", previous: .nan) == nil)
+        #expect(Calculator.evaluate("ans^0", previous: 42) == 1)
+    }
+
     @Test func overflowProducesNoResult() {
         #expect(Calculator.evaluate("10^400") == nil)
         #expect(Calculator.evaluate("-10^400") == nil)

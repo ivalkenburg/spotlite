@@ -100,6 +100,7 @@ public enum Calculator {
                 pos += 1
                 guard let rhs = term() else { return nil }
                 value = (op == "+") ? value + rhs : value - rhs
+                guard value.isFinite else { return nil }
             }
             return value
         }
@@ -119,6 +120,7 @@ public enum Calculator {
                     guard rhs != 0 else { return nil }
                     value = value.truncatingRemainder(dividingBy: rhs)
                 }
+                guard value.isFinite else { return nil }
             }
             return value
         }
@@ -127,11 +129,12 @@ public enum Calculator {
         /// A leading sign belongs outside the power: -2^2 is -(2^2), while 2^-2
         /// still accepts a signed exponent.
         mutating func power() -> Double? {
-            guard let base = primary() else { return nil }
+            guard let base = primary(), base.isFinite else { return nil }
             if let op = peek(), op == "^" {
                 pos += 1
                 guard let exponent = unary() else { return nil }
-                return pow(base, exponent)
+                let value = pow(base, exponent)
+                return value.isFinite ? value : nil
             }
             return base
         }
@@ -151,7 +154,8 @@ public enum Calculator {
             if op == "√" {
                 pos += 1
                 guard let value = unary() else { return nil }
-                return value.squareRoot()
+                let root = value.squareRoot()
+                return root.isFinite ? root : nil
             }
             return power()
         }
@@ -177,7 +181,8 @@ public enum Calculator {
         }
 
         /// A constant, or a function applied to a parenthesized argument. Domain errors
-        /// such as `sqrt(-1)` yield NaN, which the final finiteness check rejects.
+        /// such as `sqrt(-1)` must fail here: a later operation such as NaN^0
+        /// could otherwise turn the invalid intermediate into a finite result.
         mutating func named() -> Double? {
             let start = pos
             while pos < chars.count, ("a"..."z").contains(chars[pos]) || chars[pos].isNumber { pos += 1 }
@@ -190,7 +195,8 @@ public enum Calculator {
             default: break
             }
             guard let function = Parser.functions[name], let argument = parenthesized() else { return nil }
-            return function(argument)
+            let value = function(argument)
+            return value.isFinite ? value : nil
         }
 
         static let functions: [String: @Sendable (Double) -> Double] = [
