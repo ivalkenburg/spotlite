@@ -195,11 +195,9 @@ public enum PluginStore {
                 backedUp = finalize != nil
             } else {
                 // A link gives way to the copy, dangling or not; what it points at stays.
-                if finalize != nil, isLink(destination) {
+                if isLink(destination) {
                     try files.moveItem(at: destination, to: backup)
                     backedUp = true
-                } else {
-                    try? files.removeItem(atPath: destination.path)
                 }
                 try files.moveItem(at: staging, to: destination)
             }

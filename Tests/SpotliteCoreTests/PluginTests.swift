@@ -465,6 +465,23 @@ struct PluginStoreTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.plugins.path) == ["demo"])
     }
 
+    @Test func failedLocalInstallationRestoresADevelopmentLink() throws {
+        let fixture = try PluginFixture()
+        let development = try fixture.plugin("demo", manifest: PluginFixture.manifest(), script: "echo original", in: "Work")
+        try FileManager.default.createDirectory(at: fixture.plugins, withIntermediateDirectories: true)
+        let link = fixture.plugins.appendingPathComponent("demo")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: development)
+        let source = try fixture.plugin("download", manifest: PluginFixture.manifest(), script: "echo replacement", in: "Downloads")
+
+        #expect(throws: PluginStore.InstallError.self) {
+            try PluginStore.install(from: source, into: fixture.plugins, beforeReplace: { staging in
+                try FileManager.default.removeItem(at: staging)
+            })
+        }
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == development.path)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.plugins.path) == ["demo"])
+    }
+
     @Test(arguments: [false, true])
     func failedFinalizationRestoresTheOriginalFolderOrLink(linked: Bool) throws {
         let fixture = try PluginFixture()
