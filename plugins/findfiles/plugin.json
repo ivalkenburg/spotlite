@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/ivalkenburg/spotlite/main/plugins/plugin.schema.json",
   "id": "findfiles",
   "name": "Find Files",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Find files by name, showing each as it is found.",
   "executable": "findfiles.sh",
   "timeout": 30,

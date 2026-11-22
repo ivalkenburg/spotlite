@@ -22,7 +22,7 @@
       "name": "Find Files",
       "description": "Find files by name, showing each as it is found.",
       "author": "Spotlite",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "source": "https://github.com/ivalkenburg/spotlite/tree/main/plugins/findfiles",
       "homepage": "https://github.com/ivalkenburg/spotlite/tree/main/plugins/findfiles",
       "icon": "doc.text.magnifyingglass",
