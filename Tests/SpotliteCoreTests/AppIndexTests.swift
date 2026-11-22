@@ -184,6 +184,11 @@ struct AppIndexTests {
         #expect(AppIndex.includesApplication(at: vendor.appendingPathComponent("Vendor.app"), directories: [root]))
         #expect(!AppIndex.includesApplication(at: deep.appendingPathComponent("Too Deep.app"), directories: [root]))
         #expect(!AppIndex.includesApplication(at: root.appendingPathComponent("Root.app"), directories: []))
+        for parent in [root.appendingPathComponent(".private"), root.appendingPathComponent("Root.app")] {
+            let child = try makeApp(in: parent, name: "Child", bundleID: "test.child")
+            #expect(!AppIndex.includesApplication(at: child, directories: [root]))
+            #expect(AppIndex.includesApplication(at: child, directories: [parent]))
+        }
         #expect(AppIndex.scanAll(directories: [root]).filter { $0.kind == .app }.map(\.name) == ["Root", "Vendor"])
         #expect(AppIndex.scanAll(directories: []).allSatisfy { $0.kind == .settingsPane })
     }

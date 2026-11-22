@@ -27,6 +27,7 @@ public enum AppIndex {
     /// The same discovery rules as a scan, used to drop removed roots without blanking the list.
     public static func includesApplication(at url: URL, directories: [URL]) -> Bool {
         let app = url.standardizedFileURL
+        guard app.pathExtension == "app" else { return false }
         if isAtSearchDepth(app, directories: directories) { return true }
 
         let applications = app.deletingLastPathComponent()
@@ -39,8 +40,11 @@ public enum AppIndex {
 
     private static func isAtSearchDepth(_ url: URL, directories: [URL]) -> Bool {
         let parent = url.deletingLastPathComponent()
-        let grandparent = parent.deletingLastPathComponent()
-        return directories.contains(parent) || directories.contains(grandparent)
+        let parentPath = parent.path
+        if directories.contains(where: { $0.path == parentPath }) { return true }
+        guard !parent.lastPathComponent.hasPrefix("."), parent.pathExtension != "app" else { return false }
+        let grandparentPath = parent.deletingLastPathComponent().path
+        return directories.contains { $0.path == grandparentPath }
     }
 
     /// Returns an immediately usable cached snapshot. The cache turns a ~90ms cold scan
@@ -53,8 +57,7 @@ public enum AppIndex {
     }
 
     /// Rescans and rewrites the cache. Called from the FSEvents watcher and from the
-    /// staleness check when the panel opens. Settings panes are rescanned with the apps
-    /// but not watched: they only change with an OS update.
+    /// staleness check when the panel opens. The scan reuses the process-wide settings pane index.
     public static func refresh(directories: [URL] = searchDirectories) -> [AppEntry] {
         let scanned = scanAll(directories: directories)
         Storage.saveIndex(scanned.map(\.cached), directories: directories)
@@ -114,7 +117,7 @@ public enum AppIndex {
         }.map(\.entry)
     }
 
-    /// Collects `.app` URLs, recursing into plain subfolders (vendor folders) but never into bundles.
+    /// Collects `.app` URLs under the root and its visible subfolders, stopping at each app.
     private static func bundles(in dir: URL, depth: Int) -> [URL] {
         guard depth > 0 else { return [] }
         let fm = FileManager.default
