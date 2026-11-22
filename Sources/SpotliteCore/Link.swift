@@ -60,7 +60,7 @@ public struct Link: Codable, Sendable, Equatable, Identifiable {
 
         // Local servers rarely speak https. Match the whole host, not names such as
         // `localhostish.com`, and check it before interpreting a port as a URL scheme.
-        if t == "localhost" || t.hasPrefix("localhost:") || t.hasPrefix("localhost/")
+        if t.prefix(while: { !":/?#".contains($0) }).lowercased() == "localhost"
             || isIPv4Host(t) { return URL(string: "http://" + address) }
         // A dotted prefix with digits after the colon is a host with a port. A
         // syntactically valid prefix otherwise names a scheme, including numeric
@@ -76,6 +76,6 @@ public struct Link: Codable, Sendable, Equatable, Identifiable {
 
     /// `192.168.1.1`, optionally followed by a port or path.
     private static func isIPv4Host(_ t: String) -> Bool {
-        t.range(of: #"^\d{1,3}(\.\d{1,3}){3}([:/]|$)"#, options: .regularExpression) != nil
+        t.range(of: #"^\d{1,3}(\.\d{1,3}){3}([:/?#]|$)"#, options: .regularExpression) != nil
     }
 }
