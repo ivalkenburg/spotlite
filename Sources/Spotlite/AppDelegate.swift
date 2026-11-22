@@ -198,11 +198,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("Spotlite: hotkey registration failed — the chord is already claimed.")
             // A silently dead shortcut is the worst outcome: surface it where it can be changed.
             openSettings()
+            settings?.showHotKeyConflict()
         }
     }
 
     private func rebindHotKey(code: UInt32, modifiers: UInt32) -> Bool {
-        if code == preferences.hotKeyCode, modifiers == preferences.hotKeyModifiers { return true }
+        if hotKey != nil, code == preferences.hotKeyCode, modifiers == preferences.hotKeyModifiers { return true }
         // Register first. The currently working chord remains live if the replacement is
         // already claimed or event-handler installation fails.
         guard let replacement = makeHotKey(code: code, modifiers: modifiers) else { return false }

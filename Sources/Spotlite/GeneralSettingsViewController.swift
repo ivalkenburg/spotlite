@@ -5,7 +5,7 @@ import ServiceManagement
 @MainActor
 final class GeneralSettingsViewController: SettingsPaneController {
     private let hotKeyWarning = SettingsForm.hint(
-        "That shortcut is already in use. The previous shortcut is still active.", color: .systemRed)
+        "That shortcut is unavailable. Choose another shortcut.", color: .systemRed)
     private let loginItemWarning = SettingsForm.hint("", color: .systemOrange)
     private let loginItemButton = NSButton(checkboxWithTitle: "Start at login", target: nil, action: nil)
     private var hotKeyRecorder: HotKeyRecorder?
@@ -24,7 +24,7 @@ final class GeneralSettingsViewController: SettingsPaneController {
                 self.model.preferences.hotKeyModifiers = modifiers
                 self.model.persist()
             }
-            self.setHidden(self.hotKeyWarning, !accepted)
+            self.setHidden(self.hotKeyWarning, accepted)
             return accepted
         }
         hotKeyRecorder = recorder
@@ -56,6 +56,10 @@ final class GeneralSettingsViewController: SettingsPaneController {
 
     func cancelRecording() {
         hotKeyRecorder?.cancelRecording()
+    }
+
+    func showHotKeyConflict() {
+        setHidden(hotKeyWarning, false)
     }
 
     /// Only a page on screen reports: while it is still being built, the window has

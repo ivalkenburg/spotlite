@@ -75,6 +75,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
         plugins.configure(pluginID: id)
     }
 
+    func showHotKeyConflict() {
+        select(.general)
+        general.showHotKeyConflict()
+    }
+
     #if DEBUG
     func devShowPlugins() -> PluginsSettingsViewController {
         select(.plugins)
