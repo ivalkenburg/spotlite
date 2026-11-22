@@ -243,6 +243,10 @@ final class PluginInstallerTests {
         try store.save(record, for: "demo")
         #expect(store.load(for: "demo") == record)
         #expect(store.load(for: "demo")?.source == .github(owner: "o", repository: "r", ref: "main", subpath: "p"))
+        var oversized = record
+        oversized.version = String(repeating: "1", count: PluginSourceStore.maxBytes)
+        #expect(throws: CocoaError.self) { try store.save(oversized, for: "demo") }
+        #expect(store.load(for: "demo") == record)
         #expect(throws: (any Error).self) { try store.save(record, for: "../escape") }
         store.remove(for: "demo")
         #expect(store.load(for: "demo") == nil)

@@ -339,8 +339,12 @@ public struct PluginSourceStore: Sendable {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        let data = try encoder.encode(record)
+        guard data.count <= Self.maxBytes else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: "The plugin’s source record exceeds 16 KB."])
+        }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try encoder.encode(record).write(to: url, options: .atomic)
+        try data.write(to: url, options: .atomic)
     }
 
     public func remove(for id: String) {
