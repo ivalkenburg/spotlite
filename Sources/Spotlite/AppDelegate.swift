@@ -279,7 +279,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             settings = controller
         }
-        settings?.show(apps: library.entries)
+        settings?.show()
     }
 
     /// Applies preferences changed by the panel or by Settings. `forward` hands them to

@@ -59,7 +59,7 @@ enum PluginDiagnosticsDevChecks {
             if let selectedTab { UserDefaults.standard.set(selectedTab, forKey: "SettingsSelectedTab") }
             else { UserDefaults.standard.removeObject(forKey: "SettingsSelectedTab") }
         }
-        settings.show(apps: library.entries)
+        settings.show()
         let pane = settings.devShowPlugins()
         try await Task.sleep(for: .milliseconds(300))
         settingsWindow = pane.view.window

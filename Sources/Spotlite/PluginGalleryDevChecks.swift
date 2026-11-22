@@ -59,7 +59,7 @@ enum PluginGalleryDevChecks {
             if let selectedTab { UserDefaults.standard.set(selectedTab, forKey: "SettingsSelectedTab") }
             else { UserDefaults.standard.removeObject(forKey: "SettingsSelectedTab") }
         }
-        settings.show(apps: library.entries)
+        settings.show()
         let pane = settings.devShowPlugins()
         try await Task.sleep(for: .milliseconds(300))
         settingsWindow = pane.view.window
@@ -210,7 +210,7 @@ enum PluginGalleryDevChecks {
         // must be released, so the next gallery opening fetches again.
         window.close()
         try Data(#"{"version":99,"plugins":[]}"#.utf8).write(to: index)
-        settings.show(apps: library.entries)
+        settings.show()
         install!.performActionForItem(at: install!.indexOfItem(withTitle: "Browse Gallery…"))
         let newSession = try await sheet(on: window)
         _ = try await page("Retry", in: newSession)

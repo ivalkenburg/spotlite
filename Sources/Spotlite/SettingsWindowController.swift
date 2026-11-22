@@ -100,14 +100,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
         }
     }
 
-    func show(apps: [AppEntry]) {
-        items.setApps(apps)
-
+    func show() {
         if window == nil {
             buildWindow()
             let saved = UserDefaults.standard.string(forKey: Self.selectedTabKey).flatMap(Tab.init)
             select(saved ?? .general)
             window?.center()
+        } else if currentTab == .items {
+            items.setApps(model.library.entries)
+        } else if currentTab == .plugins {
+            plugins.reload()
         }
 
         // Stay .accessory and force activation: flipping to .regular would make a Dock
@@ -117,16 +119,23 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
     }
 
     func preferencesDidChange(_ updated: Preferences) {
+        let previous = model.preferences
         model.preferences = updated
-        items.reload()
-        plugins.reload()
-        search.updateHistoryState()
+        guard window?.isVisible == true else { return }
+        if currentTab == .items, previous.hiddenBundleIDs != updated.hiddenBundleIDs
+            || previous.hiddenUtilities != updated.hiddenUtilities || previous.aliases != updated.aliases {
+            items.reload()
+        }
+        if currentTab == .plugins, previous.disabledPlugins != updated.disabledPlugins
+            || previous.keepPluginRunDiagnostics != updated.keepPluginRunDiagnostics {
+            plugins.reload()
+        }
+        if currentTab == .search { search.updateHistoryState() }
     }
 
-    /// A closed window skips the sort and reload: `show(apps:)` hands over the current
-    /// list when it opens again.
+    /// Sort and reload only while the user can see the Items list.
     func appsDidChange(_ apps: [AppEntry]) {
-        guard window?.isVisible == true else { return }
+        guard currentTab == .items, window?.isVisible == true else { return }
         items.setApps(apps)
     }
 
@@ -179,7 +188,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
         case .general: general.updateLoginItemState()
         case .search: search.updateHistoryState()
         case .plugins: plugins.reload()
-        case .appearance, .items: break
+        case .items: items.setApps(model.library.entries)
+        case .appearance: break
         }
 
         container.subviews.forEach { $0.removeFromSuperview() }
@@ -235,8 +245,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
 
     /// Also covers `show()`: making the window key lands here.
     func windowDidBecomeKey(_ notification: Notification) {
-        general.updateLoginItemState()
-        search.updateHistoryState()
+        if currentTab == .general { general.updateLoginItemState() }
+        if currentTab == .search { search.updateHistoryState() }
     }
 
     func windowDidResignKey(_ notification: Notification) {

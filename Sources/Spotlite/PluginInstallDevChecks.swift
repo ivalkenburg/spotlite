@@ -65,7 +65,7 @@ enum PluginInstallDevChecks {
             if let selectedTab { UserDefaults.standard.set(selectedTab, forKey: "SettingsSelectedTab") }
             else { UserDefaults.standard.removeObject(forKey: "SettingsSelectedTab") }
         }
-        settings.show(apps: library.entries)
+        settings.show()
         let pane = settings.devShowPlugins()
         try await Task.sleep(for: .milliseconds(300))
         settingsWindow = pane.view.window
@@ -151,7 +151,7 @@ enum PluginInstallDevChecks {
         // Closing Settings during the committed copy must still reconcile the host.
         window.close()
         for _ in 0..<100 where host.plugin(id: "devinstall") == nil { try await Task.sleep(for: .milliseconds(20)) }
-        settings.show(apps: library.entries)
+        settings.show()
         try check(window.attachedSheet == nil, "Install left the sheet open")
         try check(host.plugin(id: "devinstall")?.manifest?.version == "1.0.0", "Not installed")
         try check(host.sources.load(for: "devinstall")?.address == "https://example.invalid/v1.zip", "No source record")

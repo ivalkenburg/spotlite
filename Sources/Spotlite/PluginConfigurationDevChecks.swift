@@ -34,7 +34,7 @@ enum PluginConfigurationDevChecks {
         var requested: String?
         controller.runDevSetupRoutingCheck(plugin: plugin) { id in
             requested = id
-            settings.show(apps: library.entries)
+            settings.show()
             settings.configurePlugin(id: id)
         }
         try await Task.sleep(for: .milliseconds(300))
