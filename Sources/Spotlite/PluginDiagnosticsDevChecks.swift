@@ -22,12 +22,6 @@ enum PluginDiagnosticsDevChecks {
         guard let plugin = host.plugin(id: "diagnostics") else {
             return try check(false, "Set SPOTLITE_DEV_PLUGINS_DIR to Tests/Fixtures/Plugins")
         }
-        let pasteboard = NSPasteboard.general
-        let savedClipboard = pasteboard.string(forType: .string)
-        defer {
-            pasteboard.clearContents()
-            if let savedClipboard { pasteboard.setString(savedClipboard, forType: .string) }
-        }
 
         // The environment names the command, action, appearance, version and plain settings.
         let response = try await invoke(host, plugin, ["env"], command: "env", action: .run).get()
@@ -114,8 +108,6 @@ enum PluginDiagnosticsDevChecks {
         print("DEV diagnostics: last run area hidden while the option is off passed")
 
         // The debug runner shows raw output and applies nothing.
-        pasteboard.clearContents()
-        pasteboard.setString("untouched", forType: .string)
         more.menu!.performActionForItem(at: more.menu!.indexOfItem(withTitle: "Run Command…"))
         try await Task.sleep(for: .milliseconds(300))
         guard let sheet = settingsWindow?.attachedSheet else { return try check(false, "Run… did not open a sheet") }
@@ -137,6 +129,7 @@ enum PluginDiagnosticsDevChecks {
         try check(status.stringValue.isEmpty && runButton.title == "Run" && texts[0].string.isEmpty,
                   "Leaving the query field started a command")
         query.stringValue = "typed"
+        let clipboardChangeCount = NSPasteboard.general.changeCount
         runButton.performClick(nil)
         try await Task.sleep(for: .milliseconds(500))
         try check(status.stringValue.contains("exit 0") && status.stringValue.contains("Valid response: toast, copy"),
@@ -144,7 +137,7 @@ enum PluginDiagnosticsDevChecks {
         try check(texts[0].string.contains("\"copy\" : \"env|run|") && texts[0].string.contains("|typed\""),
                   "Runner output: \(texts[0].string)")
         try check(texts[1].string == "debug note\n", "Runner stderr: \(texts[1].string)")
-        try check(pasteboard.string(forType: .string) == "untouched", "The debug runner applied the response")
+        try check(NSPasteboard.general.changeCount == clipboardChangeCount, "The debug runner changed the clipboard")
         DevViews.dumpFrames(sheet.contentView!, tag: "debug-runner")
         try await SettingsForm.captureWindow(sheet, name: "debug-runner")
 
