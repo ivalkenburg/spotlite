@@ -23,6 +23,10 @@ struct CompletionTests {
         #expect(Completion.suffix(query: "wi-", title: "Wi\u{2011}Fi", action: "Open") == "Fi")
     }
 
+    @Test func pastedUnicodeHyphensMatchTheDisplayedTitle() {
+        #expect(Completion.suffix(query: "Wi‑", title: "Wi‑Fi", action: "Open") == "Fi")
+    }
+
     @Test func aFullyTypedTitleHasNoCompletion() {
         #expect(Completion.suffix(query: "safari", title: "Safari", action: "Open") == "")
     }

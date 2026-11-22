@@ -12,13 +12,14 @@ public enum Completion {
     public static func suffix(query: String, title: String, action: String,
                               mode: AppNameCompletion = .allMatches) -> String {
         guard !query.isEmpty, mode != .off else { return "" }
-        let queryChars = Array(query), titleChars = Array(title)
-        let isPrefix = queryChars.count <= titleChars.count
-            && String(titleChars[0..<queryChars.count].map(AppEntry.typeable)).lowercased()
-                == query.lowercased()
-        guard isPrefix else { return mode == .allMatches ? " – " + title : "" }
-        // The remainder keeps the title's own case, the typed part keeps the user's.
-        let remainder = String(titleChars[queryChars.count...])
+        var end = title.startIndex
+        for typed in query {
+            guard end < title.endIndex,
+                  AppEntry.typeable(title[end]).lowercased() == AppEntry.typeable(typed).lowercased()
+            else { return mode == .allMatches ? " – " + title : "" }
+            title.formIndex(after: &end)
+        }
+        let remainder = String(title[end...])
         return action == "Open" ? remainder : remainder + " – " + action
     }
 }
