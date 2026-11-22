@@ -113,8 +113,9 @@ public enum PluginStore {
         if let executable = plugin.executableURL {
             // The program must be the plugin's own: a manifest is not a way to name
             // an arbitrary path.
-            let root = directory.standardizedFileURL.path
-            guard executable.path.hasPrefix(root.hasSuffix("/") ? root : root + "/") else {
+            let root = directory.standardizedFileURL.resolvingSymlinksInPath().path
+            let program = executable.resolvingSymlinksInPath().path
+            guard program.hasPrefix(root.hasSuffix("/") ? root : root + "/") else {
                 return broken("The executable must be inside the plugin’s folder.", manifest)
             }
             // A folder is "executable" too, to the file system.

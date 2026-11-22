@@ -450,13 +450,13 @@ struct PluginStoreTests {
                                         script: "echo original", in: "Downloads")
         let installed = try PluginStore.install(from: source, into: fixture.plugins)
         let script = source.appendingPathComponent("run.sh")
-        let helper = source.deletingLastPathComponent().appendingPathComponent("helper.sh")
+        let helper = source.appendingPathComponent("helper.sh")
         try FileManager.default.moveItem(at: script, to: helper)
-        try FileManager.default.createSymbolicLink(atPath: script.path, withDestinationPath: "../helper.sh")
+        try FileManager.default.createSymbolicLink(at: script, withDestinationURL: helper)
         #expect(PluginStore.load(source).isUsable)
 
-        // The relative executable link breaks after copying to Plugins. Reject the
-        // staged copy before replacing the working installation.
+        // The absolute link is internal in the source, but still names the source
+        // after copying. Reject that copy before replacing the working installation.
         #expect(throws: PluginStore.InstallError.self) {
             try PluginStore.install(from: source, into: fixture.plugins)
         }
