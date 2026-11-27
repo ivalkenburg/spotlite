@@ -35,32 +35,70 @@ public struct CachedApp: Codable, Sendable, Hashable {
 
 /// A launchable application, with everything the matcher needs precomputed at index
 /// time. Nothing here is derived per keystroke.
+///
+/// The fields live in one immutable box: a match, a ranked row and a result item each
+/// copy the entry, and a struct of a dozen strings and arrays cost a retain per field
+/// on every copy, several times per keystroke.
 public struct AppEntry: Sendable, Hashable {
-    public let url: URL
-    public let name: String
-    public let bundleID: String?
-    public let kind: EntryKind
+    private final class Storage: Sendable {
+        let url: URL
+        let name: String
+        let bundleID: String?
+        let kind: EntryKind
+        let template: String?
+        let lowerChars: [Character]
+        let bonus: [Int]
+        let charMask: UInt32
+        let initials: [Character]
+        let initialBonuses: [Int]
+        let id: String
+        let instanceID: String
+
+        init(url: URL, name: String, bundleID: String?, kind: EntryKind, template: String?,
+             lowerChars: [Character], bonus: [Int], charMask: UInt32, initials: [Character],
+             id: String, instanceID: String) {
+            self.url = url
+            self.name = name
+            self.bundleID = bundleID
+            self.kind = kind
+            self.template = template
+            self.lowerChars = lowerChars
+            self.bonus = bonus
+            self.charMask = charMask
+            self.initials = initials
+            self.initialBonuses = Array(repeating: Scoring.bonusBoundary, count: initials.count)
+            self.id = id
+            self.instanceID = instanceID
+        }
+    }
+
+    private let storage: Storage
+
+    public var url: URL { storage.url }
+    public var name: String { storage.name }
+    public var bundleID: String? { storage.bundleID }
+    public var kind: EntryKind { storage.kind }
     /// A link's target when it contains `{query}`, filled from what is typed after Tab.
-    public let template: String?
+    public var template: String? { storage.template }
 
     /// Lowercased characters of `name`, as an array for O(1) indexing.
-    public let lowerChars: [Character]
+    public var lowerChars: [Character] { storage.lowerChars }
     /// Per-position match bonus: word starts and camelCase humps score higher.
-    public let bonus: [Int]
+    public var bonus: [Int] { storage.bonus }
     /// Bitmask of which a-z letters appear, for rejecting non-matches without scanning.
-    public let charMask: UInt32
+    public var charMask: UInt32 { storage.charMask }
     /// Word-start initials, e.g. "Google Chrome" -> "gc".
-    public let initials: [Character]
+    public var initials: [Character] { storage.initials }
     /// Per-initial scoring bonus. Precomputed because the matcher would otherwise
     /// allocate this array for every candidate on every keystroke.
-    public let initialBonuses: [Int]
+    public var initialBonuses: [Int] { storage.initialBonuses }
 
     /// Preference/history identity. Copies of the same app deliberately share aliases,
     /// visibility and frecency even though they remain separate launchable entries.
-    public let id: String
+    public var id: String { storage.id }
     /// Identity of this concrete installation. Unlike `id`, this never merges two copies
     /// of an app that happen to advertise the same bundle identifier.
-    public let instanceID: String
+    public var instanceID: String { storage.instanceID }
     public var cached: CachedApp { CachedApp(path: url.path, name: name, bundleID: bundleID, kind: kind) }
 
     /// Only bundles are cached, so the URL is marked a directory instead of asking the
@@ -77,18 +115,13 @@ public struct AppEntry: Sendable, Hashable {
     }
 
     public init(url: URL, name: String, bundleID: String?, kind: EntryKind = .app, template: String? = nil) {
-        self.url = url
-        self.name = name
-        self.bundleID = bundleID
-        self.kind = kind
-        self.template = template
         // A command or link is identified by its own id, not its target: a link to
         // Safari.app is not the Safari app, and two links may open the same folder.
+        let instanceID: String
         switch kind {
         case .command, .link, .plugin: instanceID = bundleID ?? url.absoluteString
         case .app, .settingsPane: instanceID = AppEntry.standardizedPath(url)
         }
-        id = bundleID ?? instanceID
 
         let chars: [Character]
         if kind == .plugin {
@@ -142,11 +175,9 @@ public struct AppEntry: Sendable, Hashable {
             atBoundary = false
         }
 
-        self.lowerChars = lower
-        self.bonus = bonuses
-        self.charMask = mask
-        self.initials = inits
-        self.initialBonuses = Array(repeating: Scoring.bonusBoundary, count: inits.count)
+        storage = Storage(url: url, name: name, bundleID: bundleID, kind: kind, template: template,
+                          lowerChars: lower, bonus: bonuses, charMask: mask, initials: inits,
+                          id: bundleID ?? instanceID, instanceID: instanceID)
     }
 
     /// Deterministic order between equally scored entries: shorter name first, then
@@ -173,6 +204,8 @@ public struct AppEntry: Sendable, Hashable {
         }
     }
 
-    public static func == (a: AppEntry, b: AppEntry) -> Bool { a.instanceID == b.instanceID }
+    public static func == (a: AppEntry, b: AppEntry) -> Bool {
+        a.storage === b.storage || a.instanceID == b.instanceID
+    }
     public func hash(into hasher: inout Hasher) { hasher.combine(instanceID) }
 }

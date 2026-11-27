@@ -80,4 +80,16 @@ struct AppEntryTests {
         #expect(sorted.map(\.instanceID) == ["/A/alpha.app", "/Applications/Alpha.app", "/B/alpha.app",
                                              "/Applications/beta.app"])
     }
+
+    /// Separately built entries for one installation are the same entry: sets, history
+    /// and selection identity key on the path, not on the shared storage.
+    @Test func separatelyBuiltEntriesForOnePathAreEqual() {
+        let first = entry("Safari", path: "/Applications/Safari.app")
+        let second = entry("Safari Renamed", path: "/Applications/./Safari.app")
+        #expect(first == second)
+        #expect(Set([first, second]).count == 1)
+        let copy = first
+        #expect(copy == first && copy.hashValue == first.hashValue)
+    }
+
 }

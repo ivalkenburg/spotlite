@@ -29,7 +29,7 @@ make dmg      # build/Spotlite-<version>.dmg
 
 - Idle CPU must stay 0%. Avoid polling; nothing repeats while idle.
 - Keep memory to a minimum. Idle is ~32 MB (45 MB with menu bar icon); ~88 MB after first panel open, mostly `NSGlassEffectView`.
-- Matching runs synchronously on the main thread (~6.5 µs per keystroke, ranking included). Don't move it to a queue.
+- Matching runs synchronously on the main thread (~3.7 µs per keystroke, ranking included). Don't move it to a queue.
 - Icons load on a background queue (~670 µs each), only for visible rows.
 - Plugins run nothing while idle: a child process per use, read through dispatch I/O, no helper process, timer or folder watcher (except the look watchers below). Keep the root keystroke path free of plugin work.
 - A look's `pid` is watched with a kqueue exit source. One one-shot wall-clock timer and a wake observer exist only while a look with `menuBar` (hidden or not) has a deadline. A menu-bar item exists only while its look lasts, and its menu is built on click.
