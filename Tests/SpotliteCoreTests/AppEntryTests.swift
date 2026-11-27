@@ -92,4 +92,12 @@ struct AppEntryTests {
         #expect(copy == first && copy.hashValue == first.hashValue)
     }
 
+    /// The cheap spelling must agree with Foundation's for every path the index and the
+    /// running-app check compare, or a running app would lose its dot.
+    @Test(arguments: ["/Applications/Safari.app", "/Applications/./Safari.app", "/Applications//Safari.app",
+                      "/Applications/Utilities/../Safari.app", "/Applications/Safari.app/", "/"])
+    func standardizedPathMatchesFoundation(path: String) {
+        let url = URL(fileURLWithPath: path)
+        #expect(AppEntry.standardizedPath(url) == url.standardizedFileURL.path)
+    }
 }
