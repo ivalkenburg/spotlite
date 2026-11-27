@@ -100,4 +100,13 @@ struct AppEntryTests {
         let url = URL(fileURLWithPath: path)
         #expect(AppEntry.standardizedPath(url) == url.standardizedFileURL.path)
     }
+
+    /// Settings filters by what is typed, as the panel searches.
+    @Test func settingsFilterIgnoresCaseDiacriticsAndUnicodeHyphens() {
+        #expect(AppEntry.name("Wi\u{2011}Fi", contains: "wi-fi"))
+        #expect(AppEntry.name("Café Notes", contains: "cafe"))
+        #expect(AppEntry.name("Safari", contains: "FAR"))
+        #expect(AppEntry.name("Safari", contains: ""))
+        #expect(!AppEntry.name("Safari", contains: "chrome"))
+    }
 }

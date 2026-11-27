@@ -117,10 +117,10 @@ final class ItemsSettingsViewController: SettingsPaneController, NSTableViewData
     }
 
     private func applyFilter() {
-        let query = filterField.stringValue.lowercased().trimmingCharacters(in: .whitespaces)
+        let query = filterField.stringValue.trimmingCharacters(in: .whitespaces)
         let kind = selectedKind
         visibleItems = allItems.filter { item in
-            guard query.isEmpty || item.name.lowercased().contains(query) else { return false }
+            guard AppEntry.name(item.name, contains: query) else { return false }
             switch item {
             case .entry(let entry): return !showsUtilitiesOnly && (kind == nil || entry.kind == kind)
             case .utility: return showsUtilitiesOnly || kindPicker.selectedSegment == 0

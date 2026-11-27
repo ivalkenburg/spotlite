@@ -204,6 +204,14 @@ public struct AppEntry: Sendable, Hashable {
         }
     }
 
+    /// Settings' filter: whether `name` contains `query`, ignoring case and diacritics,
+    /// with the Unicode hyphens matching the "-" a keyboard types, as the panel does.
+    public static func name(_ name: String, contains query: String) -> Bool {
+        guard !query.isEmpty else { return true }
+        func typed(_ text: String) -> String { String(text.map(typeable)) }
+        return typed(name).range(of: typed(query), options: [.caseInsensitive, .diacriticInsensitive]) != nil
+    }
+
     public static func == (a: AppEntry, b: AppEntry) -> Bool {
         a.storage === b.storage || a.instanceID == b.instanceID
     }
