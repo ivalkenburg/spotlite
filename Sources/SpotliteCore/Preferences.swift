@@ -118,14 +118,15 @@ public struct Preferences: Codable, Sendable, Equatable {
         disabledPlugins = (try? c.decodeIfPresent(Set<String>.self, forKey: .disabledPlugins)) ?? []
         keepPluginRunDiagnostics = (try? c.decodeIfPresent(Bool.self, forKey: .keepPluginRunDiagnostics)) ?? false
         aliases = try c.decodeIfPresent([String: String].self, forKey: .aliases) ?? [:]
-        panelScreen = try c.decodeIfPresent(PanelScreen.self, forKey: .panelScreen) ?? .followPointer
+        // An option a later build added falls back rather than resetting every setting.
+        panelScreen = (try? c.decodeIfPresent(PanelScreen.self, forKey: .panelScreen)) ?? .followPointer
         toastPosition = (try? c.decodeIfPresent(ToastPosition.self, forKey: .toastPosition)) ?? .bottomCenter
         showConfirmationMessages = try c.decodeIfPresent(Bool.self, forKey: .showConfirmationMessages) ?? true
         panelGeometry = try c.decodeIfPresent(PanelGeometry.self, forKey: .panelGeometry) ?? .default
         // Only an untouched panel moves: a width or position the user dragged to on
         // purpose is kept.
         if version < 2, panelGeometry == .legacyDefault { panelGeometry = .default }
-        themeMode = try c.decodeIfPresent(ThemeMode.self, forKey: .themeMode) ?? .system
+        themeMode = (try? c.decodeIfPresent(ThemeMode.self, forKey: .themeMode)) ?? .system
         glassTint = Preferences.clampedTint(try c.decodeIfPresent(Double.self, forKey: .glassTint) ?? 0)
         hotKeyCode = try c.decodeIfPresent(UInt32.self, forKey: .hotKeyCode) ?? Preferences.defaultKeyCode
         hotKeyModifiers = try c.decodeIfPresent(UInt32.self, forKey: .hotKeyModifiers) ?? Preferences.defaultModifiers

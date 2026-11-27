@@ -132,6 +132,17 @@ struct PreferencesTests {
         #expect(!decoded.showMenuBarIcon)
     }
 
+    /// A downgrade after a later build added a theme or a screen option must not move the
+    /// whole file aside as corrupt.
+    @Test func unknownThemeAndScreenPreserveOtherPreferences() throws {
+        let data = Data(#"{"themeMode":"futureTheme","panelScreen":"futureScreen","showMenuBarIcon":false,"aliases":{"a":"b"}}"#.utf8)
+        let decoded = try JSONDecoder().decode(Preferences.self, from: data)
+        #expect(decoded.themeMode == .system)
+        #expect(decoded.panelScreen == .followPointer)
+        #expect(!decoded.showMenuBarIcon)
+        #expect(decoded.aliases == ["a": "b"])
+    }
+
     @Test func unknownBackNavigationBehaviorFallsBack() throws {
         let data = Data(#"{"backNavigationBehavior":"futureOption","showMenuBarIcon":false}"#.utf8)
         let decoded = try JSONDecoder().decode(Preferences.self, from: data)
